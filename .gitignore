@@ -1,0 +1,30 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Local helper scripts and design notes
+build.bat
+cloudflare-DESIGN.md
+AGENTS.md
+
+# WarLink runtime and cache directory
+warlink_core/
+zapret-*/
+config.json
+
+# Build and temp
+dist/
+tmp/
+temp/
+*.log
+*.zip
+check_tunnel.ps1
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
