@@ -1,0 +1,17 @@
+name: 💡 Предложить улучшение
+description: Предложить новую идею или функцию для WarLink
+title: "[FEATURE]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Описание идеи / предложения
+      description: Какую возможность вы хотите видеть в приложении?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Какую пользу это принесет?
+      description: Почему это будет полезно для игроков WARDOGS?

@@ -9,9 +9,17 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(64--bit)-blue?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/Game-WARDOGS%20(Steam)-orange?style=flat-square" alt="Game">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
+  <a href="https://store.steampowered.com/app/1867240/"><img src="https://img.shields.io/badge/Game-WARDOGS_(Steam)-orange?style=flat-square&logo=steam&logoColor=white" alt="Steam WARDOGS"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/latest"><img src="https://img.shields.io/github/v/release/max-alekseyev/WarLink?style=flat-square&color=FF5E1F&label=Release" alt="Latest Release"></a>
+  <img src="https://img.shields.io/badge/Размер-~12_МБ-222222?style=flat-square" alt="Size">
+  <a href="https://github.com/max-alekseyev/WarLink/releases"><img src="https://img.shields.io/github/downloads/max-alekseyev/WarLink/total?style=flat-square&color=blue&label=Downloads" alt="Downloads"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/discussions"><img src="https://img.shields.io/badge/Сообщество-Discussions-purple?style=flat-square" alt="Discussions"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe">
+    <img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe">
+  </a>
 </p>
 
 ---
@@ -33,6 +41,10 @@
 2. **Поместите в отдельную папку:** сохраните файл в любую удобную папку (например, `C:\WarLink` или на Рабочий стол).
 3. **Запустите `WarLink.exe`:** при запросе Windows нажмите *«Да»* (требуются права администратора для работы драйвера сетевой маршрутизации).
 4. **Нажмите «ПОДКЛЮЧИТЬ»:** через несколько секунд маршрут будет готов, и можно запускать WARDOGS!
+
+<p align="center">
+  <img src="warlink_ui.png" alt="WarLink Interface" width="420">
+</p>
 
 ---
 
@@ -81,3 +93,32 @@
 - **ОС:** Windows 10 / Windows 11 (64-bit)
 - **Привилегии:** Права Администратора (для загрузки драйвера WinDivert)
 - **Клиент:** Установленный клиент Steam с игрой WARDOGS
+
+---
+
+## 💬 Сообщество и обратная связь
+
+- 💬 **Вопросы и помощь сообщества:** [Ветка обсуждений (GitHub Discussions)](https://github.com/max-alekseyev/WarLink/discussions)
+- 🐛 **Нашли ошибку или сбой у провайдера?** [Создайте обращение (Bug Report)](https://github.com/max-alekseyev/WarLink/issues/new/choose)
+- 💡 **Предложить идею:** [Категория Ideas в обсуждениях](https://github.com/max-alekseyev/WarLink/discussions/categories/ideas)
+
+---
+
+## ☕ Поддержать автора
+
+Если **WarLink** помог вам комфортно играть в WARDOGS без вылетов и сетевых ошибок, вы можете поддержать развитие проекта:
+
+- 🧡 **Boosty:** [boosty.to/pld1n/donate](https://boosty.to/pld1n/donate)
+- 💳 **Карта Т-Банк:** `5536 9139 3500 4040`
+
+---
+
+## ⭐ График популярности (Star History)
+
+<p align="center">
+  <a href="https://star-history.com/#max-alekseyev/WarLink&Date">
+    <img src="https://api.star-history.com/svg?repos=max-alekseyev/WarLink&type=Date&theme=dark" alt="Star History Chart" width="100%">
+  </a>
+</p>
+
+

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Задать вопрос или пообщаться (Обсуждения)
+    url: https://github.com/max-alekseyev/WarLink/discussions
+    about: Для общих вопросов, отзывов и обсуждения работы у провайдеров используйте вкладку Discussions!

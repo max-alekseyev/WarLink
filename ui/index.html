@@ -27,7 +27,7 @@
                     <path d="M4 8.5 L12 12 L20 8.5" stroke="#FF5E1F" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v1.0.0</span>
+                <span class="brand-version">v1.0.1</span>
             </div>
             <div class="titlebar-right">
                 <button id="btn-settings-toggle" class="win-btn win-icon-btn" onclick="toggleDetails(event)" title="Параметры маршрутизации">
@@ -97,7 +97,9 @@
                 <div class="details-content">
                     <div class="setting-row">
                         <span class="setting-label">Профиль Zapret:</span>
-                        <span id="active-profile" class="setting-mono">Определение...</span>
+                        <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
+                            <option value="">Определение...</option>
+                        </select>
                     </div>
 
                     <div class="setting-row">

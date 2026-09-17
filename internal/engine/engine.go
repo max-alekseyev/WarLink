@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,7 +84,7 @@ func (e *Engine) setProgress(percent int, current, total int, cfgName, msg strin
 	e.mu.Unlock()
 }
 
-// FindAvailableAlts returns list of available .bat config files in zapret directory.
+// FindAvailableAlts returns a naturally sorted list of available .bat config files in zapret directory.
 func (e *Engine) FindAvailableAlts() []string {
 	zapretDir := deps.GetZapretDir()
 	entries, err := os.ReadDir(zapretDir)
@@ -98,7 +99,35 @@ func (e *Engine) FindAvailableAlts() []string {
 			alts = append(alts, name)
 		}
 	}
+
+	reNum := regexp.MustCompile(`(?i)alt\s*(\d+)`)
+	sort.Slice(alts, func(i, j int) bool {
+		m1 := reNum.FindStringSubmatch(alts[i])
+		m2 := reNum.FindStringSubmatch(alts[j])
+		num1 := 0
+		num2 := 0
+		if len(m1) > 1 {
+			num1, _ = strconv.Atoi(m1[1])
+		}
+		if len(m2) > 1 {
+			num2, _ = strconv.Atoi(m2[1])
+		}
+		if num1 != num2 {
+			return num1 < num2
+		}
+		return alts[i] < alts[j]
+	})
+
 	return alts
+}
+
+// SetSelectedAlt updates and saves the chosen Zapret configuration profile.
+func (e *Engine) SetSelectedAlt(alt string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cfg.SelectedAlt = alt
+	_ = e.cfg.Save()
+	e.log(fmt.Sprintf("[CONFIG] Профиль Zapret изменен пользователем: %s", alt))
 }
 
 // GetBestAlt returns the configured alt or attempts to read from official Zapret test results.
@@ -154,6 +183,16 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	// ==========================================
 	// STAGE 1: ПРЕДСТАРТОВАЯ ДИАГНОСТИКА (0% - 15%)
 	// ==========================================
+	// 1.0 Ensure Zapret files are downloaded and extracted
+	if !deps.HasZapret() {
+		e.setProgress(1, 0, 0, "", "Загрузка компонентов сетевой оптимизации...", true)
+		e.log("[INFO] Компоненты Zapret отсутствуют на диске. Первичная загрузка с GitHub...")
+		if err := deps.PrepareZapret(e.log); err != nil {
+			e.setProgress(0, 0, 0, "", "Ошибка загрузки компонентов", false)
+			return fmt.Errorf("ошибка загрузки компонентов сетевой оптимизации: %w", err)
+		}
+	}
+
 	e.setProgress(3, 0, 0, "", "Диагностика: зачистка конфликтов...", true)
 	e.log("[INFO] Старт предстартовой диагностики системы...")
 
@@ -215,12 +254,12 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	reportPath, rErr := FindLatestZapretReport()
 	summary, sErr := ParseZapretReport(reportPath)
 	if rErr != nil || sErr != nil || len(summary.Scores) == 0 {
-		e.log("[INFO] Отчет тестирования профилей не обнаружен (первый запуск).")
-		e.log("[INFO] Автоматический запуск тестирования всех 22 конфигураций для выявления наилучшей под вашего провайдера...")
-		e.setProgress(15, 0, 22, "", "Калибровка: подготовка тестов 22 профилей Zapret...", true)
+		e.log("[INFO] Отчет калибровки профилей не обнаружен (первый запуск).")
+		e.log("[INFO] Запуск первичной калибровки 22 профилей Zapret под вашего провайдера...")
+		e.setProgress(15, 0, 22, "", "Первичная калибровка: тест 22 профилей под вашего провайдера...", true)
 
 		if testErr := e.runFullZapretTestInternal(true); testErr != nil {
-			e.log(fmt.Sprintf("[WARN] Тестирование завершилось с предупреждением: %v", testErr))
+			e.log(fmt.Sprintf("[WARN] Первичная калибровка завершилась с предупреждением: %v", testErr))
 		}
 
 		// Re-read newly generated report
@@ -305,7 +344,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	}
 
 	if !winwsReady {
-		_ = e.disconnectLocked()
+		_ = e.disconnectInternal()
 		e.setProgress(0, 0, 0, "", "winws.exe не отвечает", false)
 		return fmt.Errorf("winws.exe не запустился. Запустите от имени администратора")
 	}
@@ -408,7 +447,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	}
 
 	if !warpConnected {
-		_ = e.disconnectLocked()
+		_ = e.disconnectInternal()
 		e.setProgress(0, 0, 0, "", "Ошибка туннеля Cloudflare WARP", false)
 		e.log("[ERROR] Cloudflare WARP не смог установить связь. Проверьте профиль Zapret")
 		return fmt.Errorf("Cloudflare WARP не смог подключиться. Сеть возвращена в исходное состояние")
@@ -460,37 +499,69 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	return nil
 }
 
-// Disconnect gracefully disconnects Cloudflare WARP and Zapret.
+// Disconnect gracefully disconnects Cloudflare WARP and Zapret without holding the mutex during I/O.
 func (e *Engine) Disconnect() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	e.isConnected = false
+	e.isConnecting = false
+	e.pipelineProgress = PipelineProgress{
+		Percent: 0,
+		Message: "",
+	}
+	e.mu.Unlock()
 
 	e.log("[INFO] Остановка сетевого туннеля...")
-	return e.disconnectLocked()
+	return e.disconnectInternal()
 }
 
-// runWarpCli runs warp-cli with a strict context timeout to prevent any deadlock or hang.
+// runWarpCli runs warp-cli with a strict context timeout and channel protection to prevent any deadlock or hang.
 func runWarpCli(timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
 	cmd := exec.CommandContext(ctx, "warp-cli", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
+
+	type result struct {
+		out []byte
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		out, err := cmd.CombinedOutput()
+		ch <- result{out: out, err: err}
+	}()
+
+	select {
+	case res := <-ch:
+		return strings.TrimSpace(string(res.out)), res.err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = scanner.KillProcess("warp-cli.exe")
+		return "", ctx.Err()
+	}
 }
 
-func (e *Engine) disconnectLocked() error {
+func (e *Engine) disconnectInternal() error {
 	// 1. Kill Zapret process immediately so sockets and WinDivert are released fast
 	e.log("[INFO] Завершение процесса Zapret (winws.exe)...")
 	_ = scanner.KillProcess("winws.exe")
 
+	e.mu.Lock()
 	if e.zapretCmd != nil && e.zapretCmd.Process != nil {
+		pid := e.zapretCmd.Process.Pid
 		_ = e.zapretCmd.Process.Kill()
-		_ = e.zapretCmd.Wait()
+		// Kill process tree by PID forcibly without blocking Wait
+		killCmd := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
+		killCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = killCmd.Run()
 		e.zapretCmd = nil
 	}
+	e.mu.Unlock()
 
-	// 2. Stop driver service
+	// 2. Stop driver service (non-blocking with 2s timeout)
 	scanner.StopWinDivertService()
 
 	// 3. Disconnect WARP with a strict 2.5s timeout so it never blocks or hangs
@@ -500,11 +571,13 @@ func (e *Engine) disconnectLocked() error {
 		e.log("[WARP] " + outDisc)
 	}
 
+	e.mu.Lock()
 	e.isConnected = false
 	e.pipelineProgress = PipelineProgress{
 		Percent: 0,
 		Message: "",
 	}
+	e.mu.Unlock()
 
 	e.log("[OK] Все соединения отключены, сеть восстановлена")
 	return nil
@@ -591,7 +664,7 @@ func (e *Engine) runFullZapretTestInternal(isPipeline bool) error {
 					var msg string
 					if isPipeline {
 						pct = 15 + int((float64(cur) / float64(tot)) * 45.0)
-						msg = fmt.Sprintf("Калибровка [%d/%d]: %s", cur, tot, cfgName)
+						msg = fmt.Sprintf("Первичная калибровка [%d/%d]: %s", cur, tot, cfgName)
 					} else {
 						pct = int((float64(cur) / float64(tot)) * 100.0)
 						msg = fmt.Sprintf("Тест [%d/%d]: %s", cur, tot, cfgName)

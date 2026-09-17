@@ -53,8 +53,9 @@ const (
 	TPM_BOTTOMALIGN = 0x0020
 	IDI_APPLICATION = 32512
 
-	ID_OPEN = 1001
-	ID_EXIT = 1002
+	ID_OPEN   = 1001
+	ID_TOGGLE = 1002
+	ID_EXIT   = 1003
 )
 
 type POINT struct {
@@ -96,20 +97,24 @@ type WNDCLASSEXW struct {
 }
 
 type Tray struct {
-	hwnd     uintptr
-	hicon    uintptr
-	nid      NOTIFYICONDATAW
-	onOpen   func()
-	onExit   func()
-	isActive bool
+	hwnd        uintptr
+	hicon       uintptr
+	nid         NOTIFYICONDATAW
+	onOpen      func()
+	onToggle    func()
+	onExit      func()
+	isConnected func() bool
+	isActive    bool
 }
 
 var globalTray *Tray
 
-func New(onOpen, onExit func()) *Tray {
+func New(onOpen, onToggle, onExit func(), isConnected func() bool) *Tray {
 	t := &Tray{
-		onOpen: onOpen,
-		onExit: onExit,
+		onOpen:      onOpen,
+		onToggle:    onToggle,
+		onExit:      onExit,
+		isConnected: isConnected,
 	}
 	globalTray = t
 	return t
@@ -143,6 +148,10 @@ func (t *Tray) Start() error {
 				case ID_OPEN:
 					if globalTray != nil && globalTray.onOpen != nil {
 						globalTray.onOpen()
+					}
+				case ID_TOGGLE:
+					if globalTray != nil && globalTray.onToggle != nil {
+						globalTray.onToggle()
 					}
 				case ID_EXIT:
 					if globalTray != nil && globalTray.onExit != nil {
@@ -280,9 +289,18 @@ func (t *Tray) showContextMenu() {
 	defer procDestroyMenu.Call(hMenu)
 
 	openText, _ := syscall.UTF16PtrFromString("Развернуть WarLink")
+
+	var toggleText *uint16
+	if t.isConnected != nil && t.isConnected() {
+		toggleText, _ = syscall.UTF16PtrFromString("Отключить сеть")
+	} else {
+		toggleText, _ = syscall.UTF16PtrFromString("Подключить сеть")
+	}
 	exitText, _ := syscall.UTF16PtrFromString("Отключить и выйти")
 
 	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_OPEN), uintptr(unsafe.Pointer(openText)))
+	procAppendMenu.Call(hMenu, MF_SEPARATOR, 0, 0)
+	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_TOGGLE), uintptr(unsafe.Pointer(toggleText)))
 	procAppendMenu.Call(hMenu, MF_SEPARATOR, 0, 0)
 	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_EXIT), uintptr(unsafe.Pointer(exitText)))
 

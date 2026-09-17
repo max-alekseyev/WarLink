@@ -1,0 +1,47 @@
+name: 🐛 Сообщить об ошибке
+description: Создать отчет об ошибке или сбое подключения
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за помощь в улучшении **WarLink**! Перед отправкой убедитесь, что вы используете последнюю версию программы.
+  - type: input
+    id: provider
+    attributes:
+      label: Ваш интернет-провайдер и регион
+      description: Например: Ростелеком (Москва), МТС (СПб), Дом.ру (Казань)
+      placeholder: Ростелеком (Москва)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Версия Windows
+      options:
+        - Windows 11 (64-bit)
+        - Windows 10 (64-bit)
+        - Другая
+    validations:
+      required: true
+  - type: input
+    id: profile
+    attributes:
+      label: Выбранный профиль в приложении
+      description: Укажите профиль из параметров (например: general (ALT13).bat)
+      placeholder: general (ALT13).bat
+  - type: textarea
+    id: description
+    attributes:
+      label: Описание проблемы
+      description: Что именно пошло не так? Что отображается в окне приложения?
+      placeholder: При нажатии кнопки ПОДКЛЮЧИТЬ статус зависает на...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Журнал работы (warlink.log)
+      description: Скопируйте последние строки из файла warlink_core/warlink.log или нажмите кнопку LOG ↗ в приложении
+      render: text

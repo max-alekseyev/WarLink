@@ -149,11 +149,13 @@ func revealMainWindow(hwnd uintptr) {
 }
 
 type AppState struct {
-	mu     sync.Mutex
-	cfg    *config.Config
-	eng    *engine.Engine
-	logs   []string
-	isBusy bool
+	mu                sync.Mutex
+	cfg               *config.Config
+	eng               *engine.Engine
+	logs              []string
+	isBusy            bool
+	isDownloadingDeps bool
+	depsMsg           string
 }
 
 func showNativeDialog(title, text string, style uint32) int {
@@ -316,6 +318,11 @@ func main() {
 		logs: []string{},
 	}
 
+	if !deps.HasZapret() {
+		state.isDownloadingDeps = true
+		state.depsMsg = "Загрузка компонентов сетевой оптимизации с GitHub..."
+	}
+
 	appendLog := func(msg string) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
@@ -332,7 +339,7 @@ func main() {
 
 	state.eng = engine.New(cfg, appendLog)
 
-	appendLog("[INFO] Инициализация WarLink v1.0.0...")
+	appendLog("[INFO] Инициализация WarLink v1.0.1...")
 	appendLog("[OK] Проверка пути и рабочего окружения пройдена")
 	appendLog(fmt.Sprintf("[OK] Журнал работы сохраняется в: %s", logFilePath))
 
@@ -354,7 +361,19 @@ func main() {
 
 	// Ensure core dependencies in background
 	go func() {
-		_ = deps.PrepareZapret(appendLog)
+		if !deps.HasZapret() {
+			err := deps.PrepareZapret(appendLog)
+			state.mu.Lock()
+			state.isDownloadingDeps = false
+			if err != nil {
+				state.depsMsg = "Ошибка загрузки: " + err.Error()
+				appendLog(fmt.Sprintf("[ERROR] Ошибка загрузки компонентов Zapret: %v", err))
+			} else {
+				state.depsMsg = ""
+				appendLog("[OK] Загрузка компонентов Zapret успешно завершена")
+			}
+			state.mu.Unlock()
+		}
 	}()
 
 	// 4. Setup Embedded Web Server for local UI
@@ -369,14 +388,17 @@ func main() {
 
 		pipelineProg := state.eng.GetPipelineProgress()
 		resp := map[string]interface{}{
-			"is_connected":    state.eng.IsConnected(),
-			"is_busy":         state.isBusy,
-			"is_testing":      state.eng.IsTesting(),
-			"profile":         state.eng.GetBestAlt(),
-			"autolaunch_game": state.cfg.AutolaunchGame,
-			"logs":            state.logs,
-			"progress":        pipelineProg,
-			"benchmark":       pipelineProg,
+			"is_connected":        state.eng.IsConnected(),
+			"is_busy":             state.isBusy,
+			"is_testing":          state.eng.IsTesting(),
+			"is_downloading_deps": state.isDownloadingDeps,
+			"deps_msg":            state.depsMsg,
+			"profile":             state.eng.GetBestAlt(),
+			"available_profiles":  state.eng.FindAvailableAlts(),
+			"autolaunch_game":     state.cfg.AutolaunchGame,
+			"logs":                state.logs,
+			"progress":            pipelineProg,
+			"benchmark":           pipelineProg,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -384,9 +406,9 @@ func main() {
 
 	mux.HandleFunc("/api/run-test", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.Lock()
-		if state.isBusy || state.eng.IsConnected() || state.eng.IsTesting() {
+		if state.isBusy || state.eng.IsConnected() || state.eng.IsTesting() || state.isDownloadingDeps {
 			state.mu.Unlock()
-			http.Error(w, "Операция уже выполняется или сеть подключена", http.StatusConflict)
+			http.Error(w, "Операция уже выполняется или компоненты еще загружаются", http.StatusConflict)
 			return
 		}
 		state.isBusy = true
@@ -420,7 +442,7 @@ func main() {
 
 	mux.HandleFunc("/api/connect", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.Lock()
-		if state.isBusy {
+		if state.isBusy || state.isDownloadingDeps {
 			state.mu.Unlock()
 			return
 		}
@@ -436,9 +458,17 @@ func main() {
 
 			// Run unified 5-stage pipeline
 			err := state.eng.ConnectPipeline(func() {
-				// On success: minimize to tray after short delay
-				time.Sleep(1500 * time.Millisecond)
-				minimizeToTray(appTray, globalWV)
+				state.mu.Lock()
+				autolaunch := state.cfg.AutolaunchGame
+				state.mu.Unlock()
+
+				if autolaunch {
+					// On success with autolaunch: minimize to tray after short delay so game takes foreground
+					time.Sleep(1500 * time.Millisecond)
+					minimizeToTray(appTray, globalWV)
+				} else {
+					appendLog("[INFO] Сеть оптимизирована и подключена. Окно остается открытым.")
+				}
 			})
 			if err != nil {
 				appendLog(fmt.Sprintf("[ERROR] Ошибка подключения: %v", err))
@@ -449,9 +479,47 @@ func main() {
 	})
 
 	mux.HandleFunc("/api/disconnect", func(w http.ResponseWriter, r *http.Request) {
+		state.mu.Lock()
+		if state.isBusy {
+			state.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		state.isBusy = true
+		state.mu.Unlock()
+
 		go func() {
+			defer func() {
+				state.mu.Lock()
+				state.isBusy = false
+				state.mu.Unlock()
+			}()
 			_ = state.eng.Disconnect()
+			if appTray != nil {
+				appTray.SetTooltip("WarLink [ГОТОВ] - Кликните для открытия")
+			}
 		}()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/api/profile", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Profile string `json:"profile"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.Profile != "" {
+			state.mu.Lock()
+			if state.isBusy || state.eng.IsConnected() || state.eng.IsTesting() || state.isDownloadingDeps {
+				state.mu.Unlock()
+				http.Error(w, "Нельзя изменять профиль при активном подключении или тестировании", http.StatusConflict)
+				return
+			}
+			state.eng.SetSelectedAlt(body.Profile)
+			state.mu.Unlock()
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -489,12 +557,67 @@ func main() {
 		func() { // On tray icon click -> restore window
 			restoreFromTray(appTray, globalWV)
 		},
+		func() { // On toggle connect/disconnect from tray
+			state.mu.Lock()
+			connected := state.eng.IsConnected()
+			busy := state.isBusy || state.isDownloadingDeps || state.eng.IsTesting()
+			state.mu.Unlock()
+
+			if busy {
+				return
+			}
+
+			if connected {
+				appendLog("[INFO] Отключение сети через контекстное меню трея...")
+				state.mu.Lock()
+				state.isBusy = true
+				state.mu.Unlock()
+
+				go func() {
+					defer func() {
+						state.mu.Lock()
+						state.isBusy = false
+						state.mu.Unlock()
+					}()
+					_ = state.eng.Disconnect()
+					if appTray != nil {
+						appTray.SetTooltip("WarLink [ГОТОВ] - Кликните для открытия")
+					}
+				}()
+			} else {
+				appendLog("[INFO] Подключение сети через контекстное меню трея...")
+				state.mu.Lock()
+				state.isBusy = true
+				state.mu.Unlock()
+
+				go func() {
+					defer func() {
+						state.mu.Lock()
+						state.isBusy = false
+						state.mu.Unlock()
+					}()
+
+					err := state.eng.ConnectPipeline(func() {
+						time.Sleep(1500 * time.Millisecond)
+						minimizeToTray(appTray, globalWV)
+					})
+					if err != nil {
+						appendLog(fmt.Sprintf("[ERROR] Ошибка подключения из трея: %v", err))
+					} else if appTray != nil {
+						appTray.SetTooltip("WarLink [ПОДКЛЮЧЕНО] - Кликните для открытия")
+					}
+				}()
+			}
+		},
 		func() { // On exit menu
 			if globalWV != nil {
 				globalWV.Dispatch(func() {
 					globalWV.Terminate()
 				})
 			}
+		},
+		func() bool { // isConnected
+			return state.eng.IsConnected()
 		},
 	)
 	_ = appTray.Start()

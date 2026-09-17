@@ -2,10 +2,12 @@ package scanner
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var ConflictingProcessNames = []string{
@@ -65,7 +67,9 @@ func KillProcess(name string) error {
 
 // StopWinDivertService stops the WinDivert driver service if leftover in Windows kernel
 func StopWinDivertService() {
-	cmd := exec.Command("sc.exe", "stop", "WinDivert")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sc.exe", "stop", "WinDivert")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x08000000,

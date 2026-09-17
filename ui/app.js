@@ -1,5 +1,6 @@
 let isConnected = false;
 let isBusy = false;
+let isDownloadingDeps = false;
 
 // --- Window Dragging and Controls ---
 function handleTitlebarMouseDown(e) {
@@ -46,12 +47,13 @@ async function fetchStatus() {
 function updateUI(data) {
     isConnected = data.is_connected;
     isBusy = data.is_busy;
+    isDownloadingDeps = !!data.is_downloading_deps;
 
     const btnToggle = document.getElementById('btn-toggle');
     const badgeStatus = document.getElementById('badge-status');
     const badgeText = document.getElementById('badge-text');
     const statusDesc = document.getElementById('status-desc');
-    const profileLabel = document.getElementById('active-profile');
+    const selectProfile = document.getElementById('select-profile');
     const chkAuto = document.getElementById('chk-autolaunch');
     const lastLogMsg = document.getElementById('last-log-msg');
 
@@ -59,9 +61,23 @@ function updateUI(data) {
         chkAuto.checked = data.autolaunch_game;
     }
 
-    const profileText = data.profile || 'general (ALT).bat';
-    if (profileLabel && profileLabel.textContent !== profileText) {
-        profileLabel.textContent = profileText;
+    // Populate and sync profile select dropdown
+    if (selectProfile && data.available_profiles && data.available_profiles.length > 0) {
+        const currentOptions = Array.from(selectProfile.options).map(o => o.value);
+        const newOptions = data.available_profiles;
+        if (currentOptions.join(',') !== newOptions.join(',')) {
+            selectProfile.innerHTML = '';
+            newOptions.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                selectProfile.appendChild(opt);
+            });
+        }
+        if (data.profile && selectProfile.value !== data.profile) {
+            selectProfile.value = data.profile;
+        }
+        selectProfile.disabled = (isConnected || isBusy || isDownloadingDeps || data.is_testing);
     }
 
     let targetText = 'ПОДКЛЮЧИТЬ';
@@ -71,7 +87,14 @@ function updateUI(data) {
     let targetDesc = 'Система готова к оптимизации маршрута';
     let targetDisabled = false;
 
-    if (data.is_testing) {
+    if (isDownloadingDeps) {
+        targetDisabled = true;
+        targetText = 'ЗАГРУЗКА КОМПОНЕНТОВ…';
+        targetClass = 'btn btn-primary btn-busy';
+        targetBadgeClass = 'status-line status-busy';
+        targetBadgeText = 'ЗАГРУЗКА…';
+        targetDesc = data.deps_msg || 'Первичное скачивание сетевых компонентов с GitHub…';
+    } else if (data.is_testing) {
         targetDisabled = true;
         targetText = 'ТЕСТИРОВАНИЕ…';
         targetClass = 'btn btn-primary btn-busy';
@@ -107,7 +130,7 @@ function updateUI(data) {
 
     const btnSpinner = document.getElementById('btn-spinner');
     if (btnSpinner) {
-        btnSpinner.style.display = (isBusy || data.is_testing) ? 'inline-block' : 'none';
+        btnSpinner.style.display = (isBusy || data.is_testing || isDownloadingDeps) ? 'inline-block' : 'none';
     }
 
     if (badgeStatus && badgeStatus.className !== targetBadgeClass) {
@@ -177,7 +200,7 @@ function updateUI(data) {
             btnRunTest.disabled = true;
         } else {
             btnRunTest.textContent = 'Тест Zapret (service 12) ▷';
-            btnRunTest.disabled = isConnected || isBusy;
+            btnRunTest.disabled = isConnected || isBusy || isDownloadingDeps;
         }
     }
 }
@@ -217,6 +240,7 @@ function updatePipelineSteps(pct) {
 }
 
 async function runZapretTest() {
+    if (isDownloadingDeps) return;
     const btn = document.getElementById('btn-run-test');
     if (btn) btn.textContent = 'Запуск тестирования…';
     try {
@@ -226,8 +250,21 @@ async function runZapretTest() {
     }
 }
 
+async function onProfileChange(val) {
+    if (!val || isBusy || isConnected || isDownloadingDeps) return;
+    try {
+        await fetch('/api/profile', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile: val })
+        });
+    } catch (e) {
+        console.error(e);
+    }
+}
+
 async function toggleConnect() {
-    if (isBusy) return;
+    if (isBusy || isDownloadingDeps) return;
 
     const btnToggle = document.getElementById('btn-toggle');
     const btnSpan = document.getElementById('btn-text');
