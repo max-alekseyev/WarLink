@@ -12,9 +12,12 @@ import (
 
 var ConflictingProcessNames = []string{
 	"winws.exe",
+	"winws2.exe",
 	"goodbyedpi.exe",
 	"byedpi.exe",
 	"zapret.exe",
+	"warp-svc.exe",
+	"warp-cli.exe",
 }
 
 // FindConflicts returns a list of conflicting processes currently running.
@@ -69,12 +72,21 @@ func KillProcess(name string) error {
 func StopWinDivertService() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sc.exe", "stop", "WinDivert")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000,
-	}
-	_ = cmd.Run()
+	cmd1 := exec.CommandContext(ctx, "sc.exe", "stop", "WinDivert")
+	cmd1.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	_ = cmd1.Run()
+
+	cmd2 := exec.CommandContext(ctx, "sc.exe", "delete", "WinDivert")
+	cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	_ = cmd2.Run()
+
+	cmd3 := exec.CommandContext(ctx, "sc.exe", "stop", "WinDivert14")
+	cmd3.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	_ = cmd3.Run()
+
+	cmd4 := exec.CommandContext(ctx, "sc.exe", "delete", "WinDivert14")
+	cmd4.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	_ = cmd4.Run()
 }
 
 // KillAllConflicts terminates all known conflicting processes and releases WinDivert.

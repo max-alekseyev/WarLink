@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 370" width="520" height="370">
+  <defs>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; letter-spacing: 0px; }
+      .mono { font-family: "Consolas", "Apercu Mono Pro", "Courier New", monospace; }
+    </style>
+  </defs>
+
+  <!-- Window Container -->
+  <rect x="0.5" y="0.5" width="519" height="369" fill="#111111" stroke="#222222" stroke-width="1" rx="2" />
+
+  <!-- Technical Frameless Titlebar -->
+  <line x1="0" y1="36" x2="520" y2="36" stroke="#202020" stroke-width="1" />
+
+  <!-- Titlebar Left: Brand -->
+  <text x="16" y="22.5" class="sans" font-size="11" font-weight="700" letter-spacing="1" fill="#f5f5f5">WARLINK</text>
+  <text x="82" y="22.5" class="mono" font-size="10" fill="#737373">v2.0.0</text>
+
+  <!-- Titlebar Center: Airplane-Style Toggle (Free Internet) -->
+  <rect x="165" y="6" width="188" height="24" rx="2" fill="#161616" stroke="#292929" stroke-width="1" />
+  
+  <!-- Lucide Globe Icon -->
+  <g transform="translate(173, 10)" stroke="#737373" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="8" cy="8" r="7" />
+    <path d="M8 1a10.5 10.5 0 0 0 0 14 10.5 10.5 0 0 0 0-14" />
+    <path d="M1 8h14" />
+  </g>
+
+  <!-- Toggle Title -->
+  <text x="197" y="22" class="sans" font-size="11" font-weight="500" fill="#a3a3a3">Свободный интернет</text>
+
+  <!-- Switch Pill -->
+  <rect x="320" y="11" width="24" height="14" rx="7" fill="#222222" stroke="#292929" stroke-width="1" />
+  <circle cx="327" cy="18" r="4.5" fill="#666666" />
+
+  <!-- Titlebar Right: Window Controls -->
+  <!-- Settings Button -->
+  <g transform="translate(420, 10)" stroke="#737373" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.447 2.757a1.56 1.56 0 0 1 3.106 0 1.56 1.56 0 0 0 2.213 1.277 1.56 1.56 0 0 1 1.553 2.689 1.56 1.56 0 0 0 0 2.554 1.56 1.56 0 0 1-1.553 2.689 1.56 1.56 0 0 0-2.213 1.277 1.56 1.56 0 0 1-3.106 0 1.56 1.56 0 0 0-2.213-1.277 1.56 1.56 0 0 1-1.553-2.689 1.56 1.56 0 0 0 0-2.554 1.56 1.56 0 0 1 1.553-2.689 1.56 1.56 0 0 0 2.213-1.277z" />
+    <circle cx="8" cy="8" r="2" />
+  </g>
+
+  <!-- Minimize Button -->
+  <g transform="translate(456, 10)" stroke="#737373" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="3" y1="8" x2="13" y2="8" />
+  </g>
+
+  <!-- Close Button -->
+  <g transform="translate(492, 10)" stroke="#737373" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="3" y1="3" x2="13" y2="13" />
+    <line x1="13" y1="3" x2="3" y2="13" />
+  </g>
+
+  <!-- Main Body: Games Showcase Header -->
+  <text x="20" y="65" class="sans" font-size="11" font-weight="700" letter-spacing="0.8" fill="#888888">ВИТРИНА ИГР</text>
+  <line x1="20" y1="76" x2="500" y2="76" stroke="#202020" stroke-width="1" />
+
+  <!-- Shortcuts Grid -->
+  <!-- Shortcut 1: WARDOGS -->
+  <g transform="translate(32, 94)">
+    <image x="11" y="2" width="56" height="56" href="data:image/png;base64,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" />
+    <text x="39" y="74" class="sans" font-size="11" font-weight="700" fill="#ff5e1f" text-anchor="middle">WARDOGS</text>
+  </g>
+
+  <!-- Shortcut 2: Add Game -->
+  <g transform="translate(126, 94)">
+    <circle cx="39" cy="28" r="27" fill="none" stroke="#2b2b2b" stroke-width="1.5" stroke-dasharray="3.5 3.5" />
+    <g stroke="#666666" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="29" y1="28" x2="49" y2="28" />
+      <line x1="39" y1="18" x2="39" y2="38" />
+    </g>
+    <text x="39" y="74" class="sans" font-size="11" font-weight="500" fill="#808080" text-anchor="middle">Добавить</text>
+  </g>
+
+  <!-- Persistent Stockholm Gateway Footer -->
+  <rect x="0" y="338" width="520" height="32" fill="#131313" />
+  <line x1="0" y1="338" x2="520" y2="338" stroke="#202020" stroke-width="1" />
+
+  <!-- Footer Left: Gateway Meta -->
+  <g transform="translate(14, 344)">
+    <!-- Status Dot -->
+    <circle cx="4" cy="10" r="3" fill="#00e676" />
+    <!-- Gateway Name (Russian, identical to app) -->
+    <text x="13" y="13.5" class="sans" font-size="11" font-weight="600" fill="#f5f5f5">Стокгольм</text>
+    <!-- Separator -->
+    <text x="75" y="13.5" class="sans" font-size="11" fill="#333333">•</text>
+    <!-- Ping -->
+    <text x="85" y="13.5" class="mono" font-size="11" fill="#737373">29 мс</text>
+    <!-- Separator -->
+    <text x="121" y="13.5" class="sans" font-size="11" fill="#333333">•</text>
+    <!-- Slots -->
+    <text x="131" y="13.5" class="mono" font-size="11" fill="#737373">0/100</text>
+    <!-- Separator -->
+    <text x="167" y="13.5" class="sans" font-size="11" fill="#333333">•</text>
+    <!-- Days -->
+    <text x="177" y="13.5" class="mono" font-size="11" fill="#737373">29 дн.</text>
+  </g>
+
+  <!-- Footer Right: Donate Button (Proportioned to strictly contain text with padding) -->
+  <g transform="translate(326, 342)">
+    <rect x="0" y="0" width="182" height="24" rx="2" fill="transparent" stroke="#282828" stroke-width="1" />
+    <!-- Precise Credit Card Icon -->
+    <g transform="translate(8, 7)" stroke="#ff5e1f" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="0" y="0" width="13" height="9" rx="1.2" />
+      <line x1="0" y1="3" x2="13" y2="3" />
+    </g>
+    <!-- Button Text with zero kerning anomalies and ample right padding -->
+    <text x="27" y="16" class="sans" font-size="11" font-weight="400" fill="#a3a3a3">Поддержать сервер (~98 ₽)</text>
+  </g>
+</svg>

@@ -30,6 +30,7 @@ var (
 	procSetForeground   = modUser32.NewProc("SetForegroundWindow")
 	procPostMessage     = modUser32.NewProc("PostMessageW")
 	procLoadIcon        = modUser32.NewProc("LoadIconW")
+	procRegisterWindowMessage = modUser32.NewProc("RegisterWindowMessageW")
 	modKernel32         = syscall.NewLazyDLL("kernel32.dll")
 	procGetModuleHandle = modKernel32.NewProc("GetModuleHandleW")
 )
@@ -48,11 +49,14 @@ const (
 	WM_LBUTTONDBLCLK = 0x0203
 	WM_RBUTTONUP   = 0x0205
 	MF_STRING      = 0x00000000
+	MF_GRAYED      = 0x00000001
+	MF_DISABLED    = 0x00000002
 	MF_SEPARATOR   = 0x00000800
 	TPM_RIGHTBUTTON = 0x0002
 	TPM_BOTTOMALIGN = 0x0020
 	IDI_APPLICATION = 32512
 
+	ID_STATUS = 1000
 	ID_OPEN   = 1001
 	ID_TOGGLE = 1002
 	ID_EXIT   = 1003
@@ -104,17 +108,19 @@ type Tray struct {
 	onToggle    func()
 	onExit      func()
 	isConnected func() bool
+	getStatus   func() (connected bool, gameTitle string)
 	isActive    bool
 }
 
 var globalTray *Tray
 
-func New(onOpen, onToggle, onExit func(), isConnected func() bool) *Tray {
+func New(onOpen, onToggle, onExit func(), isConnected func() bool, getStatus func() (bool, string)) *Tray {
 	t := &Tray{
 		onOpen:      onOpen,
 		onToggle:    onToggle,
 		onExit:      onExit,
 		isConnected: isConnected,
+		getStatus:   getStatus,
 	}
 	globalTray = t
 	return t
@@ -129,7 +135,17 @@ func (t *Tray) Start() error {
 
 		classNamePtr, _ := syscall.UTF16PtrFromString("WarLink_Tray_Class")
 
+		taskbarNamePtr, _ := syscall.UTF16PtrFromString("TaskbarCreated")
+		wmTaskbarCreated, _, _ := procRegisterWindowMessage.Call(uintptr(unsafe.Pointer(taskbarNamePtr)))
+
 		wndProc := syscall.NewCallback(func(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+			if wmTaskbarCreated != 0 && msg == uint32(wmTaskbarCreated) {
+				if globalTray != nil && globalTray.isActive {
+					procShellNotifyIcon.Call(NIM_ADD, uintptr(unsafe.Pointer(&globalTray.nid)))
+				}
+				return 0
+			}
+
 			switch msg {
 			case WM_TRAYICON:
 				switch lParam {
@@ -164,9 +180,12 @@ func (t *Tray) Start() error {
 			return r
 		})
 
+		hInst, _, _ := procGetModuleHandle.Call(0)
+
 		wc := WNDCLASSEXW{
-			CbSize:      uint32(unsafe.Sizeof(WNDCLASSEXW{})),
-			LpfnWndProc: wndProc,
+			CbSize:        uint32(unsafe.Sizeof(WNDCLASSEXW{})),
+			LpfnWndProc:   wndProc,
+			HInstance:     hInst,
 			LpszClassName: classNamePtr,
 		}
 
@@ -184,7 +203,9 @@ func (t *Tray) Start() error {
 			0x80000000, // WS_POPUP
 			0, 0, 0, 0,
 			0, // Top-level window
-			0, 0, 0,
+			0,
+			hInst,
+			0,
 		)
 		if hwnd == 0 {
 			ready <- fmt.Errorf("create window error: %v", err)
@@ -215,7 +236,6 @@ func (t *Tray) Start() error {
 		}
 
 		if hicon == 0 {
-			hInst, _, _ := procGetModuleHandle.Call(0)
 			hicon, _, _ = procLoadIcon.Call(hInst, uintptr(1))
 			if hicon == 0 {
 				hicon, _, _ = procLoadIcon.Call(0, uintptr(IDI_APPLICATION))
@@ -262,6 +282,7 @@ func (t *Tray) Show() {
 	if t.hwnd == 0 {
 		return
 	}
+	procShellNotifyIcon.Call(NIM_DELETE, uintptr(unsafe.Pointer(&t.nid)))
 	procShellNotifyIcon.Call(NIM_ADD, uintptr(unsafe.Pointer(&t.nid)))
 	t.isActive = true
 }
@@ -281,6 +302,20 @@ func (t *Tray) SetTooltip(tip string) {
 	}
 }
 
+func (t *Tray) UpdateStatus(connected bool, gameTitle string) {
+	var tip string
+	if connected {
+		if gameTitle != "" {
+			tip = fmt.Sprintf("WarLink: Подключено (%s)", gameTitle)
+		} else {
+			tip = "WarLink: Подключено"
+		}
+	} else {
+		tip = "WarLink: Отключено"
+	}
+	t.SetTooltip(tip)
+}
+
 func (t *Tray) showContextMenu() {
 	hMenu, _, _ := procCreatePopupMenu.Call()
 	if hMenu == 0 {
@@ -288,18 +323,39 @@ func (t *Tray) showContextMenu() {
 	}
 	defer procDestroyMenu.Call(hMenu)
 
+	var statusText string
+	var isConn bool
+	var title string
+	if t.getStatus != nil {
+		isConn, title = t.getStatus()
+	} else if t.isConnected != nil {
+		isConn = t.isConnected()
+	}
+
+	if isConn {
+		if title != "" {
+			statusText = fmt.Sprintf("Статус: Подключено (%s)", title)
+		} else {
+			statusText = "Статус: Подключено"
+		}
+	} else {
+		statusText = "Статус: Отключено"
+	}
+
+	statusPtr, _ := syscall.UTF16PtrFromString(statusText)
 	openText, _ := syscall.UTF16PtrFromString("Развернуть WarLink")
 
 	var toggleText *uint16
-	if t.isConnected != nil && t.isConnected() {
+	if isConn {
 		toggleText, _ = syscall.UTF16PtrFromString("Отключить сеть")
 	} else {
 		toggleText, _ = syscall.UTF16PtrFromString("Подключить сеть")
 	}
 	exitText, _ := syscall.UTF16PtrFromString("Отключить и выйти")
 
-	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_OPEN), uintptr(unsafe.Pointer(openText)))
+	procAppendMenu.Call(hMenu, MF_STRING|MF_GRAYED, uintptr(ID_STATUS), uintptr(unsafe.Pointer(statusPtr)))
 	procAppendMenu.Call(hMenu, MF_SEPARATOR, 0, 0)
+	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_OPEN), uintptr(unsafe.Pointer(openText)))
 	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_TOGGLE), uintptr(unsafe.Pointer(toggleText)))
 	procAppendMenu.Call(hMenu, MF_SEPARATOR, 0, 0)
 	procAppendMenu.Call(hMenu, MF_STRING, uintptr(ID_EXIT), uintptr(unsafe.Pointer(exitText)))

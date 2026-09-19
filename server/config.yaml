@@ -1,0 +1,33 @@
+listen: 0.0.0.0:443
+
+tls:
+  cert: /etc/hysteria/certs/server.crt
+  key: /etc/hysteria/certs/server.key
+
+auth:
+  type: http
+  http:
+    url: http://127.0.0.1:8080/internal/auth
+
+acl:
+  file: /etc/hysteria/acl.txt
+
+obfs:
+  type: salamander
+  salamander:
+    password: YOUR_OBFS_PASSWORD_HERE
+
+bandwidth:
+  ignoreClientBandwidth: true
+  up: 1 gbps
+  down: 1 gbps
+
+quic:
+  initStreamReceiveWindow: 8388608
+  maxStreamReceiveWindow: 8388608
+  initConnReceiveWindow: 20971520
+  maxConnReceiveWindow: 20971520
+  maxIdleTimeout: 30s
+  keepAlivePeriod: 10s
+
+speedTest: false

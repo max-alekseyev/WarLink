@@ -1,30 +1,82 @@
-# Binaries
+# ==============================================================================
+# WARLINK .gitignore
+# ==============================================================================
+
+# Executables and Libraries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+*.sys
+!internal/embedded/assets/bin/*.exe
+!internal/embedded/assets/bin/*.dll
+!internal/embedded/assets/bin/*.sys
+server/warlink-server*
 
-# Local helper scripts and design notes
-build.bat
-cloudflare-DESIGN.md
-AGENTS.md
+# Go Test and Profiling Artifacts
+*.test
+*.out
+*.prof
+*.pprof
+coverage.html
 
-# WarLink runtime and cache directory
+# Checksums and Release Archives
+*.sha256
+*.zip
+*.7z
+*.rar
+*.tar.*
+*.gz
+
+# Sensitive Credentials and Configs
+config.json
+*.key
+*.crt
+*.pem
+.env
+.env.*
+
+# Network Captures, Crash Dumps and Logs
+*.pcap
+*.pcapng
+*.cap
+*.dmp
+*.log
+
+# Databases and Local Caches
+*.db
+*.sqlite
+*.sqlite3
+
+# WarLink Runtime and Working Directories
 warlink_core/
 zapret-*/
-config.json
-
-# Build and temp
 dist/
 tmp/
 temp/
-*.log
-*.zip
+icons/
+test/
+scratch/
+
+# Local Helper Scripts and Design Notes
+build.bat
+cloudflare-DESIGN.md
+AGENTS.md
+STEAM_GUIDE.md
 check_tunnel.ps1
 
-# IDE
+# IDE and Editor Files
 .vscode/
 .idea/
 *.suo
 *.user
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# Operating System Metadata
+desktop.ini
+Thumbs.db
+.DS_Store

@@ -23,7 +23,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.x'
           check-latest: true
           cache: true
 
@@ -31,8 +31,43 @@ jobs:
         run: go mod tidy
 
       - name: Compile WarLink.exe
+        shell: pwsh
+        env:
+          GW_IP: ${{ secrets.OFFICIAL_GATEWAY_IP }}
+          GW_PORTS: ${{ vars.OFFICIAL_GATEWAY_PORTS || '443,20000-30000' }}
+          OBFS_PASS: ${{ secrets.OFFICIAL_OBFS_PASSWORD }}
+          HMAC_SEC: ${{ secrets.OFFICIAL_HMAC_SECRET }}
+          REPO_NAME: ${{ vars.OFFICIAL_UPDATE_REPO || github.repository }}
         run: |
-          go build -ldflags="-H windowsgui -s -w" -o WarLink.exe .
+          $flags = @(
+            "-H windowsgui",
+            "-s",
+            "-w",
+            "-X warlink/internal/updater.UpdateRepo=$env:REPO_NAME"
+          )
+
+          if ($env:GITHUB_REF_NAME) {
+            $flags += "-X main.AppVersion=$env:GITHUB_REF_NAME"
+          }
+
+          if ($env:GW_IP) {
+            $flags += "-X warlink/internal/singbox.DefaultServerIP=$env:GW_IP"
+            $flags += "-X warlink/internal/singbox.DefaultServerAPI=http://$env:GW_IP"
+            $flags += "-X warlink/internal/config.DefaultServerIP=$env:GW_IP"
+          }
+          if ($env:GW_PORTS) {
+            $flags += "-X warlink/internal/singbox.DefaultServerPorts=$env:GW_PORTS"
+          }
+          if ($env:OBFS_PASS) {
+            $flags += "-X warlink/internal/singbox.DefaultObfsPassword=$env:OBFS_PASS"
+          }
+          if ($env:HMAC_SEC) {
+            $flags += "-X warlink/internal/singbox.DefaultHMACSecret=$env:HMAC_SEC"
+          }
+
+          $ldflagsStr = $flags -join " "
+          Write-Host "[BUILD] Compiling WarLink.exe with -trimpath and ldflags..."
+          go build -trimpath -tags release -ldflags "$ldflagsStr" -o WarLink.exe .
 
       - name: Generate SHA256 Checksum
         shell: pwsh
@@ -54,6 +89,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ github.ref_name }}
           files: |
             WarLink.exe
             WarLink.exe.sha256

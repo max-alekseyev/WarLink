@@ -1,0 +1,17 @@
+{
+  "server_ip": "127.0.0.1",
+  "server_name": "WarLink • Community GPN Gateway",
+  "server_location": "Stockholm, Sweden",
+  "server_ports": "443,20000-30000",
+  "aeza_api_key": "",
+  "hmac_secret": "",
+  "obfs_password": "your_salamander_obfs_password_here",
+  "dashboard_key": "your_secret_dashboard_access_key_here",
+  "fallback_due_date": "2026-12-31T23:59:59Z",
+  "donate_url": "",
+  "donate_amount_rub": 98,
+  "max_sessions": 100,
+  "listen_public": "0.0.0.0:80",
+  "listen_internal": "127.0.0.1:8080",
+  "database_url": "postgres://warlink:password@127.0.0.1:5432/warlink_db?sslmode=disable"
+}
