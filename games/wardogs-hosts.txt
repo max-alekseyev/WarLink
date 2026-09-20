@@ -25,24 +25,37 @@ domain: elytra.ac
 domain: anybrain.gg
 domain: vivox.com
 domain: epicgames.dev
+domain: epicgames.com
+domain: unrealengine.com
 domain: dynamodb.eu-north-1.amazonaws.com
-domain: steampowered.com
-domain: steamcommunity.com
-domain: steamstatic.com
-domain: steamserver.net
+domain: amazonaws.com
+domain: akamaitechnologies.com
+domain: akamaiedge.net
+domain: akamai.net
+domain: edgekey.net
+domain: edgesuite.net
+domain: cloudfront.net
+domain: fastly.net
+domain: cloudflare.com
 
 # Vivox Voice Chat Subnets (Restricted strictly to HTTPS and voice UDP RTP)
 ip: 85.236.96.0/19, tcp/443
 ip: 85.236.96.0/19, udp/54000-55000
+ip: 85.236.96.0/19, udp/12000-65000
 ip: 108.181.0.0/16, tcp/443
 ip: 108.181.0.0/16, udp/54000-55000
+ip: 108.181.0.0/16, udp/12000-65000
 ip: 195.154.239.0/24, tcp/443
-ip: 195.154.239.0/24, udp/54000-55000
+ip: 195.154.239.0/24, udp/12000-65000
 ip: 45.43.142.0/24, tcp/443
-ip: 45.43.142.0/24, udp/54000-55000
+ip: 45.43.142.0/24, udp/12000-65000
 
 # Dynamic Match & Voice UDP Ports
 udp: 54000-55000
-udp: 27000-27200
+udp: 3478-3479
+udp: 5060-5062
 udp: 4000-4500
 udp: 20000-20100
+udp: 7777-7788
+udp: 15000-15100
+udp: 27015-27030

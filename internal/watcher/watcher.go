@@ -303,6 +303,35 @@ func ResolveGameProcessNames(gameID, steamAppID, title, exePath string, cached [
 	}
 }
 
+// SelectBestProcess selects the most relevant game executable from matched processes,
+// giving priority to game clients and shipping binaries over auxiliary launchers/updaters.
+func SelectBestProcess(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	var best string
+	for _, n := range names {
+		lower := strings.ToLower(n)
+		isLauncher := strings.Contains(lower, "launcher") || strings.Contains(lower, "setup") || strings.Contains(lower, "update")
+		isClient := strings.Contains(lower, "client") || strings.Contains(lower, "shipping")
+
+		if best == "" {
+			best = n
+			continue
+		}
+
+		bestLower := strings.ToLower(best)
+		bestIsLauncher := strings.Contains(bestLower, "launcher") || strings.Contains(bestLower, "setup") || strings.Contains(bestLower, "update")
+
+		if bestIsLauncher && !isLauncher {
+			best = n
+		} else if isClient && !strings.Contains(bestLower, "client") {
+			best = n
+		}
+	}
+	return best
+}
+
 // IsAnyProcessRunning checks active processes against target list and normalized token
 func IsAnyProcessRunning(targets []string, normalizedTitle string) (bool, string) {
 	if len(targets) == 0 && normalizedTitle == "" {
@@ -323,29 +352,40 @@ func IsAnyProcessRunning(targets []string, normalizedTitle string) (bool, string
 		return false, ""
 	}
 
+	var matched []string
 	for {
 		name := syscall.UTF16ToString(entry.SzExeFile[:])
 		nameLower := strings.ToLower(name)
+		isMatch := false
 
 		// 1. Direct match with target list
 		for _, t := range targets {
 			if nameLower == t || strings.Contains(nameLower, t) {
-				return true, name
+				isMatch = true
+				break
 			}
 		}
 
 		// 2. Heuristic token match
-		if normalizedTitle != "" && len(normalizedTitle) >= 4 {
+		if !isMatch && normalizedTitle != "" && len(normalizedTitle) >= 4 {
 			normProc := NormalizeGameToken(name)
 			if normProc != "" && (normProc == normalizedTitle || strings.Contains(normProc, normalizedTitle)) {
-				return true, name
+				isMatch = true
 			}
+		}
+
+		if isMatch {
+			matched = append(matched, name)
 		}
 
 		r, _, _ = procProcess32Next.Call(hSnap, uintptr(unsafe.Pointer(&entry)))
 		if r == 0 {
 			break
 		}
+	}
+
+	if len(matched) > 0 {
+		return true, SelectBestProcess(matched)
 	}
 	return false, ""
 }
@@ -392,6 +432,15 @@ func (w *GameWatcher) Start() {
 				w.mu.Lock()
 				if running {
 					w.missCount = 0
+					lowerProc := strings.ToLower(procName)
+					isProcLauncher := strings.Contains(lowerProc, "launcher") || strings.Contains(lowerProc, "setup") || strings.Contains(lowerProc, "update")
+					isProcClient := strings.Contains(lowerProc, "client")
+
+					// Update activeTarget: if it was empty, or if activeTarget was a launcher and now we have a game client/main binary
+					if w.activeTarget == "" || (!isProcLauncher && strings.Contains(strings.ToLower(w.activeTarget), "launcher")) || isProcClient {
+						w.activeTarget = procName
+					}
+
 					if !w.wasRunning {
 						w.wasRunning = true
 						w.activeTarget = procName
@@ -404,12 +453,19 @@ func (w *GameWatcher) Start() {
 							w.onGameStarted(procName)
 						}
 						continue
+					} else {
+						// Process was already running, but could be transition to main client
+						if w.onProcessFound != nil && info.GameID != "" && !isProcLauncher {
+							w.mu.Unlock()
+							w.onProcessFound(info.GameID, procName)
+							w.mu.Lock()
+						}
 					}
 				} else {
 					if w.wasRunning {
 						w.missCount++
-						// 2 consecutive misses = confirmed exit
-						if w.missCount >= 2 {
+						// 10 consecutive misses (2.5s) = confirmed exit, allowing launcher -> client handoff without closing tunnel
+						if w.missCount >= 10 {
 							w.wasRunning = false
 							w.missCount = 0
 							closedProc := w.activeTarget

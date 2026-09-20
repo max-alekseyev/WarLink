@@ -899,7 +899,42 @@ html, body {
 .details-content {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
+}
+
+.setting-group {
+    background-color: var(--surface-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-strict);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.setting-group-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--action);
+    margin-bottom: 2px;
+}
+
+.setting-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+}
+
+.info-label {
+    color: var(--text-muted);
+}
+
+.info-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
 }
 
 .setting-row {
@@ -946,27 +981,28 @@ html, body {
 
 /* --- Modal Add Game --- */
 .modal-backdrop {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
-    right: 0;
-    bottom: 32px;
-    background-color: rgba(0, 0, 0, 0.75);
-    z-index: 30;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.72);
+    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 8px 12px;
+    padding: 14px;
     box-sizing: border-box;
 }
 
 .modal-card {
-    width: 420px;
-    max-height: 295px;
+    width: 440px;
+    max-width: calc(100vw - 28px);
+    max-height: calc(100vh - 28px);
     background-color: var(--surface-base);
     border: 1px solid var(--border-base);
     border-radius: var(--radius-strict);
-    padding: 10px 14px 12px 14px;
+    padding: 12px 16px 14px 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -1223,6 +1259,17 @@ html, body {
     color: var(--action);
 }
 
+.context-menu-item .ctx-check-icon {
+    transition: opacity 0.1s ease, color 0.1s ease;
+    opacity: 0.18;
+    color: var(--text-muted);
+}
+
+.context-menu-item.is-checked .ctx-check-icon {
+    opacity: 1;
+    color: var(--action);
+}
+
 .context-menu-item.item-danger:hover {
     background-color: rgba(255, 92, 92, 0.12);
     color: var(--status-error);
@@ -1276,9 +1323,22 @@ html, body {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background-color: var(--status-active);
+    background-color: var(--text-muted);
     display: inline-block;
     flex-shrink: 0;
+    transition: background-color 0.2s ease;
+}
+
+.gateway-dot.is-online {
+    background-color: var(--status-active);
+}
+
+.gateway-dot.is-connecting {
+    background-color: var(--action);
+}
+
+.gateway-dot.is-offline {
+    background-color: #ef4444;
 }
 
 .gateway-title {
@@ -1297,6 +1357,11 @@ html, body {
 .gateway-meta {
     color: var(--text-muted);
     flex-shrink: 0;
+}
+
+.gateway-meta.slots-full {
+    color: var(--action);
+    font-weight: 600;
 }
 
 .btn-donate-server {
@@ -1358,7 +1423,6 @@ html, body {
     max-height: 140px;
     overflow-y: auto;
     z-index: 100;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
 }
 
 .vote-autocomplete-item {
@@ -1479,9 +1543,26 @@ html, body {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    max-height: 105px;
+    max-height: 125px;
     overflow-y: auto;
     padding-right: 4px;
+}
+
+.vote-games-list::-webkit-scrollbar {
+    width: 4px;
+}
+
+.vote-games-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.vote-games-list::-webkit-scrollbar-thumb {
+    background: #282828;
+    border-radius: var(--radius-strict);
+}
+
+.vote-games-list::-webkit-scrollbar-thumb:hover {
+    background: #383838;
 }
 
 .vote-game-card {
@@ -1605,5 +1686,50 @@ html, body {
     border-radius: 2px;
     white-space: nowrap;
     flex-shrink: 0;
+}
+
+/* --- Functional Toast Notification (Dark Cloudflare Utility) --- */
+.ui-toast {
+    position: fixed;
+    bottom: 44px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #181818;
+    border: 1px solid rgba(255, 94, 31, 0.45);
+    border-radius: 2px;
+    padding: 6px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 999;
+    pointer-events: none;
+    animation: toastFadeIn 0.15s ease;
+}
+
+.ui-toast.toast-hiding {
+    animation: toastFadeOut 0.2s ease forwards;
+}
+
+@keyframes toastFadeIn {
+    from { opacity: 0; transform: translate(-50%, 6px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes toastFadeOut {
+    from { opacity: 1; transform: translate(-50%, 0); }
+    to { opacity: 0; transform: translate(-50%, 6px); }
+}
+
+.toast-icon {
+    color: var(--action);
+    flex-shrink: 0;
+}
+
+.toast-msg {
+    font-size: 11px;
+    font-weight: 500;
+    color: #f5f5f5;
+    letter-spacing: 0.1px;
+    white-space: nowrap;
 }
 

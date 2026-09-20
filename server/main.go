@@ -38,7 +38,7 @@ const (
 	MaxActiveSessions    = 100
 	MaxSessionsPerIP     = 2
 	SessionTTL           = 24 * time.Hour
-	SessionInactivityTTL = 2 * time.Minute
+	SessionInactivityTTL = 5 * time.Minute
 	PerUserRateDownBps   = 12500000 // 100 Mbps in bytes/sec
 	PerUserRateUpBps     = 6250000  // 50 Mbps in bytes/sec
 )
@@ -156,6 +156,11 @@ type LoadSnapshot struct {
 	GatewayPingMs  int       `json:"gateway_ping_ms"`
 }
 
+type UserTrafficStats struct {
+	Tx uint64 `json:"tx"`
+	Rx uint64 `json:"rx"`
+}
+
 type AppState struct {
 	mu           sync.RWMutex
 	cfg          ServerConfig
@@ -191,6 +196,7 @@ type AppState struct {
 	metricDonationsPaid       uint64
 	metricDonationsRub        uint64
 	cachedPrice               int
+	prevHyTraffic             map[string]UserTrafficStats
 }
 
 func main() {
@@ -215,11 +221,12 @@ func main() {
 	}
 
 	state := &AppState{
-		sessions:     make(map[string]*SessionInfo),
-		deviceTokens: make(map[string]string),
-		rateLimiter:  NewIPRateLimiter(5, 1*time.Minute),
-		enableDonate: true,
-		enableVoting: true,
+		sessions:      make(map[string]*SessionInfo),
+		deviceTokens:  make(map[string]string),
+		rateLimiter:   NewIPRateLimiter(5, 1*time.Minute),
+		enableDonate:  true,
+		enableVoting:  true,
+		prevHyTraffic: make(map[string]UserTrafficStats),
 	}
 	state.loadConfig(cfgPath)
 
@@ -287,6 +294,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/session", state.handleSession)
 	publicMux.HandleFunc("/api/v1/session/release", state.handleSessionRelease)
 	publicMux.HandleFunc("/api/v1/profiles", state.handleProfiles)
+	publicMux.HandleFunc("/api/v1/singbox/config", state.handleSingBoxConfig)
 	publicMux.HandleFunc("/api/v1/donate", state.handleDonate)
 	publicMux.HandleFunc("/api/v1/votes", state.handleVotes)
 	publicMux.HandleFunc("/api/v1/analytics", state.handleAnalytics)
@@ -470,7 +478,18 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	// When behind nginx reverse proxy, r.RemoteAddr is always 127.0.0.1.
+	// Prefer X-Real-IP (set by nginx: proxy_set_header X-Real-IP $remote_addr).
+	clientIP := r.Header.Get("X-Real-IP")
+	if clientIP == "" {
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			clientIP = strings.SplitN(fwd, ",", 2)[0]
+			clientIP = strings.TrimSpace(clientIP)
+		}
+	}
+	if clientIP == "" {
+		clientIP, _, _ = net.SplitHostPort(r.RemoteAddr)
+	}
 	if clientIP == "" {
 		clientIP = r.RemoteAddr
 	}
@@ -759,10 +778,6 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 					if actualRub <= 0 {
 						actualRub = amount
 					}
-					// Auto-calibrate server's donate_amount_rub to match actual invoice
-					s.mu.Lock()
-					s.cfg.DonateAmountRub = actualRub
-					s.mu.Unlock()
 
 					atomic.AddUint64(&s.metricInvoicesCreated, 1)
 					s.recordCounterAsync("invoices_created")
@@ -814,19 +829,13 @@ func (s *AppState) handleSessionRelease(w http.ResponseWriter, r *http.Request) 
 	defer s.mu.Unlock()
 
 	released := false
-	if req.Token != "" {
-		if sess, exists := s.sessions[req.Token]; exists {
-			delete(s.sessions, req.Token)
+	for tok, sess := range s.sessions {
+		matchToken := req.Token != "" && tok == req.Token
+		matchDevice := req.DeviceID != "" && (sess.DeviceID == req.DeviceID || strings.EqualFold(sess.DeviceID, req.DeviceID))
+		if matchToken || matchDevice {
+			delete(s.sessions, tok)
 			delete(s.deviceTokens, sess.DeviceID)
 			log.Printf("[SESSION] Explicitly released slot for device %s (Active: %d/%d)", sess.DeviceID, len(s.sessions), MaxActiveSessions)
-			released = true
-		}
-	}
-	if !released && req.DeviceID != "" {
-		if token, exists := s.deviceTokens[req.DeviceID]; exists {
-			delete(s.sessions, token)
-			delete(s.deviceTokens, req.DeviceID)
-			log.Printf("[SESSION] Explicitly released slot for device %s by ID (Active: %d/%d)", req.DeviceID, len(s.sessions), MaxActiveSessions)
 			released = true
 		}
 	}
@@ -1152,11 +1161,37 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *AppState) cleanupExpiredSessions() {
+	activeDevices := make(map[string]bool)
+	hyClient := &http.Client{Timeout: 500 * time.Millisecond}
+	if hyResp, err := hyClient.Get("http://127.0.0.1:9090/traffic"); err == nil {
+		var hyData map[string]UserTrafficStats
+		if err := json.NewDecoder(hyResp.Body).Decode(&hyData); err == nil {
+			s.mu.Lock()
+			if s.prevHyTraffic == nil {
+				s.prevHyTraffic = make(map[string]UserTrafficStats)
+			}
+			for devID, cur := range hyData {
+				prev, exists := s.prevHyTraffic[devID]
+				// A device is considered actively transmitting ONLY if its byte count increased
+				if exists && (cur.Tx > prev.Tx || cur.Rx > prev.Rx) {
+					activeDevices[devID] = true
+				}
+				s.prevHyTraffic[devID] = cur
+			}
+			s.mu.Unlock()
+		}
+		hyResp.Body.Close()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := time.Now()
 	for token, sess := range s.sessions {
+		if activeDevices[sess.DeviceID] {
+			sess.LastSeen = now
+			continue
+		}
 		if now.After(sess.ExpiresAt) || now.Sub(sess.LastSeen) > SessionInactivityTTL {
 			delete(s.sessions, token)
 			delete(s.deviceTokens, sess.DeviceID)
@@ -1180,6 +1215,145 @@ func (s *AppState) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		"success":  true,
 		"profiles": profiles,
 		"count":    len(profiles),
+	})
+}
+
+func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+	}
+	if token == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "missing_token",
+			"message": "Сессионный токен обязателен для получения конфигурации",
+		})
+		return
+	}
+
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+
+	s.mu.RLock()
+	sess, exists := s.sessions[token]
+	if !exists || time.Now().After(sess.ExpiresAt) {
+		s.mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "invalid_or_expired_token",
+			"message": "Недействительный или истекший сессионный токен",
+		})
+		return
+	}
+
+	// Verify connecting client IP matches session IP
+	if sess.ClientIP != "" && clientIP != "" && sess.ClientIP != clientIP {
+		s.mu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "ip_mismatch",
+			"message": "IP-адрес клиента не соответствует сессии",
+		})
+		return
+	}
+
+	profiles := s.profiles
+	obfsPassword := s.cfg.ObfsPassword
+	serverPorts := s.cfg.ServerPorts
+	if serverPorts == "" {
+		serverPorts = DefaultServerPorts
+	}
+	s.mu.RUnlock()
+
+	pubIP := s.getPublicIP(r)
+	if pubIP == "" {
+		s.mu.RLock()
+		pubIP = s.cfg.ServerIP
+		s.mu.RUnlock()
+	}
+
+	targetGame := r.URL.Query().Get("game")
+	if targetGame == "" {
+		targetGame = sess.Game
+	}
+	if targetGame == "" {
+		targetGame = "wardogs"
+	}
+
+	webParam := r.URL.Query().Get("web")
+	includeWebServices := webParam == "1" || strings.ToLower(webParam) == "true"
+
+	var extraProcs []string
+	if pStr := r.URL.Query().Get("procs"); pStr != "" {
+		for _, part := range strings.Split(pStr, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				extraProcs = append(extraProcs, part)
+			}
+		}
+	}
+	for _, p := range r.URL.Query()["proc"] {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			extraProcs = append(extraProcs, p)
+		}
+	}
+
+	var activeProfiles []aclgen.Profile
+	for _, p := range profiles {
+		if strings.EqualFold(p.ID, targetGame) || strings.EqualFold(p.Name, targetGame) || p.ID == "socials" || p.ID == "wardogs" {
+			activeProfiles = append(activeProfiles, p)
+		}
+	}
+	if len(activeProfiles) == 0 {
+		activeProfiles = profiles
+	}
+
+	cfgBytes, err := aclgen.GenerateSingBoxConfig(
+		activeProfiles,
+		extraProcs,
+		includeWebServices,
+		pubIP,
+		serverPorts,
+		obfsPassword,
+		token,
+	)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "config_generation_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	var parsedCfg interface{}
+	_ = json.Unmarshal(cfgBytes, &parsedCfg)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"game":    targetGame,
+		"config":  parsedCfg,
 	})
 }
 
@@ -2074,7 +2248,12 @@ func (s *AppState) sampleLoad() *LoadSnapshot {
 
 	// 4. Active sessions
 	s.mu.RLock()
-	activeSess := len(s.sessions)
+	activeSess := 0
+	for _, sess := range s.sessions {
+		if now.Before(sess.ExpiresAt) {
+			activeSess++
+		}
+	}
 	s.mu.RUnlock()
 
 	snap := &LoadSnapshot{
@@ -2208,10 +2387,56 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		history[i], history[j] = history[j], history[i]
 	}
 
+	type ActivePlayerInfo struct {
+		DeviceID     string `json:"device_id"`
+		Game         string `json:"game"`
+		ClientIP     string `json:"client_ip"`
+		ConnectedAt  string `json:"connected_at"`
+		DurationSec  int    `json:"duration_sec"`
+		DurationDesc string `json:"duration_desc"`
+	}
+
+	activePlayers := make([]ActivePlayerInfo, 0)
+	now := time.Now()
+	s.mu.RLock()
+	for _, sess := range s.sessions {
+		if now.Before(sess.ExpiresAt) {
+			dur := int(now.Sub(sess.CreatedAt).Seconds())
+			desc := fmt.Sprintf("%d мин", dur/60)
+			if dur >= 3600 {
+				desc = fmt.Sprintf("%d ч %d мин", dur/3600, (dur%3600)/60)
+			} else if dur < 60 {
+				desc = fmt.Sprintf("%d сек", dur)
+			}
+
+			devID := sess.DeviceID
+			if len(devID) > 12 {
+				devID = devID[:8] + "..." + devID[len(devID)-4:]
+			}
+			gameName := sess.Game
+			if gameName == "" || gameName == "wardogs" {
+				gameName = "WARDOGS"
+			} else if gameName == "free_internet" {
+				gameName = "Свободный интернет"
+			}
+
+			activePlayers = append(activePlayers, ActivePlayerInfo{
+				DeviceID:     devID,
+				Game:         gameName,
+				ClientIP:     sess.ClientIP,
+				ConnectedAt:  sess.CreatedAt.Format(time.RFC3339),
+				DurationSec:  dur,
+				DurationDesc: desc,
+			})
+		}
+	}
+	s.mu.RUnlock()
+
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"live":    live,
-		"history": history,
+		"success":        true,
+		"live":           live,
+		"history":        history,
+		"active_players": activePlayers,
 	})
 }
 
@@ -2654,6 +2879,29 @@ const dashboardHTML = `<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Table of Active Players Online -->
+        <div class="table-section" style="margin-bottom: 24px;">
+            <div class="table-title" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Игроки онлайн прямо сейчас</span>
+                <span id="active-players-count" style="color: var(--accent); font-size: 11px; font-weight: 700; text-transform: none;">0 игроков</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Устройство (ID)</th>
+                        <th>Режим / Игра</th>
+                        <th>IP-адрес</th>
+                        <th>Подключен в</th>
+                        <th>Время в сети</th>
+                        <th>Статус сессии</th>
+                    </tr>
+                </thead>
+                <tbody id="players-table-body">
+                    <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет активных игроков онлайн</td></tr>
+                </tbody>
+            </table>
+        </div>
+
         <!-- Table of Snapshots -->
         <div class="table-section">
             <div class="table-title">Последние снимки телеметрии</div>
@@ -2777,6 +3025,32 @@ const dashboardHTML = `<!DOCTYPE html>
                             '<td style="color: var(--blue);">' + formatRate(item.net_rx_rate_kbps) + '</td>' +
                             '<td style="color: var(--purple);">' + formatRate(item.net_tx_rate_kbps) + '</td>' +
                             '<td>' + formatBytes(item.net_bytes_recv) + ' / ' + formatBytes(item.net_bytes_sent) + '</td>' +
+                        '</tr>';
+                    }).join('');
+                }
+            }
+
+            // 4. Populate Active Players Table
+            const playersTbody = document.getElementById('players-table-body');
+            const playersCountEl = document.getElementById('active-players-count');
+            const players = data.active_players || [];
+            if (playersCountEl) {
+                playersCountEl.textContent = players.length + ' игроков онлайн';
+            }
+            if (playersTbody) {
+                if (players.length === 0) {
+                    playersTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет активных игроков онлайн</td></tr>';
+                } else {
+                    playersTbody.innerHTML = players.map(p => {
+                        const d = p.connected_at ? new Date(p.connected_at) : null;
+                        const connTime = (d && !isNaN(d.getTime())) ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : (p.connected_at || '-');
+                        return '<tr>' +
+                            '<td style="font-family: var(--font-mono); font-weight: 600;">' + p.device_id + '</td>' +
+                            '<td><strong style="color: var(--accent);">' + p.game + '</strong></td>' +
+                            '<td style="font-family: var(--font-mono); color: var(--blue);">' + p.client_ip + '</td>' +
+                            '<td>' + connTime + '</td>' +
+                            '<td>' + p.duration_desc + '</td>' +
+                            '<td><span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 6px;"></span>Активен</td>' +
                         '</tr>';
                     }).join('');
                 }

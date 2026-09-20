@@ -3,7 +3,6 @@ let isBusy = false;
 let isDownloadingDeps = false;
 let isInitializing = false;
 let freeInternetEnabled = false;
-let currentView = 'showcase'; // 'showcase' or 'game'
 let selectedGameId = 'wardogs';
 const defaultGames = [
     {
@@ -13,10 +12,15 @@ const defaultGames = [
         icon_url: 'wardogs_icon.png',
         last_played: 1789653625,
         is_default: true,
+        autolaunch: true,
         launch_count: 0
     }
 ];
 let cachedGames = defaultGames;
+let launchingGameId = null;
+let lastShowcaseStateKey = '';
+let isVotingEnabled = true;
+let isDonateEnabled = true;
 
 // --- Window Dragging and Controls ---
 function handleTitlebarMouseDown(e) {
@@ -49,56 +53,6 @@ function toggleDetails(e) {
     }
 }
 
-async function triggerBenchmark() {
-    toggleDetails();
-    try {
-        await fetch('/api/run-benchmark', { method: 'POST' });
-    } catch (e) {
-        console.error('Benchmark error:', e);
-    }
-}
-
-// --- View Switching ---
-function showShowcaseView() {
-    currentView = 'showcase';
-    const vShowcase = document.getElementById('view-showcase');
-    const vGame = document.getElementById('view-game');
-    if (vShowcase) vShowcase.style.display = 'flex';
-    if (vGame) vGame.style.display = 'none';
-}
-
-function showGameView(gameId) {
-    if (gameId) {
-        selectedGameId = gameId;
-        selectGame(gameId);
-        const game = cachedGames.find(g => g.id === gameId);
-        if (game) {
-            const titleEl = document.getElementById('game-title');
-            const badgeEl = document.getElementById('game-badge-type');
-            const imgEl = document.getElementById('game-identity-img');
-            const fbEl = document.getElementById('game-identity-fallback');
-            if (titleEl) titleEl.textContent = game.title || 'Игра';
-            if (badgeEl) badgeEl.textContent = game.steam_app_id ? 'STEAM' : 'EXE';
-            if (imgEl) {
-                const iconSrc = game.icon_url || (game.id === 'wardogs' ? 'wardogs_icon.png' : '');
-                if (iconSrc) {
-                    imgEl.src = iconSrc;
-                    imgEl.style.display = 'block';
-                    if (fbEl) fbEl.style.display = 'none';
-                } else {
-                    imgEl.style.display = 'none';
-                    if (fbEl) fbEl.style.display = 'flex';
-                }
-            }
-        }
-    }
-    currentView = 'game';
-    const vShowcase = document.getElementById('view-showcase');
-    const vGame = document.getElementById('view-game');
-    if (vShowcase) vShowcase.style.display = 'none';
-    if (vGame) vGame.style.display = 'flex';
-}
-
 // --- Free Internet Toggle (Titlebar) ---
 let isTogglingFreeNet = false;
 
@@ -129,9 +83,14 @@ async function toggleFreeInternet(e) {
                 freeInternetEnabled = data.enabled;
                 updateFreeInternetUI(data.enabled);
             }
+        } else {
+            freeInternetEnabled = !newTarget;
+            updateFreeInternetUI(freeInternetEnabled);
         }
     } catch (err) {
         console.error('Free internet toggle error:', err);
+        freeInternetEnabled = !newTarget;
+        updateFreeInternetUI(freeInternetEnabled);
     } finally {
         isTogglingFreeNet = false;
         if (ctrl) {
@@ -153,11 +112,6 @@ function updateFreeInternetUI(enabled) {
 }
 
 // --- Games Showcase Render (Desktop-Style Shortcuts) ---
-let lastShowcaseStateKey = '';
-let launchingGameId = null;
-let isVotingEnabled = true;
-let isDonateEnabled = true;
-
 function renderShowcase(games, activeId) {
     cachedGames = games || [];
     const grid = document.getElementById('showcase-grid');
@@ -266,16 +220,15 @@ function escapeHtml(str) {
         .replace(/"/g, '&quot;');
 }
 
+// 1-Click Game Action (One action, one screen)
 function onGameClick(gameId) {
-    const game = cachedGames.find(g => g.id === gameId);
-    const launchCount = (game && typeof game.launch_count === 'number') ? game.launch_count : 0;
-    if (launchCount === 0) {
-        // First launch: inspect settings and routing details
-        showGameView(gameId);
+    if (isBusy || isDownloadingDeps || isInitializing) return;
+
+    if (isConnected && selectedGameId === gameId) {
+        // Currently connected to this game -> disconnect
+        toggleConnect();
     } else {
-        // Subsequent launches: quick connect and launch game with spinning indicator
-        launchingGameId = gameId;
-        renderShowcase(cachedGames, gameId);
+        // Quick connect and launch
         quickLaunchGame(gameId);
     }
 }
@@ -317,22 +270,29 @@ function showGameContextMenu(e, gameId, isDefault) {
     activeContextMenuGameId = gameId;
     activeContextMenuIsDefault = !!isDefault;
 
+    const game = cachedGames.find(g => g.id === gameId);
     const menu = document.getElementById('game-context-menu');
     if (!menu) return;
 
+    const btnConnect = document.getElementById('ctx-btn-connect');
+    if (btnConnect) {
+        const isGameActive = isConnected && (selectedGameId === gameId);
+        btnConnect.querySelector('span').textContent = isGameActive ? 'Отключиться' : 'Подключиться';
+    }
+
+    const btnAutolaunch = document.getElementById('ctx-btn-autolaunch');
+    if (btnAutolaunch && game) {
+        const isAuto = (game.autolaunch !== false); // default to true
+        btnAutolaunch.classList.toggle('is-checked', isAuto);
+    }
+
     const btnDelete = document.getElementById('ctx-btn-delete');
     if (btnDelete) {
-        if (activeContextMenuIsDefault) {
-            btnDelete.classList.add('is-disabled');
-            btnDelete.disabled = true;
-        } else {
-            btnDelete.classList.remove('is-disabled');
-            btnDelete.disabled = false;
-        }
+        btnDelete.style.display = activeContextMenuIsDefault ? 'none' : 'flex';
     }
 
     menu.style.display = 'flex';
-    const menuWidth = menu.offsetWidth || 150;
+    const menuWidth = menu.offsetWidth || 180;
     const menuHeight = menu.offsetHeight || 110;
 
     let posX = e.clientX;
@@ -362,15 +322,34 @@ function onContextConnect() {
     const gid = activeContextMenuGameId;
     hideGameContextMenu();
     if (gid) {
-        quickLaunchGame(gid);
+        if (isConnected && selectedGameId === gid) {
+            toggleConnect();
+        } else {
+            quickLaunchGame(gid);
+        }
     }
 }
 
-function onContextSettings() {
+async function onContextToggleAutolaunch() {
     const gid = activeContextMenuGameId;
     hideGameContextMenu();
-    if (gid) {
-        showGameView(gid);
+    if (!gid) return;
+
+    try {
+        const res = await fetch('/api/toggle-autolaunch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: gid })
+        });
+        if (res.ok) {
+            const data = await res.json();
+            const game = cachedGames.find(g => g.id === gid);
+            if (game) {
+                game.autolaunch = data.autolaunch;
+            }
+        }
+    } catch (err) {
+        console.error('Error toggling autolaunch:', err);
     }
 }
 
@@ -395,13 +374,67 @@ document.addEventListener('contextmenu', (e) => {
     }
 });
 
+// Modal backdrop click-to-close
+function onModalBackdropMouseDown(e) {
+    if (e.target === e.currentTarget || e.target.id === 'modal-add-game') {
+        closeAddGameModal();
+    }
+}
+
+function onModalBackdropClick(e) {
+    if (e.target === e.currentTarget || e.target.id === 'modal-add-game') {
+        closeAddGameModal();
+    }
+}
+
+// Global Keyboard Navigation (Escape to dismiss modals, sheets, and menus)
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+        const modal = document.getElementById('modal-add-game');
+        if (modal && modal.style.display !== 'none') {
+            closeAddGameModal();
+            return;
+        }
+        const details = document.getElementById('view-details');
+        if (details && details.style.display !== 'none' && details.style.display !== '') {
+            toggleDetails();
+            return;
+        }
         hideGameContextMenu();
     }
 });
 
+// --- Functional Toast Notification ---
+let toastTimer = null;
+let lastShownError = '';
+
+function showToast(msg, durationMs = 4500) {
+    if (!msg) return;
+    const toast = document.getElementById('ui-toast');
+    const toastMsg = document.getElementById('ui-toast-msg');
+    if (!toast || !toastMsg) return;
+
+    if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+    }
+
+    toastMsg.textContent = msg;
+    toast.classList.remove('toast-hiding');
+    toast.style.display = 'flex';
+
+    toastTimer = setTimeout(() => {
+        toast.classList.add('toast-hiding');
+        setTimeout(() => {
+            toast.style.display = 'none';
+            toast.classList.remove('toast-hiding');
+            toastTimer = null;
+        }, 200);
+    }, durationMs);
+}
+
 async function selectGame(gameId) {
+    selectedGameId = gameId;
     try {
         await fetch('/api/select-game', {
             method: 'POST',
@@ -413,89 +446,22 @@ async function selectGame(gameId) {
 
 async function deleteGame(e, gameId) {
     if (e) e.stopPropagation();
+    if (!confirm('Удалить эту игру из витрины?')) return;
+
     try {
         await fetch('/api/delete-game', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: gameId })
         });
+        lastShowcaseStateKey = '';
         fetchStatus();
-    } catch (e) {}
+    } catch (e) {
+        console.error('Delete game error:', e);
+    }
 }
 
-// --- Add Game Modal & Unified Input Resolution ---
-let steamResolveTimeout = null;
-let resolvedIconUrl = '';
-let resolvedSteamAppId = '';
-let resolvedTitle = '';
-let selectedExePath = '';
-
-function onGameInput(val) {
-    val = (val || '').trim();
-    if (steamResolveTimeout) clearTimeout(steamResolveTimeout);
-
-    const previewBox = document.getElementById('game-preview-box');
-    const previewImg = document.getElementById('game-preview-img');
-    const previewName = document.getElementById('game-preview-name');
-    const previewDesc = document.getElementById('game-preview-desc');
-
-    if (!val) {
-        if (previewBox) previewBox.style.display = 'none';
-        resolvedIconUrl = '';
-        resolvedSteamAppId = '';
-        resolvedTitle = '';
-        selectedExePath = '';
-        return;
-    }
-
-    // If it's a file path (.exe)
-    if (val.toLowerCase().endsWith('.exe')) {
-        selectedExePath = val;
-        const base = val.split(/[/\\]/).pop().replace(/\.exe$/i, '');
-        if (previewBox) {
-            previewBox.style.display = 'flex';
-            if (previewImg) previewImg.style.display = 'none';
-            if (previewName) previewName.textContent = base;
-            if (previewDesc) previewDesc.textContent = 'Исполняемый файл: ' + val;
-        }
-        return;
-    }
-
-    steamResolveTimeout = setTimeout(async () => {
-        try {
-            const res = await fetch(`/api/resolve-steam?appid=${encodeURIComponent(val)}`);
-            if (res.ok) {
-                const data = await res.json();
-                if (data.title || data.icon_url) {
-                    resolvedIconUrl = data.icon_url || '';
-                    resolvedTitle = data.title || '';
-                    const match = val.match(/\b\d{3,9}\b/);
-                    if (match) resolvedSteamAppId = match[0];
-
-                    if (previewBox) {
-                        previewBox.style.display = 'flex';
-                        if (previewImg) {
-                            if (resolvedIconUrl) {
-                                previewImg.src = resolvedIconUrl;
-                                previewImg.style.display = 'block';
-                            } else {
-                                previewImg.style.display = 'none';
-                            }
-                        }
-                        if (previewName) previewName.textContent = resolvedTitle || val;
-                        if (previewDesc) previewDesc.textContent = resolvedSteamAppId ? ('Steam AppID: ' + resolvedSteamAppId) : 'Найдено в Steam';
-                    }
-                    return;
-                }
-            }
-        } catch (e) {}
-
-        if (!/\b\d{3,9}\b/.test(val)) {
-            if (previewBox) previewBox.style.display = 'none';
-        }
-    }, 150);
-}
-
+// --- Community Game Voting Modal ---
 let selectedSteamGame = null;
 let voteSearchTimer = null;
 let voteAutoPollTimer = null;
@@ -697,8 +663,10 @@ async function loadCommunityVotes() {
             const card = document.createElement('div');
             card.className = 'vote-game-card';
 
-            const pct = Math.min(100, Math.round((g.votes_count / 50) * 100));
-            const isWinner = g.status === 'queue_integration' || g.votes_count >= 50;
+            const votesCount = g.votes_count || 0;
+            const targetVotes = data.target_votes || 50;
+            const pct = Math.min(100, Math.round((votesCount / targetVotes) * 100));
+            const isWinner = g.status === 'queue_integration' || votesCount >= targetVotes;
 
             let actionBtn = '';
             if (isWinner) {
@@ -731,7 +699,7 @@ async function loadCommunityVotes() {
                     <div class="vote-card-info">
                         <div class="vote-card-topline">
                             <span class="vote-card-name" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</span>
-                            <span class="vote-card-stats">${g.votes_count} / 50</span>
+                            <span class="vote-card-stats">${votesCount} / ${targetVotes}</span>
                         </div>
                         <div class="vote-progress-track">
                             <div class="vote-progress-fill ${isWinner ? 'winner' : ''}" style="width: ${pct}%;"></div>
@@ -750,113 +718,87 @@ async function loadCommunityVotes() {
 // --- API / State Sync ---
 async function fetchStatus() {
     try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        updateUI(data);
-    } catch (e) {}
+        const resp = await fetch('/api/status');
+        if (resp.ok) {
+            const data = await resp.json();
+            updateUI(data);
+        }
+    } catch (err) {
+        console.error('Fetch status error:', err);
+    }
 }
 
 function updateUI(data) {
-    isConnected = data.is_connected;
-    isBusy = data.is_busy;
+    isConnected = !!data.is_connected;
+    isBusy = !!data.is_busy;
     isDownloadingDeps = !!data.is_downloading_deps;
     isInitializing = !!data.is_initializing;
 
-    if (isConnected || (!isBusy && !isDownloadingDeps)) {
-        if (launchingGameId && !isBusy) {
-            launchingGameId = null;
-        }
+    // Release blocking overlay when not actively launching
+    if (!isBusy && !isDownloadingDeps && !isInitializing) {
+        launchingGameId = null;
     }
 
-    if (data.version) {
-        const verEl = document.querySelector('.brand-version');
-        if (verEl) verEl.textContent = data.version;
-    }
-
-    // Check blocking overlay (updater or first-time component initialization)
+    // Auto-updater overlay
     const updateOverlay = document.getElementById('view-update-overlay');
     if (updateOverlay) {
         if (data.is_updating) {
             updateOverlay.style.display = 'flex';
-            const title = document.getElementById('update-title');
-            const bar = document.getElementById('update-bar');
-            const msg = document.getElementById('update-msg');
-            const note = document.getElementById('update-note');
-            if (title) title.textContent = 'Обновление WarLink...';
-            if (bar) bar.style.width = (data.update_pct || 0) + '%';
-            if (msg && data.update_msg) msg.textContent = data.update_msg;
-            if (note) note.textContent = 'Пользовательские настройки и список игр гарантированно сохранены';
-            return; // Lock interface while updating!
+            const ut = document.getElementById('update-title');
+            const um = document.getElementById('update-msg');
+            const ub = document.getElementById('update-bar');
+            if (ut) ut.textContent = 'Обновление WarLink...';
+            if (um) um.textContent = data.update_msg || 'Загрузка новой версии...';
+            if (ub) ub.style.width = `${data.update_pct || 0}%`;
+            return;
         } else if (data.is_initializing) {
             updateOverlay.style.display = 'flex';
-            const title = document.getElementById('update-title');
-            const bar = document.getElementById('update-bar');
-            const msg = document.getElementById('update-msg');
-            const note = document.getElementById('update-note');
-            if (title) title.textContent = data.init_title || 'Первичная настройка WarLink...';
-            if (bar) bar.style.width = (data.init_pct || 0) + '%';
-            if (msg && data.init_msg) msg.textContent = data.init_msg;
-            if (note) note.textContent = 'Выполняется один раз при первом запуске приложения';
-            return; // Lock interface while initializing components!
+            const ut = document.getElementById('update-title');
+            const um = document.getElementById('update-msg');
+            const ub = document.getElementById('update-bar');
+            if (ut) ut.textContent = data.init_title || 'Инициализация WarLink...';
+            if (um) um.textContent = data.init_msg || 'Подготовка сетевых компонентов...';
+            if (ub) ub.style.width = `${data.init_pct || 0}%`;
+            return;
         } else {
             updateOverlay.style.display = 'none';
         }
     }
 
-    // Update Free Internet toggle
-    freeInternetEnabled = !!data.free_internet;
-    updateFreeInternetUI(freeInternetEnabled);
+    // Update Free Internet toggle (only when not actively user-toggling)
+    if (!isTogglingFreeNet) {
+        freeInternetEnabled = !!data.free_internet;
+        updateFreeInternetUI(freeInternetEnabled);
+    }
 
     // Update showcase grid
     if (data.games) {
         renderShowcase(data.games, data.selected_game_id);
     }
 
-    // Update selected game drill-down
-    if (data.selected_game) {
-        const titleEl = document.getElementById('game-title');
-        const badgeEl = document.getElementById('game-badge-type');
-        const imgEl = document.getElementById('game-identity-img');
-        if (titleEl) titleEl.textContent = data.selected_game.title || 'Игра';
-        if (badgeEl) {
-            badgeEl.textContent = data.selected_game.steam_app_id ? 'STEAM' : 'EXE';
+    // Handle error notifications (e.g. 100/100 slots full or network failure)
+    if (data.last_error) {
+        if (data.last_error !== lastShownError) {
+            lastShownError = data.last_error;
+            showToast(data.last_error);
         }
-        const fbEl = document.getElementById('game-identity-fallback');
-        if (imgEl) {
-            if (data.selected_game.icon_url) {
-                imgEl.src = data.selected_game.icon_url;
-                imgEl.style.display = 'block';
-                if (fbEl) fbEl.style.display = 'none';
-            } else {
-                imgEl.style.display = 'none';
-                if (fbEl) fbEl.style.display = 'flex';
-            }
-        }
+    } else {
+        lastShownError = '';
     }
 
-    // Update routing profile metric
-    const profMetric = document.getElementById('metric-profile');
-    if (profMetric && data.profile) {
-        profMetric.textContent = `Профиль: ${data.profile}`;
-    }
-
-    // Update real ping & packet loss telemetry metrics
-    const pingMetric = document.getElementById('metric-ping');
-    const lossMetric = document.getElementById('metric-loss');
-    if (pingMetric) {
-        if (isConnected && data.ping_ms && data.ping_ms > 0) {
-            pingMetric.textContent = `Задержка: ${data.ping_ms} ms`;
-        } else if (isConnected) {
-            pingMetric.textContent = 'Задержка: измеряется...';
+    // Reactive Stockholm Gateway status dot
+    const gwDot = document.querySelector('.gateway-dot');
+    if (gwDot) {
+        gwDot.classList.remove('is-online', 'is-connecting', 'is-offline');
+        if (isBusy || isDownloadingDeps || isInitializing) {
+            gwDot.classList.add('is-connecting');
+            gwDot.title = 'Подключение к шлюзу...';
+        } else if (data.gateway_ping && data.gateway_ping > 1) {
+            gwDot.classList.add('is-online');
+            gwDot.title = 'Шлюз Стокгольм онлайн';
         } else {
-            pingMetric.textContent = 'Задержка: -- ms';
-        }
-    }
-    if (lossMetric) {
-        if (isConnected && typeof data.packet_loss === 'number') {
-            lossMetric.textContent = `Потери: ${data.packet_loss}%`;
-        } else {
-            lossMetric.textContent = 'Потери: 0%';
+            gwDot.classList.add('is-offline');
+            gwDot.title = 'Шлюз недоступен';
         }
     }
 
@@ -866,14 +808,27 @@ function updateUI(data) {
     const gwDaysEl = document.getElementById('gw-days');
     const btnDonateText = document.getElementById('btn-donate-text');
     if (gwPingEl) {
-        if (data.gateway_ping && data.gateway_ping > 1) {
+        if (data.ping_label) {
+            gwPingEl.textContent = data.ping_label;
+        } else if (data.gateway_ping && data.gateway_ping > 1) {
             gwPingEl.textContent = data.gateway_ping + ' мс';
         } else {
             gwPingEl.textContent = '— мс';
         }
+        if (data.gateway_ping && data.gateway_ping > 1) {
+            gwPingEl.title = `Пинг ПК -> Шлюз Стокгольм: ${data.gateway_ping} мс`;
+        }
     }
     if (gwSlotsEl) {
-        gwSlotsEl.textContent = data.gateway_slots || '—';
+        const slots = data.gateway_slots || '—';
+        gwSlotsEl.textContent = slots;
+        const isFull = slots.startsWith('100/') || (data.gateway_full === true);
+        gwSlotsEl.classList.toggle('slots-full', isFull);
+        if (isFull) {
+            gwSlotsEl.title = 'Все слоты шлюза заняты (100/100). Новые подключения временно недоступны.';
+        } else {
+            gwSlotsEl.title = 'Активные слоты шлюза Стокгольм';
+        }
     }
     if (gwDaysEl) {
         if (data.gateway_days !== undefined && data.gateway_days > 0) {
@@ -919,17 +874,8 @@ function updateUI(data) {
         }
     }
 
-    const btnToggle = document.getElementById('btn-toggle');
-    const badgeStatus = document.getElementById('badge-status');
-    const badgeText = document.getElementById('badge-text');
-    const statusDesc = document.getElementById('status-desc');
+    // Profile options in Settings
     const selectProfile = document.getElementById('select-profile');
-    const chkAuto = document.getElementById('chk-autolaunch');
-
-    if (chkAuto && chkAuto.checked !== data.autolaunch_game) {
-        chkAuto.checked = data.autolaunch_game;
-    }
-
     if (selectProfile && data.available_profiles && data.available_profiles.length > 0) {
         const currentOptions = Array.from(selectProfile.options).map(o => o.value);
         const newOptions = data.available_profiles;
@@ -942,79 +888,9 @@ function updateUI(data) {
                 selectProfile.appendChild(opt);
             });
         }
-        if (data.profile && selectProfile.value !== data.profile) {
+        if (data.profile) {
             selectProfile.value = data.profile;
         }
-        selectProfile.disabled = (isConnected || isBusy || isDownloadingDeps);
-    }
-
-    let targetText = 'ПОДКЛЮЧИТЬ';
-    let targetClass = 'btn btn-primary';
-    let targetBadgeText = 'ГОТОВ';
-    let targetBadgeClass = 'status-line status-standby';
-    let targetDesc = 'Сетевой маршрут готов к подключению';
-    let targetDisabled = false;
-
-    if (isDownloadingDeps) {
-        targetDisabled = true;
-        targetText = 'ЗАГРУЗКА КОМПОНЕНТОВ…';
-        targetClass = 'btn btn-primary btn-busy';
-        targetBadgeClass = 'status-line status-busy';
-        targetBadgeText = 'ЗАГРУЗКА…';
-        targetDesc = data.deps_msg || 'Первичное скачивание сетевых компонентов с GitHub…';
-    } else if (isBusy) {
-        targetDisabled = true;
-        targetText = 'ПОДКЛЮЧЕНИЕ…';
-        targetClass = 'btn btn-primary btn-busy';
-        targetBadgeClass = 'status-line status-busy';
-        targetBadgeText = 'ПОДКЛЮЧЕНИЕ…';
-        targetDesc = 'Выполняется синхронизация сетевого туннеля';
-    } else if (isConnected) {
-        targetDisabled = false;
-        targetText = 'ОТКЛЮЧИТЬ';
-        targetClass = 'btn btn-primary btn-active';
-        targetBadgeClass = 'status-line status-active';
-        targetBadgeText = 'ПОДКЛЮЧЕНО';
-        targetDesc = 'Сетевой фильтр десинхронизации активен (WinDivert)';
-    }
-
-    if (btnToggle) {
-        btnToggle.disabled = targetDisabled;
-        const btnSpan = document.getElementById('btn-text');
-        if (btnSpan) btnSpan.textContent = targetText;
-        btnToggle.className = targetClass;
-    }
-
-    const btnSpinner = document.getElementById('btn-spinner');
-    if (btnSpinner) {
-        btnSpinner.style.display = (isBusy || isDownloadingDeps) ? 'inline-block' : 'none';
-    }
-
-    if (badgeStatus) badgeStatus.className = targetBadgeClass;
-    if (badgeText) badgeText.textContent = targetBadgeText;
-    if (statusDesc) statusDesc.textContent = targetDesc;
-
-    // Progress bar
-    const b = data.progress;
-    const mainBox = document.getElementById('main-progress-box');
-    const mainMsg = document.getElementById('main-progress-msg');
-    const mainPct = document.getElementById('main-progress-pct');
-    const mainFill = document.getElementById('main-progress-fill');
-
-    if (b && b.is_running) {
-        if (mainBox) mainBox.style.display = 'flex';
-        if (mainMsg && b.message) mainMsg.textContent = b.message;
-        if (mainPct) mainPct.textContent = `${b.percent}%`;
-        if (mainFill) mainFill.style.width = `${b.percent}%`;
-    } else {
-        if (mainBox) mainBox.style.display = 'none';
-    }
-
-    // Footer last log message
-    if (data.logs && data.logs.length > 0) {
-        const last = data.logs[data.logs.length - 1];
-        const lastEl = document.getElementById('last-log-msg');
-        if (lastEl) lastEl.textContent = last;
     }
 }
 
@@ -1035,18 +911,6 @@ async function toggleConnect() {
     fetchStatus();
 }
 
-async function onAutoLaunchChange() {
-    const chk = document.getElementById('chk-autolaunch');
-    if (!chk) return;
-    try {
-        await fetch('/api/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ autolaunch_game: chk.checked })
-        });
-    } catch (e) {}
-}
-
 async function onProfileChange(val) {
     if (!val) return;
     try {
@@ -1055,7 +919,9 @@ async function onProfileChange(val) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ profile: val })
         });
-    } catch (e) {}
+    } catch (e) {
+        console.error('Profile change error:', e);
+    }
 }
 
 function openLogFile() {
@@ -1066,103 +932,27 @@ function openSingboxLogFile() {
     fetch('/api/open-singbox-log').catch(() => {});
 }
 
-const defaultProfiles = [
-    'general (ALT9)',
-    'general (ALT11)',
-    'general (ALT)',
-    'general (ALT1)',
-    'general (ALT2)',
-    'general (ALT3)',
-    'general (ALT4)',
-    'general (ALT5)',
-    'general (ALT6)',
-    'general (ALT7)',
-    'general (ALT8)',
-    'general (ALT10)',
-    'general (ALT12)',
-    'general (ALT13)',
-    'general (FAKE TLS AUTO)',
-    'general (SIMPLE FAKE)',
-    'general'
-];
-
-function initProfileOptions() {
-    const sel = document.getElementById('select-profile');
-    if (sel && sel.options.length <= 1) {
-        sel.innerHTML = '';
-        defaultProfiles.forEach(p => {
-            const opt = document.createElement('option');
-            opt.value = p;
-            opt.textContent = p;
-            sel.appendChild(opt);
-        });
-        sel.value = 'general (ALT9)';
-    }
-}
-
-function triggerReveal() {
-    if (window.revealWindow) {
-        window.revealWindow();
-    }
-}
-
-// Initial showcase render & status poll
-initProfileOptions();
-renderShowcase(defaultGames, selectedGameId);
-document.addEventListener('DOMContentLoaded', () => {
-    initProfileOptions();
-    renderShowcase(defaultGames, selectedGameId);
-    triggerReveal();
-});
-window.addEventListener('load', triggerReveal);
-setTimeout(triggerReveal, 100);
-
-setInterval(fetchStatus, 800);
-fetchStatus();
-
 async function donateServer(e) {
     if (e) e.stopPropagation();
     const btn = document.getElementById('btn-donate-server');
     if (btn) {
-        btn.disabled = true;
-        btn.style.opacity = '0.6';
+        btn.style.pointerEvents = 'none';
+        btn.style.opacity = '0.7';
     }
     try {
         await fetch('/api/server-donate', { method: 'POST' });
     } catch (err) {
         console.error('Donate error:', err);
     } finally {
-        setTimeout(() => {
-            if (btn) {
-                btn.disabled = false;
-                btn.style.opacity = '1';
-            }
-        }, 1500);
+        if (btn) {
+            btn.style.pointerEvents = '';
+            btn.style.opacity = '';
+        }
     }
 }
 
-// --- Keyboard Layout Switching (Alt+Shift, Ctrl+Shift) ---
-let isAltDown = false;
-let isShiftDown = false;
-let isCtrlDown = false;
-
-window.addEventListener('keydown', (e) => {
-    if (e.key === 'Alt') isAltDown = true;
-    if (e.key === 'Shift') isShiftDown = true;
-    if (e.key === 'Control') isCtrlDown = true;
-
-    if ((e.key === 'Shift' && (isAltDown || e.altKey || isCtrlDown || e.ctrlKey)) ||
-        (e.key === 'Alt' && (isShiftDown || e.shiftKey)) ||
-        (e.key === 'Control' && (isShiftDown || e.shiftKey))) {
-        if (window.switchKeyboardLayout) {
-            window.switchKeyboardLayout();
-        }
-    }
-}, true);
-
-window.addEventListener('keyup', (e) => {
-    if (e.key === 'Alt') isAltDown = false;
-    if (e.key === 'Shift') isShiftDown = false;
-    if (e.key === 'Control') isCtrlDown = false;
-}, true);
-
+// Initial boot
+document.addEventListener('DOMContentLoaded', () => {
+    fetchStatus();
+    setInterval(fetchStatus, 1500);
+});

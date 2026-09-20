@@ -18,6 +18,7 @@ type GameProfile struct {
 	IconURL      string   `json:"icon_url,omitempty"`
 	LastPlayed   int64    `json:"last_played"`
 	IsDefault    bool     `json:"is_default"`
+	Autolaunch   bool     `json:"autolaunch"`
 }
 
 var DefaultServerIP = "138.124.103.99"
@@ -50,6 +51,7 @@ func DefaultGames() []GameProfile {
 			IconURL:      "/wardogs_icon.png",
 			LastPlayed:   time.Now().Unix(),
 			IsDefault:    true,
+			Autolaunch:   true,
 		},
 	}
 }
@@ -172,3 +174,24 @@ func (c *Config) AddGameProcess(gameID, procName string) {
 		}
 	}
 }
+
+func (c *Config) ToggleGameAutolaunch(id string) bool {
+	for i, g := range c.Games {
+		if g.ID == id {
+			c.Games[i].Autolaunch = !c.Games[i].Autolaunch
+			_ = c.Save()
+			return c.Games[i].Autolaunch
+		}
+	}
+	return false
+}
+
+func (c *Config) IsGameAutolaunch(id string) bool {
+	for _, g := range c.Games {
+		if g.ID == id {
+			return g.Autolaunch
+		}
+	}
+	return false
+}
+

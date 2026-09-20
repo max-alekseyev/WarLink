@@ -37,3 +37,47 @@ func TestResolveWardogs(t *testing.T) {
 		t.Errorf("expected to find a shipping executable for WARDOGS, got %v", info.ProcessNames)
 	}
 }
+
+func TestSelectBestProcess(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []string
+		expected string
+	}{
+		{
+			name:     "empty list",
+			input:    []string{},
+			expected: "",
+		},
+		{
+			name:     "launcher only",
+			input:    []string{"WardogsLauncher-Shipping.exe"},
+			expected: "WardogsLauncher-Shipping.exe",
+		},
+		{
+			name:     "launcher and client",
+			input:    []string{"WardogsLauncher-Shipping.exe", "WardogsClient-Win64-Shipping.exe"},
+			expected: "WardogsClient-Win64-Shipping.exe",
+		},
+		{
+			name:     "client first then launcher",
+			input:    []string{"WardogsClient-Win64-Shipping.exe", "WardogsLauncher-Shipping.exe"},
+			expected: "WardogsClient-Win64-Shipping.exe",
+		},
+		{
+			name:     "generic client over updater",
+			input:    []string{"game_update.exe", "game_client.exe"},
+			expected: "game_client.exe",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := SelectBestProcess(tc.input)
+			if actual != tc.expected {
+				t.Errorf("SelectBestProcess(%v) = %q, want %q", tc.input, actual, tc.expected)
+			}
+		})
+	}
+}
+

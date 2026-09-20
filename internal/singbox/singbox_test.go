@@ -2,6 +2,8 @@ package singbox
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +61,65 @@ func TestGenerateConfig(t *testing.T) {
 		if r.Outbound == "direct" {
 			hasDirectRule = true
 		}
+	}
+
+	hasSteamSDRDirect := false
+	hasMatchPortsTunnel := false
+	hasSteamDomainsDirect := false
+	for _, r := range parsed.Route.Rules {
+		if r.Outbound == "hy2-stockholm" {
+			for _, pr := range r.PortRange {
+				if pr == "4000:4500" {
+					hasMatchPortsTunnel = true
+				}
+			}
+		}
+		if r.Outbound == "direct" {
+			for _, pr := range r.PortRange {
+				if pr == "27000:27200" {
+					hasSteamSDRDirect = true
+				}
+			}
+			for _, d := range r.DomainSuffix {
+				if d == "steamserver.net" {
+					hasSteamDomainsDirect = true
+				}
+			}
+		}
+	}
+	if !hasSteamSDRDirect {
+		t.Errorf("Expected direct route for Steam SDR UDP 27000:27200")
+	}
+	if !hasMatchPortsTunnel {
+		t.Errorf("Expected hy2-stockholm tunnel route for WARDOGS match servers UDP 4000:4500")
+	}
+	if !hasSteamDomainsDirect {
+		t.Errorf("Expected direct route for Steam domains")
+	}
+
+	hasSteamLocalDNS := false
+	hasVivoxRemoteDNS := false
+	for _, dr := range parsed.DNS.Rules {
+		if dr.Server == "dns-local" {
+			for _, d := range dr.DomainSuffix {
+				if d == "steamserver.net" {
+					hasSteamLocalDNS = true
+				}
+			}
+		}
+		if dr.Server == "dns-remote" {
+			for _, d := range dr.DomainSuffix {
+				if d == "vivox.com" {
+					hasVivoxRemoteDNS = true
+				}
+			}
+		}
+	}
+	if !hasSteamLocalDNS {
+		t.Errorf("Expected Steam domains to resolve via dns-local")
+	}
+	if !hasVivoxRemoteDNS {
+		t.Errorf("Expected vivox.com to resolve via dns-remote (not fakeip)")
 	}
 
 	if !hasGameRule {
@@ -206,8 +267,12 @@ func TestGenerateConfigHysteria2Outbound(t *testing.T) {
 }
 
 func TestLiveStockholmGateway(t *testing.T) {
-	if GetServerAPI() == "" {
-		t.Skip("Skipping live gateway test: server API not configured")
+	hmac := os.Getenv("WARLINK_HMAC_SECRET")
+	if hmac == "" {
+		hmac = DefaultHMACSecret
+	}
+	if GetServerAPI() == "" || hmac == "" {
+		t.Skip("Skipping live gateway test: server API or HMAC secret not configured")
 	}
 	st, err := GetServerGatewayStatus()
 	if err != nil {
@@ -230,8 +295,8 @@ func TestLiveStockholmGateway(t *testing.T) {
 }
 
 func TestLiveSingBoxStartStop(t *testing.T) {
-	if GetServerAPI() == "" {
-		t.Skip("Skipping live singbox test: server API not configured")
+	if GetServerAPI() == "" || DefaultHMACSecret == "" {
+		t.Skip("Skipping live singbox test: server API or HMAC secret not configured")
 	}
 	exePath := filepath.Join("..", "..", "warlink_core", "singbox", "sing-box.exe")
 	if _, err := os.Stat(exePath); err != nil {
@@ -240,6 +305,7 @@ func TestLiveSingBoxStartStop(t *testing.T) {
 
 	coreDir := filepath.Join("..", "..", "warlink_core")
 	mgr := NewManager(coreDir)
+	defer ReleaseSession()
 
 	err := mgr.Start([]string{"WardogsClient-Win64-Shipping.exe"}, true, func(msg string) {
 		t.Log(msg)
@@ -259,3 +325,62 @@ func TestLiveSingBoxStartStop(t *testing.T) {
 		t.Errorf("Expected mgr to be stopped")
 	}
 }
+
+func TestFetchRemoteConfig(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/singbox/config" {
+			http.NotFound(w, r)
+			return
+		}
+		tok := r.URL.Query().Get("token")
+		if tok != "valid_token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "unauthorized",
+			})
+			return
+		}
+		game := r.URL.Query().Get("game")
+		if game != "wardogs" {
+			t.Errorf("expected game=wardogs, got %s", game)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"game":    game,
+			"config": map[string]interface{}{
+				"log": map[string]interface{}{
+					"level": "warn",
+				},
+				"route": map[string]interface{}{
+					"rules": []interface{}{},
+				},
+			},
+		})
+	}))
+	defer mockServer.Close()
+
+	// 1. Success case
+	cfg, err := FetchRemoteConfig(mockServer.URL, "valid_token", "wardogs", []string{"WardogsClient-Win64-Shipping.exe"}, true)
+	if err != nil {
+		t.Fatalf("FetchRemoteConfig failed: %v", err)
+	}
+	if len(cfg) == 0 {
+		t.Fatal("expected non-empty config bytes")
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(cfg, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal config: %v", err)
+	}
+	if _, exists := parsed["log"]; !exists {
+		t.Errorf("expected log section in parsed config")
+	}
+
+	// 2. Unauthorized / invalid token case
+	_, err = FetchRemoteConfig(mockServer.URL, "invalid_token", "wardogs", nil, false)
+	if err == nil {
+		t.Fatal("expected error with invalid token, got nil")
+	}
+}
+

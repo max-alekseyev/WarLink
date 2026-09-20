@@ -1,6 +1,7 @@
 package aclgen
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,3 +276,103 @@ func TestACLRulesEqual(t *testing.T) {
 		t.Errorf("expected acl1 and acl3 to NOT be equal")
 	}
 }
+
+func TestNormalizeServerPorts(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected []string
+	}{
+		{"443,20000-30000", []string{"443:443", "20000:30000"}},
+		{"443", []string{"443:443"}},
+		{"80:80,443:443", []string{"80:80", "443:443"}},
+		{"", []string{"443:443", "20000:30000"}},
+	}
+	for _, tc := range cases {
+		got := normalizeServerPorts(tc.input)
+		if len(got) != len(tc.expected) {
+			t.Fatalf("normalizeServerPorts(%q) returned %d items, want %d", tc.input, len(got), len(tc.expected))
+		}
+		for i := range got {
+			if got[i] != tc.expected[i] {
+				t.Errorf("normalizeServerPorts(%q)[%d] = %q, want %q", tc.input, i, got[i], tc.expected[i])
+			}
+		}
+	}
+}
+
+func TestGenerateSingBoxConfigDirectGameDomains(t *testing.T) {
+	profiles := []Profile{
+		{
+			ID:        "wardogs",
+			Name:      "WARDOGS",
+			Processes: []string{"WardogsClient-Win64-Shipping.exe", "WardogsLauncher-Shipping.exe"},
+			Domains:   []string{"elytra.ac", "pragmaengine.com", "steamserver.net"},
+		},
+	}
+	cfgBytes, err := GenerateSingBoxConfig(profiles, nil, false, "138.124.103.99", "443,20000-30000", "testpass", "testtoken")
+	if err != nil {
+		t.Fatalf("GenerateSingBoxConfig failed: %v", err)
+	}
+
+	var parsed SingBoxFullConfig
+	if err := json.Unmarshal(cfgBytes, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal generated config: %v", err)
+	}
+
+	// 1. Verify elytra.ac is resolved via dns-local, NOT dns-fakeip
+	for _, r := range parsed.DNS.Rules {
+		if r.Server == "dns-fakeip" {
+			for _, d := range r.DomainSuffix {
+				if d == "elytra.ac" || d == "steamserver.net" {
+					t.Errorf("domain %s MUST NOT be in dns-fakeip rule", d)
+				}
+			}
+		}
+	}
+
+	// 2. Verify Port 80 is routed direct globally
+	hasPort80Direct := false
+	for _, r := range parsed.Route.Rules {
+		if len(r.Port) == 1 && r.Port[0] == 80 && r.Outbound == "direct" {
+			hasPort80Direct = true
+			break
+		}
+	}
+	if !hasPort80Direct {
+		t.Errorf("expected global port 80 direct route rule")
+	}
+
+	// 3. Verify WardogsLauncher-Shipping.exe is excluded to direct
+	hasLauncherDirect := false
+	for _, r := range parsed.Route.Rules {
+		if r.Outbound == "direct" {
+			for _, p := range r.ProcessName {
+				if strings.EqualFold(p, "WardogsLauncher-Shipping.exe") {
+					hasLauncherDirect = true
+					break
+				}
+			}
+		}
+	}
+	if !hasLauncherDirect {
+		t.Errorf("expected WardogsLauncher-Shipping.exe to be routed direct")
+	}
+
+	// 4. Verify Hysteria outbound has TLS ServerName set to gateway.warlink.network
+	if len(parsed.Outbounds) == 0 || parsed.Outbounds[0].TLS == nil || parsed.Outbounds[0].TLS.ServerName != "gateway.warlink.network" {
+		t.Errorf("expected hysteria outbound TLS server_name to be 'gateway.warlink.network'")
+	}
+
+	// 5. Verify UDP 123 (NTP) is routed direct
+	hasNTPDirect := false
+	for _, r := range parsed.Route.Rules {
+		if r.Network == "udp" && len(r.Port) == 1 && r.Port[0] == 123 && r.Outbound == "direct" {
+			hasNTPDirect = true
+			break
+		}
+	}
+	if !hasNTPDirect {
+		t.Errorf("expected UDP 123 direct route rule")
+	}
+}
+

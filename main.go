@@ -35,7 +35,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.0.0"
+var AppVersion = "v2.0.1"
 
 //go:embed ui/*
 var uiFS embed.FS
@@ -67,6 +67,9 @@ var (
 	procCreateSolidBrush   = modGdi32.NewProc("CreateSolidBrush")
 	procFillRect           = modUser32.NewProc("FillRect")
 	procGetSystemMetrics   = modUser32.NewProc("GetSystemMetrics")
+	procGetForegroundWindow = modUser32.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessId = modUser32.NewProc("GetWindowThreadProcessId")
+	procAttachThreadInput  = modUser32.NewProc("AttachThreadInput")
 	procExtractIconEx      = modShell32.NewProc("ExtractIconExW")
 	procLoadIcon           = modUser32.NewProc("LoadIconW")
 	procSetClassLongPtr    = modUser32.NewProc("SetClassLongPtrW")
@@ -311,17 +314,7 @@ type AppState struct {
 	updateInfo        *updater.UpdateCheckResult
 	gatewayStatus     *singbox.GatewayStatus
 	gatewayRealPing   int
-}
-
-func selectExeFileDialog() string {
-	psCmd := `[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms') | Out-Null; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Executable Files (*.exe)|*.exe|All Files (*.*)|*.*'; $f.Title = 'Выберите исполняемый файл игры'; if($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){ $f.FileName }`
-	cmd := exec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", psCmd)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	lastConnectError  string
 }
 
 func resolveFromLocalSteam(appID string) (title, iconURL string) {
@@ -684,9 +677,26 @@ func forceForegroundWindow(hwnd uintptr) {
 	procShowWindow.Call(hwnd, uintptr(SW_SHOW))
 
 	// 3. Force to top and bring to foreground (standard bypass for Windows foreground lock)
-	procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
-	procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
-	procSetForeground.Call(hwnd)
+	foreWnd, _, _ := procGetForegroundWindow.Call()
+	if foreWnd != 0 && foreWnd != hwnd {
+		foreThread, _, _ := procGetWindowThreadProcessId.Call(foreWnd, 0)
+		curThread, _, _ := procGetCurrentThreadId.Call()
+		if foreThread != curThread && foreThread != 0 {
+			procAttachThreadInput.Call(curThread, foreThread, 1)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+			procSetForeground.Call(hwnd)
+			procAttachThreadInput.Call(curThread, foreThread, 0)
+		} else {
+			procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+			procSetForeground.Call(hwnd)
+		}
+	} else {
+		procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+		procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+		procSetForeground.Call(hwnd)
+	}
 
 	// 4. Flash window / taskbar demanding user attention
 	procFlashWindow.Call(hwnd, 1)
@@ -994,18 +1004,52 @@ func main() {
 		if targetIP == "" {
 			return 0
 		}
+		// First try standard ICMP ping (using Windows built-in ping.exe)
+		// This bypasses any TCP interception by TUN / local proxies and measures true physical round-trip.
+		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "800")
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000,
+		}
+		if out, err := cmd.Output(); err == nil {
+			outStr := string(out)
+			// Parse: time=42ms or время=42мс
+			idx := strings.Index(strings.ToLower(outStr), "time=")
+			if idx == -1 {
+				idx = strings.Index(strings.ToLower(outStr), "время=")
+			}
+			if idx != -1 {
+				rem := outStr[idx:]
+				eqIdx := strings.Index(rem, "=")
+				if eqIdx != -1 {
+					rem = strings.TrimSpace(rem[eqIdx+1:])
+					var rttVal int
+					if _, scanErr := fmt.Sscanf(rem, "%dms", &rttVal); scanErr == nil && rttVal > 0 {
+						return rttVal
+					}
+					if _, scanErr := fmt.Sscanf(rem, "%dмс", &rttVal); scanErr == nil && rttVal > 0 {
+						return rttVal
+					}
+					if _, scanErr := fmt.Sscanf(rem, "%d", &rttVal); scanErr == nil && rttVal > 0 {
+						return rttVal
+					}
+				}
+			}
+		}
+
+		// Fallback to TCP handshake if ICMP was blocked
 		start := time.Now()
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 1500*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 1200*time.Millisecond)
 		if err != nil {
-			conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 1500*time.Millisecond)
+			conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 1200*time.Millisecond)
 		}
 		if err != nil {
 			return 0
 		}
 		_ = conn.Close()
 		ms := int(time.Since(start).Milliseconds())
-		if ms <= 1 {
-			// <= 1 ms indicates local TUN adapter or loopback interception, not real RTT to Stockholm
+		if ms <= 5 {
+			// <= 5 ms indicates local TUN adapter or loopback interception, not real RTT to Stockholm
 			return 0
 		}
 		return ms
@@ -1017,7 +1061,7 @@ func main() {
 			serverIP := singbox.GetServerIP()
 			if serverIP != "" {
 				rtt := measureGatewayRTT(serverIP)
-				if rtt > 1 {
+				if rtt > 5 {
 					state.mu.Lock()
 					state.gatewayRealPing = rtt
 					state.mu.Unlock()
@@ -1037,6 +1081,47 @@ func main() {
 		}
 	}()
 
+	// Silent auto-reconnect monitor.
+	// If the engine says "connected" but sing-box has died and the watchdog cannot
+	// revive it (e.g. session token expired / auth permanently rejected), we do a
+	// full quiet reconnect after a short grace period.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		var failCount int
+		for range ticker.C {
+			if !state.eng.IsConnected() {
+				failCount = 0
+				continue
+			}
+			if state.eng.IsSingboxAlive() {
+				failCount = 0
+				continue
+			}
+			// sing-box dead while engine considers itself connected
+			failCount++
+			if failCount < 2 { // one extra cycle grace before acting
+				continue
+			}
+			failCount = 0
+			appendLog("[WARN] Туннель разорван. Автоматическое переподключение через 3с...")
+			time.Sleep(3 * time.Second)
+			if !state.eng.IsConnected() {
+				continue // user disconnected manually in the meantime
+			}
+			singbox.InvalidateSession()
+			_ = state.eng.Disconnect()
+			time.Sleep(500 * time.Millisecond)
+			go func() {
+				if err := state.eng.ConnectPipeline(nil); err != nil {
+					appendLog(fmt.Sprintf("[ERROR] Автопереподключение не удалось: %v", err))
+				} else {
+					appendLog("[OK] Соединение автоматически восстановлено")
+				}
+			}()
+		}
+	}()
+
 	// 4. Setup Embedded Web Server for local UI
 	subFS, _ := fs.Sub(uiFS, "ui")
 	mux := http.NewServeMux()
@@ -1046,14 +1131,19 @@ func main() {
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.Lock()
 		pipelineProg := state.eng.GetPipelineProgress()
-		pingMs, lossPct := state.eng.GetTelemetry()
+		matchServer, gamePing, _, gameActive := state.eng.GetGamePing()
+		_, lossPct := state.eng.GetTelemetry()
 		gwPing := state.gatewayRealPing
 		if gwPing <= 1 && state.gatewayStatus != nil && state.gatewayStatus.PingHintMs > 1 {
 			gwPing = state.gatewayStatus.PingHintMs
 		}
-		if gwPing <= 1 {
-			gwPing = 27
+		if gwPing <= 0 {
+			gwPing = 27 // Stockholm gateway baseline
 		}
+
+		totalPing := gwPing
+		pingLabel := fmt.Sprintf("%d мс", gwPing)
+
 		gwSlots := "—"
 		gwDays := 0
 		gwLocation := "Стокгольм, Швеция"
@@ -1065,10 +1155,6 @@ func main() {
 			if state.gatewayStatus.DonateAmountRub > 0 {
 				gwDonateAmount = state.gatewayStatus.DonateAmountRub
 			}
-		}
-		activePing := pingMs
-		if (activePing <= 1 || activePing == 0) && gwPing > 1 {
-			activePing = gwPing
 		}
 		enableDonate := true
 		enableVoting := true
@@ -1084,7 +1170,13 @@ func main() {
 		resp := map[string]interface{}{
 			"version":             AppVersion,
 			"is_connected":        state.eng.IsConnected(),
-			"ping_ms":             activePing,
+			"ping_ms":             totalPing,
+			"gateway_ping":        gwPing,
+			"game_ping":           gamePing,
+			"total_ping":          totalPing,
+			"ping_label":          pingLabel,
+			"match_server":        matchServer,
+			"game_active":         gameActive,
 			"packet_loss":         lossPct,
 			"is_busy":             state.isBusy,
 			"is_downloading_deps": state.isDownloadingDeps,
@@ -1104,13 +1196,13 @@ func main() {
 			"update_pct":          state.updatePct,
 			"update_msg":          state.updateMsg,
 			"progress":            pipelineProg,
-			"gateway_ping":        gwPing,
 			"gateway_slots":       gwSlots,
 			"gateway_days":        gwDays,
 			"gateway_location":    gwLocation,
 			"donate_amount_rub":   gwDonateAmount,
 			"enable_donate":       enableDonate,
 			"enable_voting":       enableVoting,
+			"last_error":          state.lastConnectError,
 		}
 		state.mu.Unlock()
 
@@ -1180,6 +1272,7 @@ func main() {
 			}()
 
 			state.mu.Lock()
+			state.lastConnectError = ""
 			if state.cfg.SelectedGameID != "" {
 				state.cfg.IncrementLaunchCount(state.cfg.SelectedGameID)
 			}
@@ -1188,7 +1281,7 @@ func main() {
 			// Run unified 5-stage pipeline
 			err := state.eng.ConnectPipeline(func() {
 				state.mu.Lock()
-				autolaunch := state.cfg.AutolaunchGame
+				autolaunch := state.cfg.GetSelectedGame().Autolaunch
 				state.mu.Unlock()
 
 				updateTrayStatus(appTray, state)
@@ -1202,6 +1295,9 @@ func main() {
 				}
 			})
 			if err != nil {
+				state.mu.Lock()
+				state.lastConnectError = err.Error()
+				state.mu.Unlock()
 				appendLog(fmt.Sprintf("[ERROR] Ошибка подключения: %v", err))
 				updateTrayStatus(appTray, state)
 			}
@@ -1218,6 +1314,7 @@ func main() {
 			return
 		}
 		state.isBusy = true
+		state.lastConnectError = ""
 		state.mu.Unlock()
 
 		go func() {
@@ -1283,26 +1380,21 @@ func main() {
 			state.isBusy = true
 			state.mu.Unlock()
 
+			defer func() {
+				state.mu.Lock()
+				state.isBusy = false
+				state.mu.Unlock()
+				updateTrayStatus(appTray, state)
+			}()
+
 			var body struct {
 				Enabled bool `json:"enabled"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-				go func() {
-					defer func() {
-						state.mu.Lock()
-						state.isBusy = false
-						state.mu.Unlock()
-						updateTrayStatus(appTray, state)
-					}()
-					err := state.eng.ToggleFreeInternet(body.Enabled)
-					if err != nil {
-						appendLog(fmt.Sprintf("[ERROR] Ошибка режима «Свободный интернет»: %v", err))
-					}
-				}()
-			} else {
-				state.mu.Lock()
-				state.isBusy = false
-				state.mu.Unlock()
+				err := state.eng.ToggleFreeInternet(body.Enabled)
+				if err != nil {
+					appendLog(fmt.Sprintf("[ERROR] Ошибка режима «Свободный интернет»: %v", err))
+				}
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1464,36 +1556,27 @@ func main() {
 		http.Error(w, "invalid game data", http.StatusBadRequest)
 	})
 
-	mux.HandleFunc("/api/update-game", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/toggle-autolaunch", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		var body struct {
-			ID           string `json:"id"`
-			Title        string `json:"title"`
-			ExePath      string `json:"exe_path"`
-			PreferredAlt string `json:"preferred_alt"`
+			ID string `json:"id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.ID != "" {
 			state.mu.Lock()
-			for i, g := range state.cfg.Games {
-				if g.ID == body.ID {
-					if body.Title != "" {
-						state.cfg.Games[i].Title = body.Title
-					}
-					if body.ExePath != "" {
-						state.cfg.Games[i].ExePath = body.ExePath
-					}
-					if body.PreferredAlt != "" {
-						state.cfg.Games[i].PreferredAlt = body.PreferredAlt
-					}
-					break
-				}
-			}
-			_ = state.cfg.Save()
+			newVal := state.cfg.ToggleGameAutolaunch(body.ID)
 			state.mu.Unlock()
-			updateTrayStatus(appTray, state)
-			w.WriteHeader(http.StatusOK)
+			appendLog(fmt.Sprintf("[CONFIG] Автозапуск игры (%s) изменен: %v", body.ID, newVal))
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":         body.ID,
+				"autolaunch": newVal,
+			})
 			return
 		}
-		http.Error(w, "invalid update data", http.StatusBadRequest)
+		http.Error(w, "invalid request", http.StatusBadRequest)
 	})
 
 	mux.HandleFunc("/api/increment-launch", func(w http.ResponseWriter, r *http.Request) {
@@ -1533,20 +1616,6 @@ func main() {
 			updateTrayStatus(appTray, state)
 		}
 		w.WriteHeader(http.StatusOK)
-	})
-
-	mux.HandleFunc("/api/browse-exe", func(w http.ResponseWriter, r *http.Request) {
-		selectedPath := selectExeFileDialog()
-		title := ""
-		if selectedPath != "" {
-			base := filepath.Base(selectedPath)
-			title = strings.TrimSuffix(base, filepath.Ext(base))
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"path":  selectedPath,
-			"title": title,
-		})
 	})
 
 	mux.HandleFunc("/api/votes", func(w http.ResponseWriter, r *http.Request) {
@@ -1785,6 +1854,26 @@ func main() {
 			appendLog(fmt.Sprintf("[GAME] Обнаружен запуск %s. Сетевая оптимизация активна.", name))
 		},
 		func(name string) {
+			lower := strings.ToLower(name)
+			if strings.Contains(lower, "launcher") || strings.Contains(lower, "setup") || strings.Contains(lower, "update") {
+				appendLog(fmt.Sprintf("[GAME] Лаунчер %s завершил работу, ожидание запуска игрового клиента...", name))
+				// Debounce: if user simply closed the launcher without starting the game client,
+				// check after 12 seconds if any game process is active. If not, restore window and disconnect cleanly!
+				go func() {
+					time.Sleep(12 * time.Second)
+					state.mu.Lock()
+					g := state.cfg.GetSelectedGame()
+					state.mu.Unlock()
+					running, _ := watcher.IsAnyProcessRunning(g.ProcessNames, watcher.NormalizeGameToken(g.Title))
+					if !running && state.eng.IsConnected() {
+						appendLog("[GAME] Игровой клиент не был запущен после закрытия лаунчера. Завершение сессии...")
+						restoreFromTray(appTray, globalWV)
+						_ = state.eng.Disconnect()
+						updateTrayStatus(appTray, state)
+					}
+				}()
+				return
+			}
 			appendLog(fmt.Sprintf("[GAME] Игра %s закрыта. Возврат интерфейса WarLink...", name))
 			// 1. Force window to foreground instantly
 			restoreFromTray(appTray, globalWV)

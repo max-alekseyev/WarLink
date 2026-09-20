@@ -85,17 +85,49 @@ jobs:
             WarLink.exe.sha256
           retention-days: 14
 
+      - name: Prepare Release Notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $notes = ""
+          # 1. Try to extract tag annotation message preserving newlines
+          $tagLines = git tag -l --format='%(contents)' ${{ github.ref_name }}
+          if ($tagLines) {
+            $tagText = ($tagLines -join "`n").Trim()
+            if ($tagText -and $tagText -ne "${{ github.ref_name }}") {
+              $notes = $tagText
+            }
+          }
+          # 2. Fallback to commit message body
+          if (-not $notes) {
+            $commitLines = git log -1 --pretty=%B
+            $commitText = ($commitLines -join "`n").Trim()
+            if ($commitText -match '(?s)^release:\s*[^\r\n]+\r?\n(.*)$') {
+              $notes = $matches[1].Trim()
+            } elseif ($commitText) {
+              $notes = $commitText
+            }
+          }
+          if (-not $notes) {
+            $notes = "Релиз ${{ github.ref_name }}"
+          }
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllText("release_notes.md", $notes, $utf8NoBom)
+          Write-Host "[RELEASE] Release notes prepared for ${{ github.ref_name }}."
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
+          body_path: release_notes.md
           files: |
             WarLink.exe
             WarLink.exe.sha256
-          generate_release_notes: true
+          generate_release_notes: false
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 

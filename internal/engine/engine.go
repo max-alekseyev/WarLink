@@ -14,6 +14,7 @@ import (
 	"warlink/internal/deps"
 	"warlink/internal/desync"
 	"warlink/internal/hostlist"
+	"warlink/internal/pingmeter"
 	"warlink/internal/scanner"
 	"warlink/internal/singbox"
 )
@@ -42,6 +43,7 @@ type Engine struct {
 	hostlistMgr        *hostlist.Manager
 	singboxMgr         *singbox.Manager
 	telemetry          *TelemetryMonitor
+	pingMeter          *pingmeter.Meter
 	watchdogStop       chan struct{}
 }
 
@@ -54,6 +56,12 @@ func New(cfg *config.Config, logCb func(string)) *Engine {
 		freeInternetActive: cfg.FreeInternetEnabled,
 		singboxMgr:         singbox.NewManager(deps.GetCoreDir()),
 		telemetry:          NewTelemetryMonitor(),
+		pingMeter:          pingmeter.New(filepath.Join(deps.GetCoreDir(), "zapret", "bin")),
+	}
+	if eng.pingMeter != nil {
+		eng.pingMeter.SetUpdateCallback(func(server string, wireRttMs int, inGameEstMs int) {
+			eng.log(fmt.Sprintf("[PING] Матч WARDOGS (%s): Сеть = %d мс | Оверлей игры ~ %d мс", server, wireRttMs, inGameEstMs))
+		})
 	}
 	// Sync upstream lists in background
 	eng.hostlistMgr.SyncUpstream()
@@ -153,6 +161,9 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 				e.telemetry.SetDirectTarget(serverIP)
 			}
 			e.telemetry.Start(false)
+		}
+		if e.pingMeter != nil {
+			_ = e.pingMeter.Start()
 		}
 		return nil
 	} else {
@@ -500,13 +511,16 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 		}
 		e.telemetry.Start(false)
 	}
+	if e.pingMeter != nil {
+		_ = e.pingMeter.Start()
+	}
 
 	e.setProgress(100, 0, 0, bestAlt, "Сетевой туннель полностью активен!", false)
 	e.log("[OK] Сетевой туннель полностью активен! Готово к игре")
 
-	// Launch game if checkbox enabled
-	if e.cfg.AutolaunchGame {
-		selectedGame := e.cfg.GetSelectedGame()
+	selectedGame = e.cfg.GetSelectedGame()
+	// Launch game if autolaunch is enabled for this game
+	if selectedGame.Autolaunch {
 		e.cfg.UpdateLastPlayed(selectedGame.ID)
 
 		if selectedGame.SteamAppID != "" {
@@ -607,6 +621,9 @@ func (e *Engine) disconnectInternal() error {
 	if e.telemetry != nil {
 		e.telemetry.Stop()
 	}
+	if e.pingMeter != nil {
+		e.pingMeter.Stop()
+	}
 
 	e.log("[OK] Игровой туннель отключен, сеть в исходном состоянии")
 	return nil
@@ -617,6 +634,23 @@ func (e *Engine) GetTelemetry() (int, int) {
 		return e.telemetry.Get()
 	}
 	return 0, 0
+}
+
+// GetGamePing returns the active live match server and wire latency.
+func (e *Engine) GetGamePing() (server string, wireRttMs int, inGameEstMs int, active bool) {
+	if e.pingMeter != nil {
+		return e.pingMeter.GetActivePing()
+	}
+	return "", 0, 0, false
+}
+
+// IsSingboxAlive reports whether the sing-box process is currently alive.
+// Used by the silent reconnect monitor in main.go.
+func (e *Engine) IsSingboxAlive() bool {
+	if e.singboxMgr == nil {
+		return false
+	}
+	return e.singboxMgr.IsProcessAlive()
 }
 
 func (e *Engine) GetPipelineProgress() PipelineProgress {
@@ -631,6 +665,9 @@ func (e *Engine) Shutdown() {
 
 	if e.telemetry != nil {
 		e.telemetry.Stop()
+	}
+	if e.pingMeter != nil {
+		e.pingMeter.Stop()
 	}
 
 	e.mu.Lock()
@@ -740,6 +777,15 @@ func (e *Engine) checkProcessHealth() {
 				}
 			}
 		}
-		_ = e.singboxMgr.Start(targets, isFreeNet, e.log)
+		// Stop first to reset isRunning flag — Manager.Start is a no-op if isRunning==true.
+		// Invalidate cached token so AcquireSession fetches a fresh one with the correct
+		// client IP (stale token was issued to 127.0.0.1 and would be rejected by Hysteria2).
+		_ = e.singboxMgr.Stop()
+		singbox.InvalidateSession()
+		if startErr := e.singboxMgr.Start(targets, isFreeNet, e.log); startErr != nil {
+			e.log(fmt.Sprintf("[ERROR] Не удалось перезапустить туннель: %v", startErr))
+		} else {
+			e.log("[OK] Туннель автоматически восстановлен")
+		}
 	}
 }

@@ -17,9 +17,9 @@ if (-not $GatewayIP -and (Test-Path "$root\warlink_core\config.json")) {
 }
 
 if (-not $GatewayIP) {
-    Write-Host "[WARN] GatewayIP не указан. Бинарник будет требовать WARLINK_SERVER_IP или config.json во время работы." -ForegroundColor Yellow
+    Write-Host "[WARN] GatewayIP not specified. Using WARLINK_SERVER_IP or config.json at runtime." -ForegroundColor Yellow
 } else {
-    Write-Host "[INFO] Сборка с зашитым адресом шлюза: $GatewayIP" -ForegroundColor Cyan
+    Write-Host "[INFO] Building with embedded gateway IP: $GatewayIP" -ForegroundColor Cyan
 }
 
 $outDir = "$root\dist"
@@ -44,7 +44,7 @@ if ($UpdateRepo) {
     $ldflags += " -X warlink/internal/updater.UpdateRepo=$UpdateRepo"
 }
 
-Write-Host "[BUILD] Компиляция dist\WarLink.exe с флагом -trimpath..." -ForegroundColor Yellow
+Write-Host "[BUILD] Compiling dist\WarLink.exe with -trimpath..." -ForegroundColor Yellow
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $cmd = "go build -trimpath -tags release -ldflags `"$ldflags`" -o dist\WarLink.exe ."
@@ -52,8 +52,11 @@ Invoke-Expression $cmd
 
 if ($LASTEXITCODE -eq 0) {
     $sizeMb = [math]::Round((Get-Item "$outDir\WarLink.exe").Length / 1MB, 2)
-    Write-Host "[OK] Релизный бинарник собран: dist\WarLink.exe ($sizeMb MB)" -ForegroundColor Green
+    Write-Host "[OK] Release binary built: dist\WarLink.exe ($sizeMb MB)" -ForegroundColor Green
+    Copy-Item -Force "$outDir\WarLink.exe" "$root\WarLink.exe"
+    Write-Host "[OK] Synced to root: WarLink.exe" -ForegroundColor Green
 } else {
-    Write-Host "[ERR] Ошибка компиляции WarLink.exe" -ForegroundColor Red
+    Write-Host "[ERR] Failed to build WarLink.exe" -ForegroundColor Red
     exit 1
 }
+

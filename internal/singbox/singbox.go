@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,8 +34,11 @@ const (
 var (
 	DefaultServerIP     = "138.124.103.99"
 	DefaultServerAPI    = "http://138.124.103.99"
-	DefaultHMACSecret   = "7733b05a1dcdea9aafc165def4427b9809a3b57e6ac51426df40aaf739e4b211"
-	DefaultObfsPassword = "aEW9TuPhetCrYmPEN0NkP5/SQQQ3pxDweXqTUsdsUr4="
+	// Injected at build time via -X ldflags from GitHub Actions secrets.
+	// Never commit real values here — binary built from source without CI
+	// will have empty secrets and will fail auth (gateway rejects empty HMAC).
+	DefaultHMACSecret   = ""
+	DefaultObfsPassword = ""
 )
 
 func GetServerIP() string {
@@ -224,6 +228,8 @@ var BlockedServiceDomains = []string{
 // bypass GPN tunnel directly over port 80 to ensure anti-cheat and TLS certificate validation never fail.
 var CRLDomains = []string{
 	"digicert.com",
+	"certainly.com",
+	"pki.goog",
 	"verisign.com",
 	"sectigo.com",
 	"globalsign.com",
@@ -233,6 +239,54 @@ var CRLDomains = []string{
 	"entrust.net",
 	"amazontrust.com",
 	"letsencrypt.org",
+	"godaddy.com",
+	"usertrust.com",
+	"comodoca.com",
+	"swisssign.net",
+}
+
+// DirectGameDomains contains Valve/Steam domains and game launcher/anti-cheat CDN endpoints
+// that must route directly (bypassing the tunnel and FakeIP) for maximum speed and compatibility.
+var DirectGameDomains = []string{
+	// Anti-cheat / game CDN
+	"elytra.ac",
+	"certainly.com",
+	"pki.goog",
+	// Steam
+	"steamserver.net",
+	"steampowered.com",
+	"steamcommunity.com",
+	"steamstatic.com",
+	"steamgames.com",
+	// Epic Games Store — WARDOGS lobby auth & backend
+	"epicgames.com",
+	"epicgames.dev",
+	"epicgames.net",
+	"unrealengine.com",
+	"ol.epicgames.com",
+	"api.epicgames.dev",
+	// EGS CDN & auth services
+	"cloudfront.net",
+	"amazonaws.com",
+	// AWS GameLift infrastructure (match server assignment API)
+	"gamelift.us-east-1.amazonaws.com",
+	// Time sync
+	"time.cloudflare.com",
+}
+
+// DirectLauncherProcesses contains launcher, anti-cheat installer, and background crash reporting
+// processes that should always route directly without tunnel encapsulation.
+var DirectLauncherProcesses = []string{
+	"WardogsLauncher-Shipping.exe",
+	"wardogslauncher-shipping.exe",
+	"wardogslauncher.exe",
+	"Elytra-Setup.exe",
+	"elytra-setup.exe",
+	"service.exe",
+	"control.exe",
+	"crashpad_handler.exe",
+	"CrashReportClient.exe",
+	"crashreportclient.exe",
 }
 
 type RouteRule struct {
@@ -240,6 +294,7 @@ type RouteRule struct {
 	Protocol        []string `json:"protocol,omitempty"`
 	Network         string   `json:"network,omitempty"`
 	Port            []int    `json:"port,omitempty"`
+	PortRange       []string `json:"port_range,omitempty"`
 	ProcessName     []string `json:"process_name,omitempty"`
 	IPCIDR          []string `json:"ip_cidr,omitempty"`
 	DomainSuffix    []string `json:"domain_suffix,omitempty"`
@@ -376,6 +431,15 @@ func AcquireSession(game ...string) (string, error) {
 	sessionMu.Unlock()
 
 	return sessResp.Token, nil
+}
+
+// InvalidateSession clears the locally cached session token without contacting the gateway.
+// Use this before a forced reconnect so AcquireSession will fetch a fresh token.
+func InvalidateSession() {
+	sessionMu.Lock()
+	cachedSessionToken = ""
+	cachedSessionExp = time.Time{}
+	sessionMu.Unlock()
 }
 
 // ReleaseSession explicitly releases the active slot on the Stockholm gateway immediately.
@@ -595,6 +659,74 @@ func FetchProfiles(optionalServerAPI ...string) ([]Profile, error) {
 	return res.Profiles, nil
 }
 
+// FetchRemoteConfig queries the server API for full dynamic sing-box JSON configuration.
+func FetchRemoteConfig(serverAPI string, token string, game string, targetProcesses []string, includeWebServices bool) ([]byte, error) {
+	if serverAPI == "" {
+		serverAPI = GetServerAPI()
+	}
+	if serverAPI == "" {
+		return nil, fmt.Errorf("server API not configured")
+	}
+	if token == "" {
+		return nil, fmt.Errorf("session token required")
+	}
+
+	webVal := "0"
+	if includeWebServices {
+		webVal = "1"
+	}
+	u, err := url.Parse(fmt.Sprintf("%s/api/v1/singbox/config", strings.TrimRight(serverAPI, "/")))
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("token", token)
+	if game != "" {
+		q.Set("game", game)
+	}
+	q.Set("web", webVal)
+	if len(targetProcesses) > 0 {
+		q.Set("procs", strings.Join(targetProcesses, ","))
+	}
+	u.RawQuery = q.Encode()
+
+	client := &http.Client{Timeout: 6 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch remote sing-box config: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned status %d for singbox config", resp.StatusCode)
+	}
+
+	var res struct {
+		Success bool            `json:"success"`
+		Error   string          `json:"error,omitempty"`
+		Game    string          `json:"game,omitempty"`
+		Config  json.RawMessage `json:"config"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("failed to decode remote singbox config response: %w", err)
+	}
+	if !res.Success || len(res.Config) == 0 {
+		return nil, fmt.Errorf("server returned unsuccessful singbox config: %s", res.Error)
+	}
+
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, res.Config, "", "  "); err == nil {
+		return formatted.Bytes(), nil
+	}
+	return res.Config, nil
+}
+
 // GenerateConfig creates a sing-box JSON configuration routing target processes,
 // and optionally Meta/WhatsApp/X IP ranges and blocked web domains, to Hysteria 2 Stockholm tunnel.
 func GenerateConfig(targetProcesses []string, includeWebServices bool, optionalToken ...string) ([]byte, error) {
@@ -700,27 +832,26 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		{
 			Action: "sniff",
 		},
-		// 1. Exclude core daemons, local DNS proxies, and WarLink application from TUN routing
+		// 1. Exclude core daemons, local DNS proxies, WarLink, Antigravity IDE, and game launchers/anti-cheat from TUN routing
 		{
-			ProcessName: []string{
+			ProcessName: append([]string{
 				"sing-box.exe", "winws2.exe", "winws.exe", "WarLink.exe", "warlink.exe",
 				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe", "dnsproxy.exe", "cloudflared.exe", "stubby.exe", "AdGuardSvc.exe",
-			},
+				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
+			}, DirectLauncherProcesses...),
 			Outbound: "direct",
 		},
-		// 2. Anti-cheat and system certificate revocation checks (CRL / OCSP on port 80) must route direct
-		// to ensure instant signature validation without getting blocked by zero-trust gateway ACL
+		// 2. All plain HTTP (port 80) routes direct for instant CRL/OCSP revocation checks
 		{
-			ProcessName: []string{"service.exe", "control.exe", "Elytra-Setup.exe", "crashpad_handler.exe"},
-			Port:        []int{80},
-			Outbound:    "direct",
+			Port:     []int{80},
+			Outbound: "direct",
 		},
+		// 3. Direct game & anti-cheat domains route direct
 		{
-			Port:         []int{80},
-			DomainSuffix: CRLDomains,
+			DomainSuffix: DirectGameDomains,
 			Outbound:     "direct",
 		},
-		// 3. Never route loopback, private RFC1918, or link-local subnets through tunnel
+		// 4. Never route loopback, private RFC1918, or link-local subnets through tunnel
 		{
 			IPCIDR: []string{
 				"127.0.0.0/8",
@@ -734,12 +865,28 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// 4b. Never route NTP (UDP 123) through tunnel
+		{
+			Network:  "udp",
+			Port:     []int{123},
+			Outbound: "direct",
+		},
+		// 5. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
 			Outbound: "hy2-stockholm",
 		},
-		// 5. Hijack remaining DNS queries to resolve through sing-box DNS engine
+		// 5b. Google, Antigravity, and AI services must NEVER be hijacked by sing-box DNS -
+		// they must resolve via local system / ag_dns directly without interference!
+		{
+			Protocol: []string{"dns"},
+			DomainSuffix: []string{
+				"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+				"github.com", "githubusercontent.com",
+			},
+			Outbound: "direct",
+		},
+		// 6. Hijack remaining DNS queries to resolve through sing-box DNS engine
 		{
 			Protocol: []string{"dns"},
 			Action:   "hijack-dns",
@@ -790,6 +937,26 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		})
 	}
 
+	// Route WARDOGS dedicated match servers (AWS GameLift UDP 4000-4500, e.g. port 4192) through Stockholm gateway
+	// to bypass Russian TSPU/ISP packet drops and ensure stable match connectivity.
+	// Steam Datagram Relay (SDR) ping relays stay direct.
+	rules = append(rules,
+		RouteRule{
+			Network:   "udp",
+			PortRange: []string{"4000:4500"},
+			Outbound:  "hy2-stockholm",
+		},
+		RouteRule{
+			Network:   "udp",
+			PortRange: []string{"27000:27200"},
+			Outbound:  "direct",
+		},
+		RouteRule{
+			DomainSuffix: DirectGameDomains,
+			Outbound:     "direct",
+		},
+	)
+
 	// Route specified target processes to hy2-stockholm
 	if len(allProcesses) > 0 {
 		rules = append(rules, RouteRule{
@@ -809,6 +976,33 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		DomainSuffix: CRLDomains,
 		Server:       "dns-local",
 	})
+	// Game & launcher direct domains must resolve locally to real IPs
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: DirectGameDomains,
+		Server:       "dns-local",
+	})
+	// Google / Antigravity / AI domains must resolve locally to real IPs without FakeIP
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: []string{
+			"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+			"github.com", "githubusercontent.com",
+		},
+		Server: "dns-local",
+	})
+	// ag_dns.exe / AGUnlocker / Antigravity handle DNS themselves and must always use local resolver.
+	// Launcher / anti-cheat processes also need direct local DNS.
+	dnsRules = append(dnsRules, DNSRule{
+		ProcessName: append([]string{
+			"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe",
+			"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
+		}, DirectLauncherProcesses...),
+		Server: "dns-local",
+	})
+	// Vivox domains must resolve to real IPs via remote DNS (avoiding FakeIP SIP/SDP mismatches)
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: []string{"vivox.com"},
+		Server:       "dns-remote",
+	})
 
 	if len(allProcesses) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
@@ -822,7 +1016,19 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		fakeDomains = append(fakeDomains, BlockedServiceDomains...)
 	}
 	if len(allDomains) > 0 {
-		fakeDomains = append(fakeDomains, allDomains...)
+		for _, d := range allDomains {
+			isDirect := false
+			for _, dd := range DirectGameDomains {
+				if strings.HasSuffix(d, dd) {
+					isDirect = true
+					break
+				}
+			}
+			if isDirect || strings.HasSuffix(d, "vivox.com") {
+				continue
+			}
+			fakeDomains = append(fakeDomains, d)
+		}
 	}
 	if len(fakeDomains) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
@@ -1083,20 +1289,32 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	m.targetProcesses = append([]string(nil), targetProcesses...)
 	m.includeWebServices = includeWebServices
 
-	// Fetch dynamic game profiles from server if available
-	var activeProfiles []Profile
-	profiles, pErr := FetchProfiles(GetServerAPI())
-	if pErr == nil && len(profiles) > 0 {
-		activeProfiles = profiles
+	// 1. Primary: fetch dynamic sing-box configuration directly from remote server
+	var cfgBytes []byte
+	if remoteCfg, rErr := FetchRemoteConfig(GetServerAPI(), token, targetGame, targetProcesses, includeWebServices); rErr == nil && len(remoteCfg) > 0 {
+		cfgBytes = remoteCfg
 		if logFn != nil {
-			logFn(fmt.Sprintf("[OK] Загружено %d профилей маршрутизации с сервера (игры, соцсети)", len(profiles)))
+			logFn("[OK] Получена динамическая конфигурация sing-box со шлюза")
 		}
-	}
+	} else {
+		// 2. Fallback: local profile-based generation
+		if logFn != nil && rErr != nil {
+			logFn(fmt.Sprintf("[WARN] Загрузка удаленной конфигурации (%v), переход на локальную генерацию", rErr))
+		}
+		var activeProfiles []Profile
+		profiles, pErr := FetchProfiles(GetServerAPI())
+		if pErr == nil && len(profiles) > 0 {
+			activeProfiles = profiles
+			if logFn != nil {
+				logFn(fmt.Sprintf("[OK] Загружено %d профилей маршрутизации с сервера (игры, соцсети)", len(profiles)))
+			}
+		}
 
-	// Generate config routing to native Hysteria 2 tunnel
-	cfgBytes, err := GenerateConfigFromProfiles(activeProfiles, targetProcesses, includeWebServices, token)
-	if err != nil {
-		return fmt.Errorf("ошибка формирования конфигурации sing-box: %w", err)
+		genBytes, genErr := GenerateConfigFromProfiles(activeProfiles, targetProcesses, includeWebServices, token)
+		if genErr != nil {
+			return fmt.Errorf("ошибка формирования конфигурации sing-box: %w", genErr)
+		}
+		cfgBytes = genBytes
 	}
 
 	cfgPath := filepath.Join(m.GetBinDir(), "config.json")
@@ -1203,10 +1421,16 @@ func (m *Manager) AddTargetProcess(proc string, logFn func(string)) error {
 	}
 
 	token, _ := AcquireSession()
-	activeProfiles, _ := FetchProfiles()
-	cfgBytes, err := GenerateConfigFromProfiles(activeProfiles, m.targetProcesses, m.includeWebServices, token)
-	if err != nil {
-		return err
+	var cfgBytes []byte
+	if remoteCfg, rErr := FetchRemoteConfig(GetServerAPI(), token, "", m.targetProcesses, m.includeWebServices); rErr == nil && len(remoteCfg) > 0 {
+		cfgBytes = remoteCfg
+	} else {
+		activeProfiles, _ := FetchProfiles()
+		genBytes, genErr := GenerateConfigFromProfiles(activeProfiles, m.targetProcesses, m.includeWebServices, token)
+		if genErr != nil {
+			return genErr
+		}
+		cfgBytes = genBytes
 	}
 	cfgPath := filepath.Join(m.GetBinDir(), "config.json")
 	if err := os.WriteFile(cfgPath, cfgBytes, 0644); err != nil {

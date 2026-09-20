@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.0.0</span>
+                <span class="brand-version">v2.0.1</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Free Internet -->
@@ -69,87 +69,7 @@
                 </div>
             </div>
 
-            <!-- VIEW 2: Selected Game Action View -->
-            <div id="view-game" class="game-view" style="display: none;">
-                <div class="game-view-top">
-                    <button class="btn-back" onclick="showShowcaseView()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="m12 19-7-7 7-7"/>
-                            <path d="M19 12H5"/>
-                        </svg>
-                        <span>Витрина игр</span>
-                    </button>
-                    <span id="game-badge-type" class="game-badge-type">STEAM</span>
-                </div>
-
-                <div class="game-identity-row">
-                    <div class="game-identity-img-wrap">
-                        <img id="game-identity-img" class="game-identity-img" src="wardogs_icon.png" alt="WARDOGS" onerror="if (this.src.indexOf('wardogs_icon.png') === -1) { this.src='wardogs_icon.png'; } else { this.style.display='none'; document.getElementById('game-identity-fallback').style.display='flex'; }" />
-                        <div id="game-identity-fallback" class="game-identity-fallback" style="display: none;">
-                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="6" x2="10" y1="11" y2="11" />
-                                <line x1="8" x2="8" y1="9" y2="13" />
-                                <line x1="15" x2="15.01" y1="12" y2="12" />
-                                <line x1="18" x2="18.01" y1="10" y2="10" />
-                                <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
-                            </svg>
-                        </div>
-                    </div>
-                    <div class="game-identity-info">
-                        <h2 id="game-title" class="game-title">WARDOGS</h2>
-                        <div class="game-telemetry">
-                            <span id="metric-ping" class="telemetry-pill">Задержка: -- ms</span>
-                            <span id="metric-loss" class="telemetry-pill">Потери: 0%</span>
-                            <span id="metric-profile" class="telemetry-pill">Профиль: авто</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="game-status-line">
-                    <div id="badge-status" class="status-line status-standby">
-                        <span class="status-dot"></span>
-                        <span id="badge-text" class="status-heading">ГОТОВ</span>
-                    </div>
-                    <div id="status-desc" class="status-subtext">Сетевой маршрут готов к подключению</div>
-                </div>
-
-                <div class="game-options">
-                    <label class="check-wrap">
-                        <input type="checkbox" id="chk-autolaunch" onchange="onAutoLaunchChange()">
-                        <span class="check-box"></span>
-                        <span class="check-text">Автозапуск игры при подключении</span>
-                    </label>
-                </div>
-
-                <div class="action-block">
-                    <button id="btn-toggle" class="btn btn-primary" onclick="toggleConnect()">
-                        <span id="btn-spinner" class="btn-spinner" style="display: none;"></span>
-                        <span id="btn-text">ПОДКЛЮЧИТЬ</span>
-                    </button>
-                </div>
-
-                <!-- Linear Progress -->
-                <div id="main-progress-box" class="progress-container" style="display: none;">
-                    <div class="progress-meta">
-                        <span id="main-progress-msg" class="progress-step">Подготовка...</span>
-                        <span id="main-progress-pct" class="progress-val">0%</span>
-                    </div>
-                    <div class="progress-track">
-                        <div id="main-progress-fill" class="progress-bar" style="width: 0%;"></div>
-                    </div>
-                    <div id="pipeline-steps" class="pipeline-steps">
-                        <span id="step-diag" class="step-item">1. Сеть</span>
-                        <span class="step-sep">›</span>
-                        <span id="step-filter" class="step-item">2. Фильтр</span>
-                        <span class="step-sep">›</span>
-                        <span id="step-warp" class="step-item">3. Шлюз</span>
-                        <span class="step-sep">›</span>
-                        <span id="step-ready" class="step-item">4. Готово</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- VIEW 3: Settings Panel (Progressive Disclosure) -->
+            <!-- VIEW 2: Settings Panel (Progressive Disclosure) -->
             <div id="view-details" class="details-view" style="display: none;">
                 <div class="details-header">
                     <span class="details-title">Параметры маршрутизации</span>
@@ -157,21 +77,39 @@
                 </div>
 
                 <div class="details-content">
-                    <div class="setting-row">
-                        <span class="setting-label">Профиль обхода DPI:</span>
-                        <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
-                            <option value="">Автоматический (оптимальный)</option>
-                        </select>
+                    <div class="setting-group">
+                        <span class="setting-group-title">ИГРОВОЙ ШЛЮЗ</span>
+                        <div class="setting-info-row">
+                            <span class="info-label">Сервер:</span>
+                            <span class="info-value">Стокгольм, Швеция (Aeza VPS)</span>
+                        </div>
+                        <div class="setting-info-row">
+                            <span class="info-label">Протокол:</span>
+                            <span class="info-value">Hysteria 2 (QUIC/UDP, 443)</span>
+                        </div>
+                        <div class="setting-info-row">
+                            <span class="info-label">Сетевой роутер:</span>
+                            <span class="info-value">WinTun (L3 селективная маршрутизация)</span>
+                        </div>
                     </div>
 
-                    <div class="setting-row">
-                        <span class="setting-label">Автотест DPI:</span>
-                        <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px;" onclick="triggerBenchmark()">Протестировать 22 профиля</button>
+                    <div class="setting-group">
+                        <span class="setting-group-title">СВОБОДНЫЙ ИНТЕРНЕТ (DPI)</span>
+                        <div class="setting-info-row">
+                            <span class="info-label">Сетевой фильтр:</span>
+                            <span class="info-value">WinDivert (Zapret winws2)</span>
+                        </div>
+                        <div class="setting-row" style="margin-top: 6px;">
+                            <span class="setting-label">Профиль десинхронизации (Discord / YouTube):</span>
+                            <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
+                                <option value="">Автоматический (оптимальный)</option>
+                            </select>
+                        </div>
                     </div>
 
-                    <div class="setting-row">
-                        <span class="setting-label">Журналы работы:</span>
-                        <div style="display: flex; gap: 10px; align-items: center;">
+                    <div class="setting-group">
+                        <span class="setting-group-title">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
+                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
                             <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
                             <span style="color: var(--text-muted); font-size: 11px;">•</span>
                             <button class="btn-link" onclick="openSingboxLogFile()">сетевой singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
@@ -182,8 +120,8 @@
 
             <!-- MODAL: Add Game -->
             <!-- MODAL: Community Game Voting & Suggestions -->
-            <div id="modal-add-game" class="modal-backdrop" style="display: none;">
-                <div class="modal-card" style="max-width: 460px;">
+            <div id="modal-add-game" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+                <div class="modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
                     <div class="modal-header">
                         <div style="display: flex; align-items: center; gap: 8px;">
                             <span class="modal-title">Голосование за новые игры</span>
@@ -237,6 +175,16 @@
                     <div id="update-note" class="update-note">Пользовательские настройки и список игр гарантированно сохранены</div>
                 </div>
             </div>
+
+            <!-- Toast Notification (Non-blocking alert banner) -->
+            <div id="ui-toast" class="ui-toast" style="display: none;">
+                <svg class="toast-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span id="ui-toast-msg" class="toast-msg"></span>
+            </div>
         </main>
         <!-- Persistent Stockholm Gateway & Community Timer Bar -->
         <footer class="gateway-footer">
@@ -268,12 +216,11 @@
             </svg>
             <span>Подключиться</span>
         </button>
-        <button class="context-menu-item" id="ctx-btn-settings" onclick="onContextSettings()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/>
-                <circle cx="12" cy="12" r="3"/>
+        <button class="context-menu-item" id="ctx-btn-autolaunch" onclick="onContextToggleAutolaunch()">
+            <svg class="ctx-check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
             </svg>
-            <span>Настройки</span>
+            <span id="ctx-autolaunch-label">Автозапуск при подключении</span>
         </button>
         <div class="context-menu-divider"></div>
         <button class="context-menu-item item-danger" id="ctx-btn-delete" onclick="onContextDelete()">
