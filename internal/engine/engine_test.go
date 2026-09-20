@@ -1,11 +1,14 @@
 package engine
 
 import (
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"warlink/internal/config"
+	"warlink/internal/deps"
+	"warlink/internal/desync"
 )
 
 func TestEngineConcurrencyAndMutexSafety(t *testing.T) {
@@ -80,4 +83,16 @@ func TestEngineProgressLockIndependence(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("GetPipelineProgress deadlocked or took too long")
 	}
+}
+
+func TestCheckWinwsArgs(t *testing.T) {
+	zapretDir := filepath.Join(deps.GetCoreDir(), "zapret")
+	preset := desync.GetPreset("general (ALT13)")
+	if preset == nil {
+		t.Fatal("preset general (ALT13) not found")
+	}
+	argsFree := preset.BuildModularArgs(zapretDir, true)
+	argsGame := preset.BuildModularArgs(zapretDir, false)
+	t.Logf("Free internet args (%d): %v", len(argsFree), argsFree)
+	t.Logf("Game only args (%d): %v", len(argsGame), argsGame)
 }

@@ -68,22 +68,20 @@ func KillProcess(name string) error {
 	return cmd.Run()
 }
 
-// StopWinDivertService stops the WinDivert driver service if leftover in Windows kernel
+// StopWinDivertService kills third-party leftover drivers (WinDivert14 from other tools).
+// IMPORTANT: We must NEVER call "sc delete WinDivert" on our own driver.
+// WinDivert.dll dynamically registers and unregisters the kernel driver via CreateFile/CloseHandle.
+// Calling sc delete while a handle exists sets DeleteFlag=1 in the registry, which causes
+// STATUS_NO_SUCH_DEVICE (Win32 error 433 ERROR_BAD_DEVICE) on the next WinDivertOpen() call,
+// breaking all subsequent winws2 starts until reboot. Killing winws2.exe is sufficient — the
+// driver handle is released automatically when the process exits.
 func StopWinDivertService() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd1 := exec.CommandContext(ctx, "sc.exe", "stop", "WinDivert")
-	cmd1.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	_ = cmd1.Run()
-
-	cmd2 := exec.CommandContext(ctx, "sc.exe", "delete", "WinDivert")
-	cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	_ = cmd2.Run()
-
+	// Only clean up third-party WinDivert14 services (e.g. from GoodbyeDPI, etc.)
 	cmd3 := exec.CommandContext(ctx, "sc.exe", "stop", "WinDivert14")
 	cmd3.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	_ = cmd3.Run()
-
 	cmd4 := exec.CommandContext(ctx, "sc.exe", "delete", "WinDivert14")
 	cmd4.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	_ = cmd4.Run()
@@ -107,3 +105,19 @@ func KillAllConflicts() ([]string, error) {
 	return killed, nil
 }
 
+// CleanWinDivertDeleteFlag removes the DeleteFlag=1 registry value from the WinDivert service entry.
+// When sc delete is called while WinDivert has open handles, Windows sets DeleteFlag=1 which causes
+// all subsequent WinDivertOpen() calls to fail with ERROR_BAD_DEVICE (433) until reboot.
+// This function must be called from an elevated (Administrator) process to succeed.
+// It is a no-op if the flag is not present.
+func CleanWinDivertDeleteFlag() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// Use reg.exe to delete the DeleteFlag value — pure Go registry access requires golang.org/x/sys/windows.
+	cmd := exec.CommandContext(ctx, "reg.exe", "delete",
+		`HKLM\SYSTEM\CurrentControlSet\Services\WinDivert`,
+		"/v", "DeleteFlag", "/f",
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	_ = cmd.Run()
+}

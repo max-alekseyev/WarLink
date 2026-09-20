@@ -109,6 +109,10 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		e.freeInternetActive = true
 		e.mu.Unlock()
 
+		// Remove any stale DeleteFlag=1 left from a previous sc delete call.
+		// Without this, WinDivertOpen fails with ERROR_BAD_DEVICE until reboot.
+		scanner.CleanWinDivertDeleteFlag()
+
 		if isConn {
 			_ = e.stopWinws()
 		}
@@ -227,11 +231,14 @@ func (e *Engine) EnsureWinwsRunning() error {
 	if e.zapretCmd != nil && e.zapretCmd.Process != nil {
 		pid := e.zapretCmd.Process.Pid
 		e.mu.Unlock()
-		check := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH", "/FO", "CSV")
-		check.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		out, err := check.Output()
-		if err == nil && strings.Contains(string(out), strconv.Itoa(pid)) {
-			return nil // Already running!
+		h, err := syscall.OpenProcess(0x1000, false, uint32(pid))
+		if err == nil {
+			var code uint32
+			alive := syscall.GetExitCodeProcess(h, &code) == nil && code == 259
+			syscall.CloseHandle(h)
+			if alive {
+				return nil // already running and healthy
+			}
 		}
 	} else {
 		e.mu.Unlock()
@@ -271,12 +278,15 @@ func (e *Engine) EnsureWinwsRunning() error {
 		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в селективном игровом режиме...", preset.Name))
 	}
 
+	logPath := filepath.Join(zapretDir, "winws2.log")
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		if attempt > 1 {
+			// Only kill the process — NOT StopWinDivertService().
+			// sc delete WinDivert sets DeleteFlag=1 in the registry causing
+			// ERROR_BAD_DEVICE (433) on all subsequent WinDivertOpen() calls until reboot.
 			_ = scanner.KillProcess("winws2.exe")
-			scanner.StopWinDivertService()
-			time.Sleep(350 * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 		}
 
 		zCmd := exec.Command(winwsPath, args...)
@@ -285,7 +295,7 @@ func (e *Engine) EnsureWinwsRunning() error {
 			HideWindow:    true,
 			CreationFlags: 0x08000000,
 		}
-		if logFile, err := os.OpenFile(filepath.Join(zapretDir, "winws2.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+		if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
 			zCmd.Stdout = logFile
 			zCmd.Stderr = logFile
 		}
@@ -297,28 +307,61 @@ func (e *Engine) EnsureWinwsRunning() error {
 
 		e.mu.Lock()
 		e.zapretCmd = zCmd
+		pid := zCmd.Process.Pid
 		e.mu.Unlock()
 
+		// Wait up to 2.5s for winws2 to either stay alive (success) or exit (failure).
+		// winws2 loads 32k+ ipset entries before calling WinDivertOpen, which takes ~1-1.5s.
+		// A 100ms tasklist check is a false positive — the process appears alive but exits a moment later.
 		winwsReady := false
-		for i := 0; i < 8; i++ {
-			time.Sleep(100 * time.Millisecond)
-			check := exec.Command("tasklist", "/FI", "IMAGENAME eq winws2.exe", "/NH", "/FO", "CSV")
-			check.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-			out, err := check.Output()
-			if err == nil && strings.Contains(strings.ToLower(string(out)), "winws2") {
-				winwsReady = true
+		startTime := time.Now()
+		deadline := startTime.Add(2500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			time.Sleep(150 * time.Millisecond)
+			h, err := syscall.OpenProcess(0x1000, false, uint32(pid))
+			if err != nil {
+				// Process already gone
 				break
 			}
+			var code uint32
+			alive := syscall.GetExitCodeProcess(h, &code) == nil && code == 259
+			syscall.CloseHandle(h)
+			if alive {
+				// Require at least 1.2s of uptime so lists finish loading before WinDivertOpen
+				if time.Since(startTime) >= 1200*time.Millisecond {
+					winwsReady = true
+					break
+				}
+				// Still loading — keep waiting
+				continue
+			}
+			// Process exited
+			break
 		}
+
+
 		if winwsReady {
 			e.log("[OK] Сетевой фильтр WinDivert и winws2 активны")
 			return nil
 		}
-		lastErr = fmt.Errorf("winws2.exe не отвечает. Запустите от имени администратора")
+
+		// Collect diagnostics from winws2.log
+		diagMsg := "winws2.exe завершился с ошибкой"
+		if logBytes, err := os.ReadFile(logPath); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+			for i := len(lines) - 1; i >= 0 && i >= len(lines)-3; i-- {
+				if strings.TrimSpace(lines[i]) != "" {
+					diagMsg = strings.TrimSpace(lines[i])
+					break
+				}
+			}
+		}
+		lastErr = fmt.Errorf("winws2.exe не отвечает: %s", diagMsg)
 	}
 
 	return lastErr
 }
+
 
 func (e *Engine) stopWinws() error {
 	e.mu.Lock()
@@ -337,10 +380,13 @@ func (e *Engine) stopWinws() error {
 		e.zapretCmd = nil
 	}
 
-	scanner.StopWinDivertService()
-	time.Sleep(350 * time.Millisecond)
+	// WinDivert.dll releases its kernel driver handle when winws2.exe exits — no sc.exe calls needed.
+	// Calling sc stop/delete here sets DeleteFlag=1 in the registry and poisons the driver for all
+	// subsequent starts until reboot.
+	time.Sleep(150 * time.Millisecond)
 	return nil
 }
+
 
 func (e *Engine) setProgress(percent int, current, total int, cfgName, msg string, isRunning bool) {
 	e.mu.Lock()
@@ -447,7 +493,12 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	}
 	deps.SanitizeStartupAndNetwork(e.log)
 
-	// 1.2 Stop leftover WinDivert driver
+	// 1.2 Clean up stale WinDivert state.
+	// If a previous run called sc delete WinDivert while handles were open, the registry gets
+	// DeleteFlag=1 which causes ERROR_BAD_DEVICE (433) on WinDivertOpen — recoverable without reboot.
+	// CleanWinDivertDeleteFlag removes this flag (requires admin — WarLink runs as elevated).
+	// StopWinDivertService only cleans WinDivert14 (from third-party tools), never our own driver.
+	scanner.CleanWinDivertDeleteFlag()
 	scanner.StopWinDivertService()
 
 	// 1.3 Restore ipset-all.txt if damaged
@@ -615,8 +666,7 @@ func (e *Engine) disconnectInternal() error {
 			e.zapretCmd = nil
 		}
 		e.mu.Unlock()
-
-		scanner.StopWinDivertService()
+		// No sc stop/delete — WinDivert releases its handle when winws2.exe exits.
 	} else {
 		e.log("[INFO] Игра закрыта. Режим «Свободный интернет» переведен в базовый веб-профиль")
 		_ = e.stopWinws()
@@ -712,8 +762,10 @@ func (e *Engine) Shutdown() {
 
 	_ = scanner.KillProcess("winws2.exe")
 	_ = scanner.KillProcess("winws.exe")
-	scanner.StopWinDivertService()
+	// WinDivert driver handle is released automatically when winws2.exe exits.
+	// sc delete is never called — on next startup WinDivert.dll self-registers cleanly.
 }
+
 
 // AddGameProcess dynamically adds an executable name to the running sing-box routing rules.
 func (e *Engine) AddGameProcess(procName string) error {
