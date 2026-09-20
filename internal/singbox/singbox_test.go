@@ -384,3 +384,18 @@ func TestFetchRemoteConfig(t *testing.T) {
 	}
 }
 
+func TestManagerScopeChangeDetection(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	mgr.isRunning = true
+	mgr.includeWebServices = false
+
+	// If scope is unchanged, Start returns nil immediately without stopping or erroring
+	err := mgr.Start([]string{"game.exe"}, false, nil)
+	if err != nil {
+		t.Fatalf("unexpected error when scope unchanged: %v", err)
+	}
+	if !mgr.isRunning {
+		t.Errorf("expected mgr to remain running when scope unchanged")
+	}
+}
+

@@ -1260,7 +1260,18 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	defer m.mu.Unlock()
 
 	if m.isRunning {
-		return nil
+		if m.includeWebServices == includeWebServices {
+			return nil
+		}
+		// Web services mode changed (e.g. Free Internet toggled while game is running).
+		// Must cleanly restart sing-box to apply new outbound and routing rules.
+		if m.cmd != nil && m.cmd.Process != nil {
+			_ = m.cmd.Process.Kill()
+			m.cmd = nil
+		}
+		_ = killProcessByName("sing-box.exe")
+		m.isRunning = false
+		time.Sleep(200 * time.Millisecond)
 	}
 
 	if err := m.EnsureFiles(logFn); err != nil {

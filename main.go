@@ -35,7 +35,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.0.1"
+var AppVersion = "v2.0.2"
 
 //go:embed ui/*
 var uiFS embed.FS

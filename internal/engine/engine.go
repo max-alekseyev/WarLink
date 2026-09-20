@@ -104,15 +104,26 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		if _, err := e.hostlistMgr.ExportFreeInternetList(); err != nil {
 			e.log(fmt.Sprintf("[WARN] Ошибка экспорта списка доменов: %v", err))
 		}
+		// Set freeInternetActive BEFORE starting winws2 so BuildModularArgs builds composite/free net args
+		e.mu.Lock()
+		e.freeInternetActive = true
+		e.mu.Unlock()
+
 		if isConn {
 			_ = e.stopWinws()
 		}
 		if err := e.EnsureWinwsRunning(); err != nil {
+			e.mu.Lock()
+			e.freeInternetActive = false
+			e.mu.Unlock()
 			return err
 		}
 
 		// Ensure sing-box is active with Stockholm Hysteria 2 for IP-blocked services
 		if err := deps.EnsureSingBoxFiles(e.log); err != nil {
+			e.mu.Lock()
+			e.freeInternetActive = false
+			e.mu.Unlock()
 			return fmt.Errorf("ошибка подготовки sing-box: %w", err)
 		}
 
@@ -140,6 +151,9 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 			}
 			if err := e.singboxMgr.Start(targets, true, e.log, selectedGameID); err != nil {
 				// Rollback and release session immediately on failure
+				e.mu.Lock()
+				e.freeInternetActive = false
+				e.mu.Unlock()
 				if !isConn {
 					_ = e.stopWinws()
 					_ = singbox.ReleaseSession()
@@ -149,7 +163,6 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		}
 
 		e.mu.Lock()
-		e.freeInternetActive = true
 		e.cfg.FreeInternetEnabled = true
 		_ = e.cfg.Save()
 		e.mu.Unlock()
@@ -189,7 +202,11 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 						targets = append(targets, p)
 					}
 				}
-				_ = e.singboxMgr.Start(targets, false, e.log)
+				selectedGameID := selectedGame.ID
+				if selectedGameID == "" {
+					selectedGameID = "wardogs"
+				}
+				_ = e.singboxMgr.Start(targets, false, e.log, selectedGameID)
 			}
 			return nil
 		}
@@ -254,41 +271,53 @@ func (e *Engine) EnsureWinwsRunning() error {
 		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в селективном игровом режиме...", preset.Name))
 	}
 
-	zCmd := exec.Command(winwsPath, args...)
-	zCmd.Dir = filepath.Dir(winwsPath)
-	zCmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000,
-	}
-	if logFile, err := os.OpenFile(filepath.Join(zapretDir, "winws2.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
-		zCmd.Stdout = logFile
-		zCmd.Stderr = logFile
-	}
-	if err := zCmd.Start(); err != nil {
-		return fmt.Errorf("ошибка запуска winws2: %w", err)
-	}
-
-	e.mu.Lock()
-	e.zapretCmd = zCmd
-	e.mu.Unlock()
-
-	winwsReady := false
-	for i := 0; i < 8; i++ {
-		time.Sleep(100 * time.Millisecond)
-		check := exec.Command("tasklist", "/FI", "IMAGENAME eq winws2.exe", "/NH", "/FO", "CSV")
-		check.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		out, err := check.Output()
-		if err == nil && strings.Contains(strings.ToLower(string(out)), "winws2") {
-			winwsReady = true
-			break
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if attempt > 1 {
+			_ = scanner.KillProcess("winws2.exe")
+			scanner.StopWinDivertService()
+			time.Sleep(350 * time.Millisecond)
 		}
-	}
-	if !winwsReady {
-		return fmt.Errorf("winws2.exe не отвечает. Запустите от имени администратора")
+
+		zCmd := exec.Command(winwsPath, args...)
+		zCmd.Dir = filepath.Dir(winwsPath)
+		zCmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000,
+		}
+		if logFile, err := os.OpenFile(filepath.Join(zapretDir, "winws2.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			zCmd.Stdout = logFile
+			zCmd.Stderr = logFile
+		}
+		if err := zCmd.Start(); err != nil {
+			lastErr = fmt.Errorf("ошибка запуска winws2: %w", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		e.mu.Lock()
+		e.zapretCmd = zCmd
+		e.mu.Unlock()
+
+		winwsReady := false
+		for i := 0; i < 8; i++ {
+			time.Sleep(100 * time.Millisecond)
+			check := exec.Command("tasklist", "/FI", "IMAGENAME eq winws2.exe", "/NH", "/FO", "CSV")
+			check.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+			out, err := check.Output()
+			if err == nil && strings.Contains(strings.ToLower(string(out)), "winws2") {
+				winwsReady = true
+				break
+			}
+		}
+		if winwsReady {
+			e.log("[OK] Сетевой фильтр WinDivert и winws2 активны")
+			return nil
+		}
+		lastErr = fmt.Errorf("winws2.exe не отвечает. Запустите от имени администратора")
 	}
 
-	e.log("[OK] Сетевой фильтр WinDivert и winws2 активны")
-	return nil
+	return lastErr
 }
 
 func (e *Engine) stopWinws() error {
@@ -309,6 +338,7 @@ func (e *Engine) stopWinws() error {
 	}
 
 	scanner.StopWinDivertService()
+	time.Sleep(350 * time.Millisecond)
 	return nil
 }
 
