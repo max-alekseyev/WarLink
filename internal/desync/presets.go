@@ -12,8 +12,8 @@ type Preset struct {
 
 func commonHeader() []string {
 	return []string{
-		"--wf-tcp-out=80,443,2053,2083,2087,2096,8443,12",
-		"--wf-udp-out=443,19294-19344,50000-50100,12",
+		"--wf-tcp-out=80,443,2053,2083,2087,2096,8443",
+		"--wf-udp-out=443,19294-19344,50000-50100",
 		"--lua-init=@%LUA%zapret-lib.lua",
 		"--lua-init=@%LUA%zapret-antidpi.lua",
 	}
@@ -39,9 +39,8 @@ func commonUdpRules() []string {
 		"--new",
 		"--filter-tcp=2053,2083,2087,2096,8443",
 		"--hostlist-domains=discord.media",
-		"--out-range=-d10",
 		"--payload=tls_client_hello",
-		"--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=8",
+		"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
 		"--lua-desync=multisplit:pos=1,midsld",
 		"--new",
 	}
@@ -51,18 +50,26 @@ func commonHttpRules() []string {
 	return []string{
 		"--filter-tcp=80",
 		"--filter-l7=http",
-		"--out-range=-d10",
+		"--hostlist=%LISTS%list-general.txt",
+		"--hostlist=%LISTS%list-general-user.txt",
+		"--hostlist-exclude=%LISTS%list-google.txt",
+		"--hostlist-exclude=%LISTS%list-exclude.txt",
+		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
+		"--ipset-exclude=%LISTS%ipset-exclude.txt",
+		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
 		"--payload=http_req",
-		"--lua-desync=fake:blob=fake_default_http:tcp_md5",
-		"--lua-desync=fakedsplit:ip_autottl=-2,3-20:tcp_md5",
+		"--lua-desync=fake:blob=fake_default_http:tcp_ts=-1000",
+		"--lua-desync=multisplit:pos=2",
 		"--new",
 	}
 }
 
-func makeTlsRules(desyncActions ...string) []string {
+const discordDomainsStr = "discord.com,discord.gg,discordapp.com,discordapp.net,discord.media,gateway.discord.gg,status.discord.com,dis.gd"
+
+func makeTlsRules(googleDesync []string, generalDesync []string) []string {
 	var rules []string
 
-	// 1. Google & YouTube
+	// 1. Google & YouTube (dedicated safe desync: fooling=ts, multisplit - never tcp_md5 or fake SNI!)
 	rules = append(rules,
 		"--filter-tcp=443",
 		"--filter-l7=tls",
@@ -71,50 +78,77 @@ func makeTlsRules(desyncActions ...string) []string {
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--out-range=-d10",
 		"--payload=tls_client_hello",
 	)
-	rules = append(rules, desyncActions...)
+	if len(googleDesync) > 0 {
+		rules = append(rules, googleDesync...)
+	} else {
+		rules = append(rules,
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
+			"--lua-desync=multisplit:pos=1,midsld",
+		)
+	}
 	rules = append(rules, "--new")
 
-	// 2. General blocked websites
+	// 2. Discord services (dedicated safe desync: fooling=ts, multisplit - never tcp_md5, which Cloudflare edge drops!)
+	rules = append(rules,
+		"--filter-tcp=443",
+		"--filter-l7=tls",
+		"--hostlist-domains="+discordDomainsStr,
+		"--hostlist-exclude=%LISTS%list-exclude.txt",
+		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
+		"--ipset-exclude=%LISTS%ipset-exclude.txt",
+		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
+		"--payload=tls_client_hello",
+		"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
+		"--lua-desync=multisplit:pos=1,midsld",
+		"--new",
+	)
+
+	// 3. General blocked websites (strictly excludes Google and Discord lists)
 	rules = append(rules,
 		"--filter-tcp=443",
 		"--filter-l7=tls",
 		"--hostlist=%LISTS%list-general.txt",
 		"--hostlist=%LISTS%list-general-user.txt",
+		"--hostlist-exclude=%LISTS%list-google.txt",
+		"--hostlist-exclude-domains="+discordDomainsStr,
 		"--hostlist-exclude=%LISTS%list-exclude.txt",
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--out-range=-d10",
 		"--payload=tls_client_hello",
 	)
-	rules = append(rules, desyncActions...)
+	rules = append(rules, generalDesync...)
 	rules = append(rules, "--new")
 
-	// 3. IP-based blocked destinations (ipset-all)
+	// 4. IP-based blocked destinations (ipset-all)
 	rules = append(rules,
 		"--filter-tcp=443,8443",
 		"--filter-l7=tls",
 		"--ipset=%LISTS%ipset-all.txt",
+		"--hostlist-exclude=%LISTS%list-google.txt",
+		"--hostlist-exclude-domains="+discordDomainsStr,
 		"--hostlist-exclude=%LISTS%list-exclude.txt",
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--out-range=-d10",
 		"--payload=tls_client_hello",
 	)
-	rules = append(rules, desyncActions...)
+	rules = append(rules, generalDesync...)
 	return rules
 }
 
 func buildPresetArgs(tlsDesyncActions ...string) []string {
+	return buildPresetArgsWithGoogle(nil, tlsDesyncActions...)
+}
+
+func buildPresetArgsWithGoogle(googleDesync []string, generalDesync ...string) []string {
 	var res []string
 	res = append(res, commonHeader()...)
 	res = append(res, commonUdpRules()...)
 	res = append(res, commonHttpRules()...)
-	res = append(res, makeTlsRules(tlsDesyncActions...)...)
+	res = append(res, makeTlsRules(googleDesync, generalDesync)...)
 	return res
 }
 
@@ -137,7 +171,7 @@ var BuiltinPresets = []Preset{
 	{
 		Name: "general (EXP)",
 		Args: buildPresetArgs(
-			"--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=11:tls_mod=rnd,dupsid,sni=www.google.com",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=11:tls_mod=rnd,dupsid",
 			"--lua-desync=multidisorder:pos=1,midsld",
 		),
 	},
@@ -194,7 +228,8 @@ var BuiltinPresets = []Preset{
 	{
 		Name: "general (ALT3)",
 		Args: buildPresetArgs(
-			"--lua-desync=fakedsplit:pos=1,midsld:tcp_md5:ip_autottl=-2,3-20",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=6",
+			"--lua-desync=multisplit:pos=midsld",
 		),
 	},
 	{
@@ -268,7 +303,7 @@ var BuiltinPresets = []Preset{
 	{
 		Name: "general (ALT13)",
 		Args: buildPresetArgs(
-			"--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=11:tls_mod=rnd,dupsid,sni=www.google.com",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6:tls_mod=rnd,dupsid",
 			"--lua-desync=multidisorder:pos=1,midsld",
 		),
 	},
@@ -332,15 +367,16 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 	const udpPortsStr = "19294-19344,50000-50100"
 
 	return []string{
-		"--wf-tcp-out=80,443,2053,2083,2087,2096,8443,12",
-		"--wf-udp-out=443," + udpPortsStr + ",12",
+		"--wf-udp-out=443," + udpPortsStr,
 		"--lua-init=@" + luaSep + "zapret-lib.lua",
 		"--lua-init=@" + luaSep + "zapret-antidpi.lua",
 		"--filter-udp=443",
 		"--filter-l7=quic",
 		"--hostlist=" + listsSep + "list-general.txt",
 		"--hostlist-exclude=" + listsSep + "list-exclude.txt",
+		"--hostlist-exclude=" + listsSep + "list-exclude-user.txt",
 		"--ipset-exclude=" + listsSep + "ipset-exclude.txt",
+		"--ipset-exclude=" + listsSep + "ipset-exclude-user.txt",
 		"--payload=quic_initial",
 		"--lua-desync=fake:blob=fake_default_quic:repeats=11",
 		"--new",
@@ -348,7 +384,9 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 		"--filter-l7=quic",
 		"--ipset=" + listsSep + "ipset-all.txt",
 		"--hostlist-exclude=" + listsSep + "list-exclude.txt",
+		"--hostlist-exclude=" + listsSep + "list-exclude-user.txt",
 		"--ipset-exclude=" + listsSep + "ipset-exclude.txt",
+		"--ipset-exclude=" + listsSep + "ipset-exclude-user.txt",
 		"--payload=quic_initial",
 		"--lua-desync=fake:blob=fake_default_quic:repeats=11",
 		"--new",

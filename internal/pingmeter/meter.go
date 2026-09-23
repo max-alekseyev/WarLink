@@ -46,6 +46,7 @@ type Meter struct {
 	dllDir   string
 	handle   uintptr
 
+	lastCallback time.Time
 	onPingUpdate func(server string, wireRttMs int, inGameEstMs int)
 }
 
@@ -109,10 +110,7 @@ func (m *Meter) Stop() {
 	if m.stopChan != nil {
 		close(m.stopChan)
 	}
-	if m.handle != 0 && m.handle != ^uintptr(0) {
-		m.closeHandle(m.handle)
-		m.handle = 0
-	}
+	m.closeHandleLocked()
 	m.activeServer = ""
 	m.activePort = 0
 	m.latestRTT = 0
@@ -135,33 +133,54 @@ func (m *Meter) GetActivePing() (server string, wireRttMs int, inGameEstMs int, 
 	return srv, m.latestRTT, inGame, true
 }
 
+func (m *Meter) closeHandleLocked() {
+	if m.handle != 0 && m.handle != ^uintptr(0) {
+		h := m.handle
+		m.handle = 0
+		dllPath := filepath.Join(m.dllDir, "WinDivert.dll")
+		if dll, err := syscall.LoadDLL(dllPath); err == nil {
+			defer dll.Release()
+			if proc, err := dll.FindProc("WinDivertClose"); err == nil {
+				proc.Call(h)
+			}
+		}
+	}
+}
+
 func (m *Meter) sniffLoop() {
 	dllPath := filepath.Join(m.dllDir, "WinDivert.dll")
 	if _, err := os.Stat(dllPath); err != nil {
-		// WinDivert DLL not found, sniffing inactive
+		m.mu.Lock()
+		m.isRunning = false
+		m.mu.Unlock()
 		return
 	}
 
 	dll, err := syscall.LoadDLL(dllPath)
 	if err != nil {
+		m.mu.Lock()
+		m.isRunning = false
+		m.mu.Unlock()
 		return
 	}
 	defer dll.Release()
 
 	procOpen, err := dll.FindProc("WinDivertOpen")
 	if err != nil {
+		m.mu.Lock()
+		m.isRunning = false
+		m.mu.Unlock()
 		return
 	}
 	procRecv, err := dll.FindProc("WinDivertRecv")
 	if err != nil {
-		return
-	}
-	procClose, err := dll.FindProc("WinDivertClose")
-	if err != nil {
+		m.mu.Lock()
+		m.isRunning = false
+		m.mu.Unlock()
 		return
 	}
 
-	filter := "udp and (udp.DstPort >= 4000 and udp.DstPort <= 4500 or udp.SrcPort >= 4000 and udp.SrcPort <= 4500)"
+	filter := "!loopback and ip and udp and (udp.DstPort >= 4000 and udp.DstPort <= 4500 or udp.SrcPort >= 4000 and udp.SrcPort <= 4500)"
 	filterPtr, _ := syscall.BytePtrFromString(filter)
 
 	prio := int64(-1000) // Lower priority so filter engines run first
@@ -174,7 +193,9 @@ func (m *Meter) sniffLoop() {
 
 	handle := r1
 	if handle == 0 || handle == ^uintptr(0) {
-		// Typically fails if not elevated; silently return
+		m.mu.Lock()
+		m.isRunning = false
+		m.mu.Unlock()
 		return
 	}
 
@@ -187,7 +208,9 @@ func (m *Meter) sniffLoop() {
 	var readLen uint32
 
 	defer func() {
-		procClose.Call(handle)
+		m.mu.Lock()
+		m.closeHandleLocked()
+		m.mu.Unlock()
 	}()
 
 	for {
@@ -206,23 +229,18 @@ func (m *Meter) sniffLoop() {
 		)
 
 		if r1 == 0 {
-			// Read error or closed
+			m.mu.Lock()
+			running := m.isRunning
+			m.mu.Unlock()
+			if !running {
+				return
+			}
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
 
 		if readLen > 0 {
 			m.processPacket(packetBuf[:readLen])
-		}
-	}
-}
-
-func (m *Meter) closeHandle(h uintptr) {
-	dllPath := filepath.Join(m.dllDir, "WinDivert.dll")
-	if dll, err := syscall.LoadDLL(dllPath); err == nil {
-		defer dll.Release()
-		if proc, err := dll.FindProc("WinDivertClose"); err == nil {
-			proc.Call(h)
 		}
 	}
 }
@@ -307,10 +325,13 @@ func (m *Meter) processPacket(pkt []byte) {
 			}
 			m.addSample(rttMs)
 
-			if m.onPingUpdate != nil {
-				srv := fmt.Sprintf("%s:%d", srcIP, srcPort)
-				inGame := m.latestRTT + 30
-				go m.onPingUpdate(srv, m.latestRTT, inGame)
+			if now.Sub(m.lastCallback) >= 1200*time.Millisecond {
+				m.lastCallback = now
+				if cb := m.onPingUpdate; cb != nil {
+					srv := fmt.Sprintf("%s:%d", srcIP, srcPort)
+					inGame := m.latestRTT + 30
+					go cb(srv, m.latestRTT, inGame)
+				}
 			}
 		}
 	}

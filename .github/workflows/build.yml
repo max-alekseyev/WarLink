@@ -46,7 +46,7 @@ jobs:
             "-X warlink/internal/updater.UpdateRepo=$env:REPO_NAME"
           )
 
-          if ($env:GITHUB_REF_NAME) {
+          if ($env:GITHUB_REF_NAME -and $env:GITHUB_REF_NAME.StartsWith("v")) {
             $flags += "-X main.AppVersion=$env:GITHUB_REF_NAME"
           }
 

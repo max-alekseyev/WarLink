@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -65,6 +66,40 @@ func GetServerAPI() string {
 	ip := GetServerIP()
 	if ip != "" {
 		return fmt.Sprintf("http://%s", ip)
+	}
+	return ""
+}
+
+func GetHMACSecret() string {
+	if s := os.Getenv("WARLINK_HMAC_SECRET"); s != "" {
+		return s
+	}
+	if DefaultHMACSecret != "" {
+		return DefaultHMACSecret
+	}
+	cfg := config.Load()
+	if cfg != nil && cfg.HMACSecret != "" {
+		return cfg.HMACSecret
+	}
+	return ""
+}
+
+func GetObfsPassword() string {
+	if s := os.Getenv("WARLINK_OBFS_PASSWORD"); s != "" {
+		return s
+	}
+	sessionMu.Lock()
+	cached := cachedSessionObfs
+	sessionMu.Unlock()
+	if cached != "" {
+		return cached
+	}
+	if DefaultObfsPassword != "" {
+		return DefaultObfsPassword
+	}
+	cfg := config.Load()
+	if cfg != nil && cfg.ObfsPassword != "" {
+		return cfg.ObfsPassword
 	}
 	return ""
 }
@@ -289,6 +324,14 @@ var DirectLauncherProcesses = []string{
 	"crashreportclient.exe",
 }
 
+// WardogsGameProcesses contains process names for WARDOGS dedicated game client.
+var WardogsGameProcesses = []string{
+	"WardogsClient-Win64-Shipping.exe",
+	"wardogsclient-win64-shipping.exe",
+	"wardogs.exe",
+	"wardogs-win64-shipping.exe",
+}
+
 type RouteRule struct {
 	Action          string   `json:"action,omitempty"`
 	Protocol        []string `json:"protocol,omitempty"`
@@ -351,7 +394,14 @@ func GetMachineGUID() string {
 	return "warlink-device-win"
 }
 
-// AcquireSession negotiates a valid Hysteria 2 session token with the Stockholm VPS.
+var serverTimeOffset int64
+
+// GetServerTimeOffset returns the current calibrated time skew with the server in seconds.
+func GetServerTimeOffset() int64 {
+	return atomic.LoadInt64(&serverTimeOffset)
+}
+
+// AcquireSession requests a fresh session slot from the Stockholm gateway.
 func AcquireSession(game ...string) (string, error) {
 	targetGame := "wardogs"
 	if len(game) > 0 && strings.TrimSpace(game[0]) != "" {
@@ -366,46 +416,71 @@ func AcquireSession(game ...string) (string, error) {
 	}
 	sessionMu.Unlock()
 
-	deviceID := GetMachineGUID()
-	ts := time.Now().Unix()
-	nonceBytes := make([]byte, 8)
-	_, _ = rand.Read(nonceBytes)
-	nonce := hex.EncodeToString(nonceBytes)
-
-	reqBody, _ := json.Marshal(map[string]interface{}{
-		"device_id": deviceID,
-		"timestamp": ts,
-		"nonce":     nonce,
-		"game":      targetGame,
-	})
-
 	serverAPI := GetServerAPI()
 	if serverAPI == "" {
 		return "", fmt.Errorf("адрес шлюза не настроен (задайте WARLINK_SERVER_IP)")
 	}
 
 	apiURL := fmt.Sprintf("%s/api/v1/session", serverAPI)
-	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
-	if err != nil {
-		return "", fmt.Errorf("ошибка создания запроса сессии: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	hmacSecret := os.Getenv("WARLINK_HMAC_SECRET")
+	deviceID := GetMachineGUID()
+	hmacSecret := GetHMACSecret()
 	if hmacSecret == "" {
-		hmacSecret = DefaultHMACSecret
-	}
-	if hmacSecret != "" {
-		dataToSign := fmt.Sprintf("%s:%d:%s", deviceID, ts, nonce)
-		mac := hmac.New(sha256.New, []byte(hmacSecret))
-		mac.Write([]byte(dataToSign))
-		req.Header.Set("X-Signature", hex.EncodeToString(mac.Sum(nil)))
+		return "", fmt.Errorf("в сборке отсутствует ключ авторизации шлюза (HMAC). Запустите официальный релиз с GitHub или задайте переменную окружения WARLINK_HMAC_SECRET")
 	}
 
 	client := &http.Client{Timeout: 7 * time.Second}
-	resp, err := client.Do(req)
+
+	attemptAuth := func() (*http.Response, error) {
+		ts := time.Now().Unix() + atomic.LoadInt64(&serverTimeOffset)
+		nonceBytes := make([]byte, 8)
+		_, _ = rand.Read(nonceBytes)
+		nonce := hex.EncodeToString(nonceBytes)
+
+		reqBody, _ := json.Marshal(map[string]interface{}{
+			"device_id": deviceID,
+			"timestamp": ts,
+			"nonce":     nonce,
+			"game":      targetGame,
+		})
+
+		req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		if hmacSecret != "" {
+			dataToSign := fmt.Sprintf("%s:%d:%s", deviceID, ts, nonce)
+			mac := hmac.New(sha256.New, []byte(hmacSecret))
+			mac.Write([]byte(dataToSign))
+			req.Header.Set("X-Signature", hex.EncodeToString(mac.Sum(nil)))
+		}
+		return client.Do(req)
+	}
+
+	resp, err := attemptAuth()
 	if err != nil {
 		return "", fmt.Errorf("шлюз Стокгольм временно недоступен (%s): %w", GetServerIP(), err)
+	}
+
+	if sDate := resp.Header.Get("Date"); sDate != "" {
+		if parsedTime, pErr := http.ParseTime(sDate); pErr == nil {
+			offset := parsedTime.Unix() - time.Now().Unix()
+			atomic.StoreInt64(&serverTimeOffset, offset)
+		}
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if strings.Contains(string(body), "expired timestamp") {
+			resp, err = attemptAuth()
+			if err != nil {
+				return "", fmt.Errorf("шлюз Стокгольм временно недоступен (%s): %w", GetServerIP(), err)
+			}
+		} else {
+			return "", fmt.Errorf("ошибка авторизации на шлюзе (HTTP %d): %s", resp.StatusCode, string(body))
+		}
 	}
 	defer resp.Body.Close()
 
@@ -748,6 +823,10 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			procSet[pClean] = struct{}{}
 		}
 	}
+	if includeWebServices {
+		procSet["Telegram.exe"] = struct{}{}
+		procSet["telegram.exe"] = struct{}{}
+	}
 
 	domainSet := make(map[string]struct{})
 	ipSet := make(map[string]struct{})
@@ -931,10 +1010,14 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 
 	// Route profile IPs / CIDRs
 	if len(allIPs) > 0 {
-		rules = append(rules, RouteRule{
+		rule := RouteRule{
 			IPCIDR:   allIPs,
 			Outbound: "hy2-stockholm",
-		})
+		}
+		if len(allProcesses) > 0 {
+			rule.ProcessName = allProcesses
+		}
+		rules = append(rules, rule)
 	}
 
 	// Route WARDOGS dedicated match servers (AWS GameLift UDP 4000-4500, e.g. port 4192) through Stockholm gateway
@@ -942,18 +1025,15 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	// Steam Datagram Relay (SDR) ping relays stay direct.
 	rules = append(rules,
 		RouteRule{
-			Network:   "udp",
-			PortRange: []string{"4000:4500"},
-			Outbound:  "hy2-stockholm",
+			Network:     "udp",
+			PortRange:   []string{"4000:4500"},
+			ProcessName: WardogsGameProcesses,
+			Outbound:    "hy2-stockholm",
 		},
 		RouteRule{
 			Network:   "udp",
 			PortRange: []string{"27000:27200"},
 			Outbound:  "direct",
-		},
-		RouteRule{
-			DomainSuffix: DirectGameDomains,
-			Outbound:     "direct",
 		},
 	)
 
@@ -1060,15 +1140,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		Final: "dns-local",
 	}
 
-	obfsKey := os.Getenv("WARLINK_OBFS_PASSWORD")
-	if obfsKey == "" {
-		sessionMu.Lock()
-		obfsKey = cachedSessionObfs
-		sessionMu.Unlock()
-	}
-	if obfsKey == "" {
-		obfsKey = DefaultObfsPassword
-	}
+	obfsKey := GetObfsPassword()
 
 	var obfsConfig *Hysteria2Obfs
 	if obfsKey != "" {
@@ -1141,9 +1213,30 @@ type Manager struct {
 	mu                 sync.Mutex
 	coreDir            string
 	cmd                *exec.Cmd
+	logFile            *os.File
 	isRunning          bool
 	targetProcesses    []string
 	includeWebServices bool
+	currentGame        string
+	OnProcessStart     func(pid int)
+}
+
+func sliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]int)
+	for _, x := range a {
+		m[strings.ToLower(strings.TrimSpace(x))]++
+	}
+	for _, x := range b {
+		k := strings.ToLower(strings.TrimSpace(x))
+		m[k]--
+		if m[k] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func NewManager(coreDir string) *Manager {
@@ -1259,11 +1352,20 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	targetGame := "wardogs"
+	if len(game) > 0 && strings.TrimSpace(game[0]) != "" {
+		targetGame = strings.TrimSpace(game[0])
+	} else if len(targetProcesses) == 0 && includeWebServices {
+		targetGame = "free_internet"
+	}
+
 	if m.isRunning {
-		if m.includeWebServices == includeWebServices {
+		sameTargets := sliceEqual(m.targetProcesses, targetProcesses)
+		sameGame := m.currentGame == targetGame
+		if m.includeWebServices == includeWebServices && sameTargets && sameGame {
 			return nil
 		}
-		// Web services mode changed (e.g. Free Internet toggled while game is running).
+		// Web services mode, target processes, or game changed (e.g. Free Internet toggled or game launched/closed).
 		// Must cleanly restart sing-box to apply new outbound and routing rules.
 		if m.cmd != nil && m.cmd.Process != nil {
 			_ = m.cmd.Process.Kill()
@@ -1276,13 +1378,6 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 
 	if err := m.EnsureFiles(logFn); err != nil {
 		return err
-	}
-
-	targetGame := "wardogs"
-	if len(game) > 0 && strings.TrimSpace(game[0]) != "" {
-		targetGame = strings.TrimSpace(game[0])
-	} else if len(targetProcesses) == 0 && includeWebServices {
-		targetGame = "free_internet"
 	}
 
 	// Request active session from Stockholm server
@@ -1299,6 +1394,7 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 
 	m.targetProcesses = append([]string(nil), targetProcesses...)
 	m.includeWebServices = includeWebServices
+	m.currentGame = targetGame
 
 	// 1. Primary: fetch dynamic sing-box configuration directly from remote server
 	var cfgBytes []byte
@@ -1354,24 +1450,42 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 		HideWindow:    true,
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 	}
+
+	if m.logFile != nil {
+		_ = m.logFile.Close()
+		m.logFile = nil
+	}
 	stderrPath := filepath.Join(m.GetBinDir(), "singbox_stderr.log")
-	if stderrFile, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
-		cmd.Stderr = stderrFile
-		cmd.Stdout = stderrFile
-		defer stderrFile.Close()
+	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
+		m.logFile = f
+		cmd.Stderr = f
+		cmd.Stdout = f
 	}
 
 	if err := cmd.Start(); err != nil {
+		if m.logFile != nil {
+			_ = m.logFile.Close()
+			m.logFile = nil
+		}
 		return fmt.Errorf("ошибка запуска sing-box: %w", err)
 	}
 
 	m.cmd = cmd
 	m.isRunning = true
 
+	if m.OnProcessStart != nil {
+		m.OnProcessStart(cmd.Process.Pid)
+	}
+
 	// Check if process exited immediately due to config error
 	time.Sleep(500 * time.Millisecond)
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+	if !m.isProcessAliveLocked() {
 		m.isRunning = false
+		m.cmd = nil
+		if m.logFile != nil {
+			_ = m.logFile.Close()
+			m.logFile = nil
+		}
 		errDetail := ""
 		if errData, errRead := os.ReadFile(stderrPath); errRead == nil && len(errData) > 0 {
 			errDetail = ": " + strings.TrimSpace(string(errData))
@@ -1392,6 +1506,10 @@ func (m *Manager) Stop() error {
 	defer m.mu.Unlock()
 
 	if !m.isRunning && m.cmd == nil {
+		if m.logFile != nil {
+			_ = m.logFile.Close()
+			m.logFile = nil
+		}
 		return nil
 	}
 
@@ -1400,6 +1518,11 @@ func (m *Manager) Stop() error {
 		m.cmd = nil
 	}
 	m.isRunning = false
+
+	if m.logFile != nil {
+		_ = m.logFile.Close()
+		m.logFile = nil
+	}
 
 	_ = killProcessByName("sing-box.exe")
 
@@ -1464,18 +1587,53 @@ func (m *Manager) AddTargetProcess(proc string, logFn func(string)) error {
 		HideWindow:    true,
 		CreationFlags: 0x08000000,
 	}
-	if stderrFile, errOpen := os.OpenFile(filepath.Join(m.GetBinDir(), "singbox_stderr.log"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
-		cmd.Stderr = stderrFile
-		cmd.Stdout = stderrFile
-		defer stderrFile.Close()
+
+	if m.logFile != nil {
+		_ = m.logFile.Close()
+		m.logFile = nil
 	}
+	stderrPath := filepath.Join(m.GetBinDir(), "singbox_stderr.log")
+	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
+		m.logFile = f
+		cmd.Stderr = f
+		cmd.Stdout = f
+	}
+
 	if err := cmd.Start(); err != nil {
+		if m.logFile != nil {
+			_ = m.logFile.Close()
+			m.logFile = nil
+		}
 		m.isRunning = false
 		return err
 	}
+
 	m.cmd = cmd
 	m.isRunning = true
+
+	if m.OnProcessStart != nil {
+		m.OnProcessStart(cmd.Process.Pid)
+	}
+
 	return nil
+}
+
+func (m *Manager) isProcessAliveLocked() bool {
+	if m.cmd == nil || m.cmd.Process == nil {
+		return false
+	}
+	// PROCESS_QUERY_LIMITED_INFORMATION (0x1000) | SYNCHRONIZE (0x00100000)
+	h, err := syscall.OpenProcess(0x00101000, false, uint32(m.cmd.Process.Pid))
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(h)
+
+	event, err := syscall.WaitForSingleObject(h, 0)
+	if err == nil && event == 0x00000102 { // WAIT_TIMEOUT means process has NOT signaled/terminated
+		return true
+	}
+	return false
 }
 
 // IsProcessAlive checks whether the sing-box process is genuinely running in the Windows kernel.
@@ -1483,23 +1641,19 @@ func (m *Manager) IsProcessAlive() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !m.isRunning || m.cmd == nil || m.cmd.Process == nil {
+	if !m.isRunning {
 		return false
 	}
-	h, err := syscall.OpenProcess(0x1000, false, uint32(m.cmd.Process.Pid)) // PROCESS_QUERY_LIMITED_INFORMATION
-	if err != nil {
-		return false
-	}
-	defer syscall.CloseHandle(h)
-	var exitCode uint32
-	if err := syscall.GetExitCodeProcess(h, &exitCode); err != nil {
-		return false
-	}
-	return exitCode == 259 // STILL_ACTIVE
+	return m.isProcessAliveLocked()
 }
 
 func downloadAndExtractZip(url, destDir, targetFileName, finalDestPath string) error {
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil, // Bypass any system/env proxy — component downloads must go direct
+		},
+	}
 	req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
 	if err != nil {
 		return err

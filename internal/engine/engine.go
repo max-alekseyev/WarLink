@@ -58,6 +58,11 @@ func New(cfg *config.Config, logCb func(string)) *Engine {
 		telemetry:          NewTelemetryMonitor(),
 		pingMeter:          pingmeter.New(filepath.Join(deps.GetCoreDir(), "zapret", "bin")),
 	}
+	if eng.singboxMgr != nil {
+		eng.singboxMgr.OnProcessStart = func(pid int) {
+			_ = deps.AssignProcessToJob(pid)
+		}
+	}
 	if eng.pingMeter != nil {
 		eng.pingMeter.SetUpdateCallback(func(server string, wireRttMs int, inGameEstMs int) {
 			eng.log(fmt.Sprintf("[PING] Матч WARDOGS (%s): Сеть = %d мс | Оверлей игры ~ %d мс", server, wireRttMs, inGameEstMs))
@@ -152,6 +157,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 				if selectedGameID == "" {
 					selectedGameID = "wardogs"
 				}
+				selectedGameID = selectedGameID + " (гибрид)"
 			}
 			if err := e.singboxMgr.Start(targets, true, e.log, selectedGameID); err != nil {
 				// Rollback and release session immediately on failure
@@ -256,12 +262,15 @@ func (e *Engine) EnsureWinwsRunning() error {
 
 	e.mu.Lock()
 	isFreeNet := e.freeInternetActive
-	isConn := e.isConnected
+	isConn := e.isConnected || e.pipelineProgress.IsRunning
 	e.mu.Unlock()
 
 	selectedGame := e.cfg.GetSelectedGame()
-	if isConn && selectedGame.PreferredAlt != "" {
+	if selectedGame.PreferredAlt != "" {
 		bestAlt = selectedGame.PreferredAlt
+	}
+	if e.selectedAlt != "" && e.selectedAlt != "general" {
+		bestAlt = e.selectedAlt
 	}
 
 	preset := desync.GetPreset(bestAlt)
@@ -278,10 +287,13 @@ func (e *Engine) EnsureWinwsRunning() error {
 		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в селективном игровом режиме...", preset.Name))
 	}
 
+	deps.HealWinDivertService(e.log)
+
 	logPath := filepath.Join(zapretDir, "winws2.log")
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		if attempt > 1 {
+			deps.HealWinDivertService(e.log)
 			// Only kill the process — NOT StopWinDivertService().
 			// sc delete WinDivert sets DeleteFlag=1 in the registry causing
 			// ERROR_BAD_DEVICE (433) on all subsequent WinDivertOpen() calls until reboot.
@@ -295,15 +307,24 @@ func (e *Engine) EnsureWinwsRunning() error {
 			HideWindow:    true,
 			CreationFlags: 0x08000000,
 		}
-		if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+		logFile, errOpen := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if errOpen == nil {
 			zCmd.Stdout = logFile
 			zCmd.Stderr = logFile
 		}
 		if err := zCmd.Start(); err != nil {
+			if logFile != nil {
+				_ = logFile.Close()
+			}
 			lastErr = fmt.Errorf("ошибка запуска winws2: %w", err)
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
+		if logFile != nil {
+			_ = logFile.Close()
+		}
+
+		_ = deps.AssignProcessToJob(zCmd.Process.Pid)
 
 		e.mu.Lock()
 		e.zapretCmd = zCmd
@@ -377,6 +398,7 @@ func (e *Engine) stopWinws() error {
 		killCmd := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
 		killCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		_ = killCmd.Run()
+		_ = e.zapretCmd.Process.Release()
 		e.zapretCmd = nil
 	}
 
@@ -439,6 +461,15 @@ func (e *Engine) GetBestAlt() string {
 }
 
 func (e *Engine) getBestAltLocked() string {
+	if e.selectedAlt != "" && e.selectedAlt != "general" {
+		return strings.TrimSuffix(e.selectedAlt, ".bat")
+	}
+	if e.cfg != nil {
+		selectedGame := e.cfg.GetSelectedGame()
+		if selectedGame.PreferredAlt != "" {
+			return strings.TrimSuffix(selectedGame.PreferredAlt, ".bat")
+		}
+	}
 	if e.selectedAlt != "" {
 		return strings.TrimSuffix(e.selectedAlt, ".bat")
 	}
@@ -571,6 +602,9 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	if selectedGameID == "" {
 		selectedGameID = "wardogs"
 	}
+	if isFreeNet {
+		selectedGameID = selectedGameID + " (гибрид)"
+	}
 	if err := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID); err != nil {
 		_ = e.disconnectInternal()
 		e.setProgress(0, 0, 0, "", "Ошибка запуска sing-box", false)
@@ -606,12 +640,12 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 
 		if selectedGame.SteamAppID != "" {
 			e.log(fmt.Sprintf("[INFO] Автозапуск %s в Steam (steam://run/%s)...", selectedGame.Title, selectedGame.SteamAppID))
-			steamCmd := exec.Command("cmd.exe", "/c", "start", fmt.Sprintf("steam://run/%s", selectedGame.SteamAppID))
+			steamCmd := exec.Command("explorer.exe", fmt.Sprintf("steam://run/%s", selectedGame.SteamAppID))
 			steamCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 			_ = steamCmd.Start()
 		} else if selectedGame.ExePath != "" {
 			e.log(fmt.Sprintf("[INFO] Автозапуск %s (%s)...", selectedGame.Title, selectedGame.ExePath))
-			gameCmd := exec.Command("cmd.exe", "/c", "start", "", selectedGame.ExePath)
+			gameCmd := exec.Command("explorer.exe", selectedGame.ExePath)
 			gameCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 			_ = gameCmd.Start()
 		}
@@ -764,6 +798,8 @@ func (e *Engine) Shutdown() {
 	_ = scanner.KillProcess("winws.exe")
 	// WinDivert driver handle is released automatically when winws2.exe exits.
 	// sc delete is never called — on next startup WinDivert.dll self-registers cleanly.
+
+	deps.RestoreWindowsNetworkStack(e.log)
 }
 
 
@@ -864,7 +900,18 @@ func (e *Engine) checkProcessHealth() {
 		// client IP (stale token was issued to 127.0.0.1 and would be rejected by Hysteria2).
 		_ = e.singboxMgr.Stop()
 		singbox.InvalidateSession()
-		if startErr := e.singboxMgr.Start(targets, isFreeNet, e.log); startErr != nil {
+		selectedGameID := "free_internet"
+		if isConn {
+			selectedGameID = e.cfg.GetSelectedGame().ID
+			if selectedGameID == "" {
+				selectedGameID = "wardogs"
+			}
+			if isFreeNet {
+				selectedGameID = selectedGameID + " (гибрид)"
+			}
+		}
+
+		if startErr := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID); startErr != nil {
 			e.log(fmt.Sprintf("[ERROR] Не удалось перезапустить туннель: %v", startErr))
 		} else {
 			e.log("[OK] Туннель автоматически восстановлен")

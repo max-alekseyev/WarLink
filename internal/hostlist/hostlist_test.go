@@ -55,3 +55,29 @@ func TestHostlistManager(t *testing.T) {
 		t.Fatal("expected Telegram DC IP ranges to be populated")
 	}
 }
+
+func TestGetGeneralHostsExclusions(t *testing.T) {
+	mgr := NewManager(nil)
+	genHosts := mgr.GetGeneralHosts()
+	if len(genHosts) == 0 {
+		t.Fatal("expected non-empty general hostlist")
+	}
+
+	for _, h := range genHosts {
+		if strings.Contains(h, "youtube") || strings.Contains(h, "googlevideo") {
+			t.Errorf("general hosts must not contain YouTube domains: found %s", h)
+		}
+		if strings.Contains(h, "instagram") || strings.Contains(h, "facebook") || strings.Contains(h, "threads") {
+			t.Errorf("general hosts must not contain Meta domains: found %s", h)
+		}
+		if strings.Contains(h, "twitter") || h == "x.com" || strings.Contains(h, "twimg") {
+			t.Errorf("general hosts must not contain Twitter domains: found %s", h)
+		}
+		if strings.Contains(h, "telegram") || strings.Contains(h, "t.me") {
+			t.Errorf("general hosts must not contain Telegram domains: found %s", h)
+		}
+		if strings.Contains(h, "whatsapp") {
+			t.Errorf("general hosts must not contain WhatsApp domains: found %s", h)
+		}
+	}
+}

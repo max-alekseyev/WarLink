@@ -9,10 +9,12 @@ param (
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-if (-not $GatewayIP -and (Test-Path "$root\warlink_core\config.json")) {
+if (Test-Path "$root\warlink_core\config.json") {
     try {
         $cfg = Get-Content "$root\warlink_core\config.json" -Raw | ConvertFrom-Json
-        $GatewayIP = $cfg.server_ip
+        if (-not $GatewayIP) { $GatewayIP = $cfg.server_ip }
+        if (-not $HMACSecret) { $HMACSecret = $cfg.hmac_secret }
+        if (-not $ObfsPassword) { $ObfsPassword = $cfg.obfs_password }
     } catch {}
 }
 

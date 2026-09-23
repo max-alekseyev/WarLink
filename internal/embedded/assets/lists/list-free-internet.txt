@@ -79,8 +79,6 @@ ffzap.com
 flora.web.telegram.org
 frankerfacez.com
 gateway.discord.gg
-ggpht.com
-googlevideo.com
 instagram.com
 klipy.com
 localizeapi.com
@@ -104,18 +102,11 @@ twitter.com
 venus.web.telegram.org
 vesta.web.telegram.org
 viber.com
-video.google.com
 wa.me
 web.telegram.org
 web.whatsapp.com
 whatsapp.com
 whatsapp.net
 whatsapp.org
-wide-youtube.l.google.com
 x.com
-youtu.be
-youtube.com
-youtubei.googleapis.com
-yt.be
-ytimg.com
 zendesk.com

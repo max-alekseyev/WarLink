@@ -46,16 +46,17 @@ type TargetInfo struct {
 }
 
 type GameWatcher struct {
-	mu             sync.Mutex
-	stopChan       chan struct{}
-	isRunning      bool
-	wasRunning     bool
-	missCount      int
-	activeTarget   string
-	targetFn       func() TargetInfo
-	onGameExit     func(string)
-	onGameStarted  func(string)
-	onProcessFound func(gameID string, procName string)
+	mu               sync.Mutex
+	stopChan         chan struct{}
+	isRunning        bool
+	wasRunning       bool
+	missCount        int
+	activeTarget     string
+	lastReportedProc string
+	targetFn         func() TargetInfo
+	onGameExit       func(string)
+	onGameStarted    func(string)
+	onProcessFound   func(gameID string, procName string)
 }
 
 func New(targetFn func() TargetInfo, onGameStarted func(string), onGameExit func(string), onProcessFound func(gameID, procName string)) *GameWatcher {
@@ -236,8 +237,39 @@ func FindSteamGameExecutables(steamAppID string) []string {
 	return executables
 }
 
+type cachedTargetInfo struct {
+	info      TargetInfo
+	expiresAt time.Time
+}
+
+var (
+	targetCacheMu sync.RWMutex
+	targetCache   = make(map[string]cachedTargetInfo)
+)
+
+// InvalidateTargetCache invalidates the cached TargetInfo for a given gameID,
+// or all cached entries if gameID is empty.
+func InvalidateTargetCache(gameID string) {
+	targetCacheMu.Lock()
+	defer targetCacheMu.Unlock()
+	if gameID == "" {
+		targetCache = make(map[string]cachedTargetInfo)
+	} else {
+		delete(targetCache, gameID)
+	}
+}
+
 // ResolveGameProcessNames aggregates Steam manifest exes, explicit path, aliases, and title
 func ResolveGameProcessNames(gameID, steamAppID, title, exePath string, cached []string) TargetInfo {
+	if gameID != "" {
+		targetCacheMu.RLock()
+		if entry, ok := targetCache[gameID]; ok && time.Now().Before(entry.expiresAt) {
+			targetCacheMu.RUnlock()
+			return entry.info
+		}
+		targetCacheMu.RUnlock()
+	}
+
 	targets := make(map[string]bool)
 
 	// 1. Previously cached process names
@@ -296,11 +328,22 @@ func ResolveGameProcessNames(gameID, steamAppID, title, exePath string, cached [
 		result = append(result, t)
 	}
 
-	return TargetInfo{
+	info := TargetInfo{
 		GameID:          gameID,
 		ProcessNames:    result,
 		NormalizedTitle: normTitle,
 	}
+
+	if gameID != "" {
+		targetCacheMu.Lock()
+		targetCache[gameID] = cachedTargetInfo{
+			info:      info,
+			expiresAt: time.Now().Add(30 * time.Second),
+		}
+		targetCacheMu.Unlock()
+	}
+
+	return info
 }
 
 // SelectBestProcess selects the most relevant game executable from matched processes,
@@ -360,7 +403,8 @@ func IsAnyProcessRunning(targets []string, normalizedTitle string) (bool, string
 
 		// 1. Direct match with target list
 		for _, t := range targets {
-			if nameLower == t || strings.Contains(nameLower, t) {
+			tLower := strings.ToLower(t)
+			if nameLower == tLower {
 				isMatch = true
 				break
 			}
@@ -405,10 +449,11 @@ func (w *GameWatcher) Start() {
 	w.isRunning = true
 	w.stopChan = make(chan struct{})
 	w.missCount = 0
+	w.lastReportedProc = ""
 	w.mu.Unlock()
 
 	go func() {
-		ticker := time.NewTicker(250 * time.Millisecond)
+		ticker := time.NewTicker(1000 * time.Millisecond)
 		defer ticker.Stop()
 
 		for {
@@ -417,11 +462,13 @@ func (w *GameWatcher) Start() {
 				return
 			case <-ticker.C:
 				w.mu.Lock()
-				var info TargetInfo
-				if w.targetFn != nil {
-					info = w.targetFn()
-				}
+				fn := w.targetFn
 				w.mu.Unlock()
+
+				var info TargetInfo
+				if fn != nil {
+					info = fn()
+				}
 
 				if len(info.ProcessNames) == 0 && info.NormalizedTitle == "" {
 					continue
@@ -441,35 +488,40 @@ func (w *GameWatcher) Start() {
 						w.activeTarget = procName
 					}
 
+					var notifyProcFound bool
+					var notifyGameStarted bool
+					targetGameID := info.GameID
+					reportedProc := procName
+
+					if !strings.EqualFold(w.lastReportedProc, procName) {
+						w.lastReportedProc = procName
+						notifyProcFound = true
+					}
+
 					if !w.wasRunning {
 						w.wasRunning = true
 						w.activeTarget = procName
-						w.mu.Unlock()
-
-						if w.onProcessFound != nil && info.GameID != "" {
-							w.onProcessFound(info.GameID, procName)
-						}
-						if w.onGameStarted != nil {
-							w.onGameStarted(procName)
-						}
-						continue
-					} else {
-						// Process was already running, but could be transition to main client
-						if w.onProcessFound != nil && info.GameID != "" && !isProcLauncher {
-							w.mu.Unlock()
-							w.onProcessFound(info.GameID, procName)
-							w.mu.Lock()
-						}
+						notifyGameStarted = true
 					}
+					w.mu.Unlock()
+
+					if notifyProcFound && w.onProcessFound != nil && targetGameID != "" {
+						w.onProcessFound(targetGameID, reportedProc)
+					}
+					if notifyGameStarted && w.onGameStarted != nil {
+						w.onGameStarted(reportedProc)
+					}
+					continue
 				} else {
 					if w.wasRunning {
 						w.missCount++
-						// 10 consecutive misses (2.5s) = confirmed exit, allowing launcher -> client handoff without closing tunnel
-						if w.missCount >= 10 {
+						// 6 consecutive misses (6s) = confirmed exit, allowing launcher -> client handoff without closing tunnel
+						if w.missCount >= 6 {
 							w.wasRunning = false
 							w.missCount = 0
 							closedProc := w.activeTarget
 							w.activeTarget = ""
+							w.lastReportedProc = ""
 							w.mu.Unlock()
 
 							if w.onGameExit != nil {
@@ -478,8 +530,8 @@ func (w *GameWatcher) Start() {
 							continue
 						}
 					}
+					w.mu.Unlock()
 				}
-				w.mu.Unlock()
 			}
 		}
 	}()
@@ -490,6 +542,7 @@ func (w *GameWatcher) Reset() {
 	w.wasRunning = false
 	w.missCount = 0
 	w.activeTarget = ""
+	w.lastReportedProc = ""
 	w.mu.Unlock()
 }
 

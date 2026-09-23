@@ -50,6 +50,16 @@ ip: 195.154.239.0/24, udp/12000-65000
 ip: 45.43.142.0/24, tcp/443
 ip: 45.43.142.0/24, udp/12000-65000
 
+# AWS Global Accelerator & Pragma Backend Edge (Matchmaking & Backend Telemetry)
+ip: 35.71.0.0/16, tcp/443
+ip: 35.71.0.0/16, udp/12000-65000
+ip: 15.197.0.0/16, tcp/443
+ip: 15.197.0.0/16, udp/12000-65000
+ip: 75.2.0.0/16, tcp/443
+ip: 75.2.0.0/16, udp/12000-65000
+ip: 99.83.128.0/17, tcp/443
+ip: 99.83.128.0/17, udp/12000-65000
+
 # Dynamic Match & Voice UDP Ports
 udp: 54000-55000
 udp: 3478-3479

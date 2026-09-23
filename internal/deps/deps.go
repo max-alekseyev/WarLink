@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
+	"golang.org/x/sys/windows/registry"
 	"warlink/internal/embedded"
 	"warlink/internal/singbox"
 )
@@ -148,33 +147,44 @@ func AddGatewayToZapretExclude(serverIP string) error {
 	return os.WriteFile(excludePath, []byte(newContent), 0644)
 }
 
-// SanitizeStartupAndNetwork ensures any broken local loopback proxy (ProxyEnable=1 with 127.0.0.1)
-// left by third-party VPN crashes is safely disabled.
-func SanitizeStartupAndNetwork(logFn func(string)) {
+// ResetLoopbackProxy checks if a broken local loopback proxy (ProxyEnable=1 with 127.0.0.1 or localhost)
+// was left behind by third-party VPN crashes, and resets it using the Windows registry API.
+func ResetLoopbackProxy(logFn func(string)) error {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
 
-	// 2. Check for broken loopback system proxy
-	checkProxy := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable")
-	checkProxy.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	out, err := checkProxy.CombinedOutput()
-	if err == nil && strings.Contains(string(out), "0x1") {
-		checkServer := exec.Command("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyServer")
-		checkServer.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		outServer, errS := checkServer.CombinedOutput()
-		if errS == nil {
-			strServer := strings.ToLower(string(outServer))
-			if strings.Contains(strServer, "127.0.0.1") || strings.Contains(strServer, "localhost") {
-				if logFn != nil {
-					logFn("[WARN] Обнаружен зависший локальный системный прокси (ProxyEnable=1). Автоматический сброс...")
-				}
-				fixProxy := exec.Command("reg", "add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", "0", "/f")
-				fixProxy.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-				_ = fixProxy.Run()
-				if logFn != nil {
-					logFn("[OK] Системный прокси успешно сброшен на прямое подключение")
-				}
-			}
+	proxyEnable, _, err := k.GetIntegerValue("ProxyEnable")
+	if err != nil || proxyEnable != 1 {
+		return nil
+	}
+
+	proxyServer, _, err := k.GetStringValue("ProxyServer")
+	if err != nil {
+		return nil
+	}
+
+	strServer := strings.ToLower(proxyServer)
+	if strings.Contains(strServer, "127.0.0.1") || strings.Contains(strServer, "localhost") {
+		if logFn != nil {
+			logFn("[WARN] Обнаружен зависший локальный системный прокси (ProxyEnable=1). Автоматический сброс...")
+		}
+		if err := k.SetDWordValue("ProxyEnable", 0); err != nil {
+			return fmt.Errorf("failed to reset ProxyEnable: %w", err)
+		}
+		if logFn != nil {
+			logFn("[OK] Системный прокси успешно сброшен на прямое подключение")
 		}
 	}
+	return nil
+}
+
+// SanitizeStartupAndNetwork ensures any broken local loopback proxy or disabled WinDivert service is safely healed.
+func SanitizeStartupAndNetwork(logFn func(string)) {
+	_ = ResetLoopbackProxy(logFn)
+	HealWinDivertService(logFn)
 }
 
 // CheckInternetConnection tests if basic internet/DNS is reachable.

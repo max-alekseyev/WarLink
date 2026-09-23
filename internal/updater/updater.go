@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -114,7 +113,7 @@ func GetUpdateURL() string {
 	return fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 }
 
-// CheckForUpdate polls GitHub Releases API with a fast timeout (3 seconds)
+// CheckForUpdate polls GitHub Releases API with a fast timeout (3.5 seconds)
 func CheckForUpdate(currentVersion string) (*UpdateCheckResult, error) {
 	client := &http.Client{Timeout: 3500 * time.Millisecond}
 	apiURL := GetUpdateURL()
@@ -219,45 +218,52 @@ func DownloadWithProgress(url, destPath string, expectedSize int64, progressCb f
 		}
 	}
 
+	if totalSize > 0 && downloaded < totalSize {
+		return fmt.Errorf("загрузка файла прервана: получено %d из %d байт", downloaded, totalSize)
+	}
+
 	if progressCb != nil {
 		progressCb(99, "Загрузка завершена. Проверка целостности...")
 	}
 	return nil
 }
 
-// VerifySha256 checks the SHA-256 hash of a file against expected hash string or remote sha256 url
+// VerifySha256 checks the SHA-256 hash of a file against remote sha256 url
 func VerifySha256(filePath, sha256URL string) (bool, error) {
-	if sha256URL == "" {
-		// If no sha256 file was provided in release, verify minimum file size (> 5MB)
-		fi, err := os.Stat(filePath)
-		if err != nil || fi.Size() < 5*1024*1024 {
-			return false, fmt.Errorf("размер файла слишком мал или файл поврежден")
-		}
-		return true, nil
+	if strings.TrimSpace(sha256URL) == "" {
+		return false, fmt.Errorf("sha256 URL не указан, проверка обязательна")
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(sha256URL)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("ошибка запроса sha256: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("ошибка загрузки sha256: статус %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("ошибка чтения тела sha256: %w", err)
 	}
-	expectedHash := strings.ToLower(strings.TrimSpace(strings.Split(string(body), " ")[0]))
+	fields := strings.Fields(string(body))
+	if len(fields) == 0 {
+		return false, fmt.Errorf("пустой файл контрольной суммы sha256")
+	}
+	expectedHash := strings.ToLower(fields[0])
 
 	f, err := os.Open(filePath)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("ошибка открытия файла для проверки хеша: %w", err)
 	}
 	defer f.Close()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, f); err != nil {
-		return false, err
+		return false, fmt.Errorf("ошибка вычисления хеша: %w", err)
 	}
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
 
@@ -268,88 +274,70 @@ func VerifySha256(filePath, sha256URL string) (bool, error) {
 	return true, nil
 }
 
-// ApplyUpdateAndRestart creates an in-place atomic update script, preserves config.json, and restarts WarLink
+// ApplyUpdateAndRestart renames running binary to .old, moves new binary into place, and restarts WarLink
 func ApplyUpdateAndRestart(newExePath string) error {
 	currentExe, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("не удалось определить путь исполняемого файла: %w", err)
 	}
 
 	currentDir := filepath.Dir(currentExe)
 	coreDir := filepath.Join(currentDir, "warlink_core")
 	_ = os.MkdirAll(coreDir, 0755)
-	currentPID := os.Getpid()
 
-	// 1. Double check and preserve config.json inside warlink_core
+	// Backup config.json if present
 	configPath := filepath.Join(coreDir, "config.json")
 	backupConfigPath := filepath.Join(coreDir, "config.json.bak")
 	if cfgData, err := os.ReadFile(configPath); err == nil && len(cfgData) > 0 {
 		_ = os.WriteFile(backupConfigPath, cfgData, 0644)
 	}
 
-	// 2. Prepare updater helper script inside warlink_core
-	updaterScript := filepath.Join(coreDir, "warlink_self_update.cmd")
-	scriptContent := fmt.Sprintf(`@echo off
-setlocal enabledelayedexpansion
-
-:: 1. Wait for current WarLink process to exit completely
-:WAIT_LOOP
-tasklist /FI "PID eq %d" 2>NUL | find /I "%d" >NUL
-if not errorlevel 1 (
-    timeout /t 1 /nobreak >NUL
-    goto WAIT_LOOP
-)
-
-:: Extra safety sleep
-timeout /t 1 /nobreak >NUL
-
-:: 2. Replace WarLink.exe with verified binary
-copy /Y "%s" "%s" >NUL
-if errorlevel 1 (
-    timeout /t 2 /nobreak >NUL
-    copy /Y "%s" "%s" >NUL
-)
-
-:: 3. Restore config backup if config was somehow wiped
-if not exist "%s" (
-    if exist "%s" copy /Y "%s" "%s" >NUL
-)
-
-:: 4. Clean up temporary files
-del /F /Q "%s" >NUL 2>&1
-
-:: 5. Relaunch updated WarLink.exe
-start "" "%s"
-
-:: 6. Self-delete this script
-del /F /Q "%%~f0" >NUL 2>&1
-exit
-`,
-		currentPID, currentPID,
-		newExePath, currentExe,
-		newExePath, currentExe,
-		configPath, backupConfigPath, backupConfigPath, configPath,
-		newExePath,
-		currentExe,
-	)
-
-	if err := os.WriteFile(updaterScript, []byte(scriptContent), 0755); err != nil {
-		return fmt.Errorf("не удалось создать скрипт обновления: %w", err)
+	// 1. Rename running binary to .old
+	oldExe := currentExe + ".old"
+	_ = os.Remove(oldExe)
+	if err := os.Rename(currentExe, oldExe); err != nil {
+		return fmt.Errorf("не удалось переименовать текущий бинарник: %w", err)
 	}
 
-	// 3. Launch updater script detached
-	cmd := exec.Command("cmd.exe", "/C", updaterScript)
+	// 2. Move new binary to currentExe location
+	if err := os.Rename(newExePath, currentExe); err != nil {
+		// Fallback: copy file if across different volumes
+		if copyErr := copyFile(newExePath, currentExe); copyErr != nil {
+			_ = os.Rename(oldExe, currentExe)
+			return fmt.Errorf("не удалось переместить новый бинарник: %w", copyErr)
+		}
+		_ = os.Remove(newExePath)
+	}
+
+	// 3. Launch updated binary
+	cmd := exec.Command(currentExe)
 	cmd.Dir = currentDir
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-	}
-
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("не удалось запустить процесс обновления: %w", err)
+		_ = os.Remove(currentExe)
+		_ = os.Rename(oldExe, currentExe)
+		return fmt.Errorf("не удалось запустить обновленный бинарник: %w", err)
 	}
 
 	// 4. Terminate current process immediately
 	os.Exit(0)
 	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }

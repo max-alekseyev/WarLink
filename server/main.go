@@ -429,6 +429,26 @@ func (s *AppState) getPublicIP(r *http.Request) string {
 	return ""
 }
 
+func (s *AppState) getClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	clientIP := r.Header.Get("X-Real-IP")
+	if clientIP == "" {
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			clientIP = strings.SplitN(fwd, ",", 2)[0]
+			clientIP = strings.TrimSpace(clientIP)
+		}
+	}
+	if clientIP == "" {
+		clientIP, _, _ = net.SplitHostPort(r.RemoteAddr)
+	}
+	if clientIP == "" {
+		clientIP = r.RemoteAddr
+	}
+	return clientIP
+}
+
 func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	activeCount := len(s.sessions)
@@ -670,20 +690,18 @@ func (s *AppState) handleInternalAuth(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	sess, ok := s.sessions[req.Auth]
 	if ok && time.Now().Before(sess.ExpiresAt) {
-		// Verify connecting client IP matches the session's recorded IP
+		// Allow automatic IP migration for valid session
 		connectingIP, _, _ := net.SplitHostPort(req.Addr)
 		if connectingIP == "" {
 			connectingIP = req.Addr
 		}
-		if sess.ClientIP != "" && connectingIP != "" && sess.ClientIP != connectingIP {
-			s.mu.Unlock()
-			log.Printf("[AUTH] REJECTED token %s: IP mismatch (issued for %s, connected from %s)", req.Auth, sess.ClientIP, connectingIP)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": false})
-			return
+		if sess.ClientIP != connectingIP {
+			sess.ClientIP = connectingIP
+			sess.LastSeen = time.Now()
+		} else {
+			sess.LastSeen = time.Now()
 		}
 
-		sess.LastSeen = time.Now()
 		deviceID := sess.DeviceID
 		s.mu.Unlock()
 
@@ -986,6 +1004,16 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Reject officially supported games (WARDOGS is already built into WarLink)
+		if req.SteamAppID == 1867240 || strings.EqualFold(strings.TrimSpace(req.Title), "wardogs") {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Игра WARDOGS уже официально поддерживается в WarLink!",
+			})
+			return
+		}
+
 		tx, err := s.db.Begin()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1242,10 +1270,7 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if clientIP == "" {
-		clientIP = r.RemoteAddr
-	}
+	clientIP := s.getClientIP(r)
 
 	s.mu.RLock()
 	sess, exists := s.sessions[token]
@@ -1261,8 +1286,9 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify connecting client IP matches session IP
-	if sess.ClientIP != "" && clientIP != "" && sess.ClientIP != clientIP {
+	// Verify connecting client IP matches session IP (bypass if connecting via local reverse proxy)
+	isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
+	if !isLocal && sess.ClientIP != "" && clientIP != "" && sess.ClientIP != clientIP {
 		s.mu.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
@@ -1316,9 +1342,18 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	baseGame := strings.TrimSpace(strings.Split(targetGame, "(")[0])
+	baseGame = strings.TrimSpace(strings.Split(baseGame, "•")[0])
+	baseGame = strings.TrimSpace(strings.Split(baseGame, "+")[0])
+	if baseGame == "" {
+		baseGame = targetGame
+	}
+
 	var activeProfiles []aclgen.Profile
 	for _, p := range profiles {
-		if strings.EqualFold(p.ID, targetGame) || strings.EqualFold(p.Name, targetGame) || p.ID == "socials" || p.ID == "wardogs" {
+		if strings.EqualFold(p.ID, targetGame) || strings.EqualFold(p.Name, targetGame) ||
+			strings.EqualFold(p.ID, baseGame) || strings.EqualFold(p.Name, baseGame) ||
+			p.ID == "socials" || p.ID == "wardogs" {
 			activeProfiles = append(activeProfiles, p)
 		}
 	}
@@ -3044,9 +3079,21 @@ const dashboardHTML = `<!DOCTYPE html>
                     playersTbody.innerHTML = players.map(p => {
                         const d = p.connected_at ? new Date(p.connected_at) : null;
                         const connTime = (d && !isNaN(d.getTime())) ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : (p.connected_at || '-');
+                        let modeBadge = '';
+                        const gLower = (p.game || '').toLowerCase();
+                        if (gLower.includes('гибрид')) {
+                            const cleanName = p.game.replace(/\(гибрид\)/gi, '').replace(/•/g, '').trim().toUpperCase() || 'WARDOGS';
+                            modeBadge = '<strong style="color: var(--accent);">' + cleanName + '</strong> ' +
+                                        '<span style="background: rgba(255, 94, 31, 0.18); color: #FF5E1F; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(255, 94, 31, 0.35); margin-left: 4px;">ГИБРИД</span>';
+                        } else if (gLower === 'free_internet' || gLower.includes('свободный')) {
+                            modeBadge = '<strong style="color: var(--blue);">СВОБОДНЫЙ ИНТЕРНЕТ</strong>';
+                        } else {
+                            modeBadge = '<strong style="color: var(--text-main);">' + (p.game || 'WARDOGS').toUpperCase() + '</strong> ' +
+                                        '<span style="background: rgba(34, 197, 94, 0.15); color: #22c55e; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(34, 197, 94, 0.3); margin-left: 4px;">СОЛО</span>';
+                        }
                         return '<tr>' +
                             '<td style="font-family: var(--font-mono); font-weight: 600;">' + p.device_id + '</td>' +
-                            '<td><strong style="color: var(--accent);">' + p.game + '</strong></td>' +
+                            '<td>' + modeBadge + '</td>' +
                             '<td style="font-family: var(--font-mono); color: var(--blue);">' + p.client_ip + '</td>' +
                             '<td>' + connTime + '</td>' +
                             '<td>' + p.duration_desc + '</td>' +

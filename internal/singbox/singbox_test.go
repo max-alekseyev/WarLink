@@ -267,10 +267,7 @@ func TestGenerateConfigHysteria2Outbound(t *testing.T) {
 }
 
 func TestLiveStockholmGateway(t *testing.T) {
-	hmac := os.Getenv("WARLINK_HMAC_SECRET")
-	if hmac == "" {
-		hmac = DefaultHMACSecret
-	}
+	hmac := GetHMACSecret()
 	if GetServerAPI() == "" || hmac == "" {
 		t.Skip("Skipping live gateway test: server API or HMAC secret not configured")
 	}
@@ -388,6 +385,8 @@ func TestManagerScopeChangeDetection(t *testing.T) {
 	mgr := NewManager(t.TempDir())
 	mgr.isRunning = true
 	mgr.includeWebServices = false
+	mgr.targetProcesses = []string{"game.exe"}
+	mgr.currentGame = "wardogs"
 
 	// If scope is unchanged, Start returns nil immediately without stopping or erroring
 	err := mgr.Start([]string{"game.exe"}, false, nil)

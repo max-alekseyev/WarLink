@@ -219,6 +219,10 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			procSet[pClean] = struct{}{}
 		}
 	}
+	if includeWebServices {
+		procSet["Telegram.exe"] = struct{}{}
+		procSet["telegram.exe"] = struct{}{}
+	}
 
 	domainSet := make(map[string]struct{})
 	ipSet := make(map[string]struct{})
@@ -390,10 +394,6 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			PortRange: []string{"27000:27200"},
 			Outbound:  "direct",
 		},
-		SingBoxRouteRule{
-			DomainSuffix: DirectGameDomains,
-			Outbound:     "direct",
-		},
 	)
 
 	// Route specified target processes to hy2-stockholm
@@ -523,7 +523,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				Address:       []string{"172.19.0.1/30"},
 				MTU:           1400,
 				AutoRoute:     true,
-				StrictRoute:   true,
+				StrictRoute:   false,
 				Stack:         "mixed",
 			},
 		},
@@ -535,9 +535,10 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			},
 		},
 		Route: SingBoxRouteConfig{
-			FindProcess:         true,
-			AutoDetectInterface: true,
-			Rules:               rules,
+			DefaultDomainResolver: "dns-local",
+			FindProcess:           true,
+			AutoDetectInterface:   true,
+			Rules:                 rules,
 		},
 		DNS: dnsConfig,
 		Experimental: &SingBoxExperimental{

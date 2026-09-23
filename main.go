@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -35,7 +36,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.0.3"
+var AppVersion = "v2.0.4"
 
 //go:embed ui/*
 var uiFS embed.FS
@@ -763,6 +764,9 @@ func main() {
 	// 0. Ensure Admin privileges for WinDivert and WinTun kernel drivers
 	ensureAdminElevation()
 
+	// 0b. Initialize Windows Job Object to guarantee child daemon termination on exit
+	_ = deps.InitGlobalJobObject()
+
 	// 1. Path check
 	validatePath()
 
@@ -824,6 +828,19 @@ func main() {
 
 	state.eng = engine.New(cfg, appendLog)
 
+	// Clean termination on OS signals (SIGINT / SIGTERM)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		if state.eng != nil {
+			state.eng.Shutdown()
+		}
+		deps.RestoreWindowsNetworkStack(appendLog)
+		deps.CloseGlobalJobObject()
+		os.Exit(0)
+	}()
+
 	appendLog("[INFO] Инициализация WarLink " + AppVersion + "...")
 	appendLog("[OK] Проверка пути и рабочего окружения пройдена")
 	appendLog(fmt.Sprintf("[OK] Журнал работы сохраняется в: %s", logFilePath))
@@ -858,7 +875,8 @@ func main() {
 			state.mu.Unlock()
 
 			tempExe := filepath.Join(deps.GetCoreDir(), "WarLink_update.tmp")
-			appendLog(fmt.Sprintf("[UPDATE] Загрузка обновления %s...", checkRes.LatestVersion))
+			defer os.Remove(tempExe)
+
 			dlErr := updater.DownloadWithProgress(checkRes.ExeURL, tempExe, checkRes.AssetSize, func(pct int, msg string) {
 				state.mu.Lock()
 				state.updatePct = pct
@@ -871,12 +889,6 @@ func main() {
 				state.isUpdating = false
 				state.mu.Unlock()
 			} else {
-				state.mu.Lock()
-				state.updatePct = 99
-				state.updateMsg = "Проверка целостности SHA-256..."
-				state.mu.Unlock()
-
-				appendLog("[UPDATE] Верификация контрольной суммы SHA-256...")
 				ok, vErr := updater.VerifySha256(tempExe, checkRes.Sha256URL)
 				if !ok || vErr != nil {
 					appendLog(fmt.Sprintf("[ERROR] Ошибка проверки целостности обновления: %v", vErr))
@@ -891,6 +903,9 @@ func main() {
 
 					appendLog("[UPDATE] Верификация пройдена! Сохранение config.json и бесшовная замена...")
 					time.Sleep(1200 * time.Millisecond)
+					if state.eng != nil {
+						state.eng.Shutdown()
+					}
 					_ = updater.ApplyUpdateAndRestart(tempExe)
 					return // Application restarted
 				}
@@ -1061,64 +1076,27 @@ func main() {
 			serverIP := singbox.GetServerIP()
 			if serverIP != "" {
 				rtt := measureGatewayRTT(serverIP)
-				if rtt > 5 {
-					state.mu.Lock()
-					state.gatewayRealPing = rtt
-					state.mu.Unlock()
-				}
-			}
-			st, err := singbox.GetServerGatewayStatus()
-			if err == nil && st != nil {
 				state.mu.Lock()
-				state.gatewayStatus = st
+				if rtt > 5 {
+					state.gatewayRealPing = rtt
+				} else {
+					state.gatewayRealPing = 0
+				}
 				state.mu.Unlock()
 			}
+			st, err := singbox.GetServerGatewayStatus()
+			state.mu.Lock()
+			if err == nil && st != nil {
+				state.gatewayStatus = st
+			} else {
+				state.gatewayStatus = nil
+			}
+			state.mu.Unlock()
 		}
 		pollGateway()
 		ticker := time.NewTicker(4 * time.Second)
 		for range ticker.C {
 			pollGateway()
-		}
-	}()
-
-	// Silent auto-reconnect monitor.
-	// If the engine says "connected" but sing-box has died and the watchdog cannot
-	// revive it (e.g. session token expired / auth permanently rejected), we do a
-	// full quiet reconnect after a short grace period.
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		var failCount int
-		for range ticker.C {
-			if !state.eng.IsConnected() {
-				failCount = 0
-				continue
-			}
-			if state.eng.IsSingboxAlive() {
-				failCount = 0
-				continue
-			}
-			// sing-box dead while engine considers itself connected
-			failCount++
-			if failCount < 2 { // one extra cycle grace before acting
-				continue
-			}
-			failCount = 0
-			appendLog("[WARN] Туннель разорван. Автоматическое переподключение через 3с...")
-			time.Sleep(3 * time.Second)
-			if !state.eng.IsConnected() {
-				continue // user disconnected manually in the meantime
-			}
-			singbox.InvalidateSession()
-			_ = state.eng.Disconnect()
-			time.Sleep(500 * time.Millisecond)
-			go func() {
-				if err := state.eng.ConnectPipeline(nil); err != nil {
-					appendLog(fmt.Sprintf("[ERROR] Автопереподключение не удалось: %v", err))
-				} else {
-					appendLog("[OK] Соединение автоматически восстановлено")
-				}
-			}()
 		}
 	}()
 
@@ -1137,12 +1115,12 @@ func main() {
 		if gwPing <= 1 && state.gatewayStatus != nil && state.gatewayStatus.PingHintMs > 1 {
 			gwPing = state.gatewayStatus.PingHintMs
 		}
-		if gwPing <= 0 {
-			gwPing = 27 // Stockholm gateway baseline
-		}
 
 		totalPing := gwPing
-		pingLabel := fmt.Sprintf("%d мс", gwPing)
+		pingLabel := "— мс"
+		if gwPing > 0 {
+			pingLabel = fmt.Sprintf("%d мс", gwPing)
+		}
 
 		gwSlots := "—"
 		gwDays := 0
@@ -1206,11 +1184,7 @@ func main() {
 		}
 		state.mu.Unlock()
 
-		logsMu.Lock()
-		logsCopy := make([]string, len(state.logs))
-		copy(logsCopy, state.logs)
-		logsMu.Unlock()
-		resp["logs"] = logsCopy
+		resp["logs"] = []string{}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -1908,9 +1882,9 @@ func main() {
 	// Strip WS_VISIBLE, position offscreen (-32000, -32000), strip captions
 	tid, _, _ := procGetCurrentThreadId.Call()
 	var hHook uintptr
-	hookCb := syscall.NewCallback(func(nCode int32, wParam, lParam uintptr) uintptr {
+	hookCb := syscall.NewCallback(func(nCode int32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 		if nCode == HCBT_CREATEWND {
-			cbt := (*CBT_CREATEWND)(unsafe.Pointer(lParam))
+			cbt := (*CBT_CREATEWND)(lParam)
 			if cbt != nil && cbt.Lpcs != nil {
 				// Strip caption, thick frame, maximize box, and visible flag
 				cbt.Lpcs.Style &^= (WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VISIBLE)
@@ -1921,7 +1895,7 @@ func main() {
 				cbt.Lpcs.Cy = 370
 			}
 		}
-		r, _, _ := procCallNextHookEx.Call(hHook, uintptr(nCode), wParam, lParam)
+		r, _, _ := procCallNextHookEx.Call(hHook, uintptr(nCode), wParam, uintptr(lParam))
 		return r
 	})
 	hHook, _, _ = procSetWindowsHookEx.Call(uintptr(WH_CBT), hookCb, 0, tid)
@@ -2090,6 +2064,8 @@ func main() {
 
 	// 2. Full unconditional teardown of all network tunnels, processes and WinDivert drivers on application exit
 	state.eng.Shutdown()
+	deps.RestoreWindowsNetworkStack(appendLog)
+	deps.CloseGlobalJobObject()
 
 	_ = server.Close()
 	wv.Destroy()

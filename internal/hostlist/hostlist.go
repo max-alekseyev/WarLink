@@ -272,16 +272,46 @@ func (m *Manager) saveCache() {
 	}
 }
 
+// GetGeneralHosts returns all target domains excluding YouTube/Google (handled by list-google.txt)
+// and Stockholm tunnel domains (Telegram, Meta, Twitter, WhatsApp), which bypass WinDivert to prevent desync collisions.
+func (m *Manager) GetGeneralHosts() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	hostSet := make(map[string]struct{})
+	for cat, list := range m.categories {
+		if cat == "youtube" {
+			continue // Handled strictly by list-google.txt
+		}
+		if cat == "meta" || cat == "twitter_x" || cat == "telegram" || cat == "whatsapp" {
+			continue // Handled strictly through Stockholm Hysteria 2 gateway
+		}
+		for _, h := range list {
+			h = strings.ToLower(strings.TrimSpace(h))
+			if h != "" && !strings.HasPrefix(h, "#") {
+				hostSet[h] = struct{}{}
+			}
+		}
+	}
+
+	all := make([]string, 0, len(hostSet))
+	for h := range hostSet {
+		all = append(all, h)
+	}
+	sort.Strings(all)
+	return all
+}
+
 // ExportFreeInternetList creates warlink_core/zapret/lists/list-free-internet.txt for winws
 func (m *Manager) ExportFreeInternetList() (string, error) {
 	zapretListsDir := filepath.Join(deps.GetZapretDir(), "lists")
 	_ = os.MkdirAll(zapretListsDir, 0755)
 
 	destFile := filepath.Join(zapretListsDir, "list-free-internet.txt")
-	hosts := m.GetAllHosts()
+	hosts := m.GetGeneralHosts()
 
 	var sb strings.Builder
-	sb.WriteString("# WarLink v1.1.0 - Free Internet Domain List\n")
+	sb.WriteString("# WarLink - Free Internet Domain List\n")
 	sb.WriteString("# Auto-generated and maintained for selective DPI desynchronization\n\n")
 	for _, h := range hosts {
 		sb.WriteString(h)

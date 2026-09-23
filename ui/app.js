@@ -22,6 +22,14 @@ let lastShowcaseStateKey = '';
 let isVotingEnabled = true;
 let isDonateEnabled = true;
 
+const GAME_ICON_FALLBACK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="6" x2="10" y1="11" y2="11" />
+    <line x1="8" x2="8" y1="9" y2="13" />
+    <line x1="15" x2="15.01" y1="12" y2="12" />
+    <line x1="18" x2="18.01" y1="10" y2="10" />
+    <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
+</svg>`;
+
 // --- Window Dragging and Controls ---
 function handleTitlebarMouseDown(e) {
     if (e.target.closest('.win-btn') || e.target.closest('.free-net-toggle')) return;
@@ -234,6 +242,7 @@ function onGameClick(gameId) {
 }
 
 async function quickLaunchGame(gameId) {
+    lastShownError = '';
     selectedGameId = gameId;
     launchingGameId = gameId;
     renderShowcase(cachedGames, gameId);
@@ -446,7 +455,6 @@ async function selectGame(gameId) {
 
 async function deleteGame(e, gameId) {
     if (e) e.stopPropagation();
-    if (!confirm('Удалить эту игру из витрины?')) return;
 
     try {
         await fetch('/api/delete-game', {
@@ -456,6 +464,7 @@ async function deleteGame(e, gameId) {
         });
         lastShowcaseStateKey = '';
         fetchStatus();
+        showToast('Игра удалена из витрины');
     } catch (e) {
         console.error('Delete game error:', e);
     }
@@ -531,28 +540,30 @@ function renderVoteAutocomplete(items) {
         return;
     }
     box.innerHTML = '';
-    const fallbackSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="6" x2="10" y1="11" y2="11" />
-        <line x1="8" x2="8" y1="9" y2="13" />
-        <line x1="15" x2="15.01" y1="12" y2="12" />
-        <line x1="18" x2="18.01" y1="10" y2="10" />
-        <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
-    </svg>`;
 
-    items.slice(0, 6).forEach(item => {
+    // Exclude already supported games (WARDOGS)
+    const validItems = items.filter(it => it && parseInt(it.id) !== 1867240 && (!it.name || !it.name.toLowerCase().includes('wardogs')));
+
+    if (validItems.length === 0) {
+        box.style.display = 'none';
+        return;
+    }
+
+    validItems.slice(0, 6).forEach(item => {
         const div = document.createElement('div');
         div.className = 'vote-autocomplete-item';
+        div.dataset.appId = item.id;
         const iconSrc = item.tiny_image || item.icon_url || item.icon || '';
         div.innerHTML = `
             <div class="vote-item-icon-box">
                 ${iconSrc ? `<img class="vote-item-icon" src="${escapeHtml(iconSrc)}" alt="" onerror="this.style.display='none'; if (this.nextElementSibling) this.nextElementSibling.style.display='flex';">` : ''}
                 <div class="vote-fallback-icon" style="${iconSrc ? 'display:none;' : 'display:flex;'}">
-                    ${fallbackSvg}
+                    ${GAME_ICON_FALLBACK_SVG}
                 </div>
             </div>
             <span class="vote-item-title">${escapeHtml(item.name || 'Игра')}</span>
         `;
-        div.onclick = () => selectSteamGameForVote(item);
+        div.addEventListener('click', () => selectSteamGameForVote(item));
         box.appendChild(div);
     });
     box.style.display = 'block';
@@ -591,7 +602,7 @@ async function submitProposedGame() {
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
-            alert(data.error || 'Ошибка при отправке голоса');
+            showToast(data.error || 'Ошибка при отправке голоса');
             return;
         }
         hideVotePreview();
@@ -599,7 +610,7 @@ async function submitProposedGame() {
         if (input) input.value = '';
         await loadCommunityVotes();
     } catch (e) {
-        alert('Не удалось связаться с сервером голосования');
+        showToast('Не удалось связаться с сервером голосования');
     }
 }
 
@@ -616,12 +627,12 @@ async function voteForGame(appId, title, iconUrl) {
         });
         const data = await res.json();
         if (!res.ok || !data.success) {
-            alert(data.error || 'Ошибка при голосовании');
+            showToast(data.error || 'Ошибка при голосовании');
             return;
         }
         await loadCommunityVotes();
     } catch (e) {
-        alert('Ошибка связи с сервером');
+        showToast('Ошибка связи с сервером');
     }
 }
 
@@ -668,32 +679,36 @@ async function loadCommunityVotes() {
             const pct = Math.min(100, Math.round((votesCount / targetVotes) * 100));
             const isWinner = g.status === 'queue_integration' || votesCount >= targetVotes;
 
-            let actionBtn = '';
+            let actionEl;
             if (isWinner) {
-                actionBtn = '<span class="badge-winner">В очереди на интеграцию</span>';
+                actionEl = document.createElement('span');
+                actionEl.className = 'badge-winner';
+                actionEl.textContent = 'В очереди на интеграцию';
             } else if (g.user_voted) {
-                actionBtn = `<button class="btn-vote active" onclick="retractGameVote(${g.steam_app_id})" title="Нажмите, чтобы отозвать голос">Отдано</button>`;
+                actionEl = document.createElement('button');
+                actionEl.className = 'btn-vote active';
+                actionEl.title = 'Нажмите, чтобы отозвать голос';
+                actionEl.textContent = 'Отдано';
+                actionEl.dataset.appId = g.steam_app_id;
+                actionEl.addEventListener('click', () => retractGameVote(g.steam_app_id));
             } else {
-                const titleEsc = escapeHtml(g.title).replace(/'/g, "\\'");
-                const iconEsc = escapeHtml(g.icon_url).replace(/'/g, "\\'");
-                actionBtn = `<button class="btn-vote" onclick="voteForGame(${g.steam_app_id}, '${titleEsc}', '${iconEsc}')">Голосовать</button>`;
+                actionEl = document.createElement('button');
+                actionEl.className = 'btn-vote';
+                actionEl.textContent = 'Голосовать';
+                actionEl.dataset.appId = g.steam_app_id;
+                actionEl.dataset.title = g.title || '';
+                actionEl.dataset.iconUrl = g.icon_url || '';
+                actionEl.addEventListener('click', () => voteForGame(g.steam_app_id, g.title, g.icon_url));
             }
 
             const iconSrc = g.icon_url || '';
-            const fallbackSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="6" x2="10" y1="11" y2="11" />
-                <line x1="8" x2="8" y1="9" y2="13" />
-                <line x1="15" x2="15.01" y1="12" y2="12" />
-                <line x1="18" x2="18.01" y1="10" y2="10" />
-                <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
-            </svg>`;
 
             card.innerHTML = `
                 <div class="vote-card-main">
                     <div class="vote-card-icon-box">
                         ${iconSrc ? `<img class="vote-card-icon" src="${escapeHtml(iconSrc)}" alt="" onerror="this.style.display='none'; if (this.nextElementSibling) this.nextElementSibling.style.display='flex';">` : ''}
                         <div class="vote-fallback-icon" style="${iconSrc ? 'display:none;' : 'display:flex;'}">
-                            ${fallbackSvg}
+                            ${GAME_ICON_FALLBACK_SVG}
                         </div>
                     </div>
                     <div class="vote-card-info">
@@ -706,8 +721,10 @@ async function loadCommunityVotes() {
                         </div>
                     </div>
                 </div>
-                ${actionBtn}
             `;
+            if (actionEl) {
+                card.appendChild(actionEl);
+            }
             listEl.appendChild(card);
         });
     } catch (e) {
@@ -716,7 +733,10 @@ async function loadCommunityVotes() {
 }
 
 // --- API / State Sync ---
+let isFetchingStatus = false;
 async function fetchStatus() {
+    if (isFetchingStatus) return;
+    isFetchingStatus = true;
     try {
         const resp = await fetch('/api/status');
         if (resp.ok) {
@@ -725,10 +745,19 @@ async function fetchStatus() {
         }
     } catch (err) {
         console.error('Fetch status error:', err);
+    } finally {
+        isFetchingStatus = false;
     }
 }
 
 function updateUI(data) {
+    if (data.version) {
+        const verEl = document.querySelector('.brand-version');
+        if (verEl && verEl.textContent !== data.version) {
+            verEl.textContent = data.version;
+        }
+    }
+
     isConnected = !!data.is_connected;
     isBusy = !!data.is_busy;
     isDownloadingDeps = !!data.is_downloading_deps;
@@ -895,6 +924,7 @@ function updateUI(data) {
 }
 
 async function toggleConnect() {
+    lastShownError = '';
     if (isBusy || isDownloadingDeps || isInitializing) return;
 
     if (isConnected) {
@@ -954,5 +984,8 @@ async function donateServer(e) {
 // Initial boot
 document.addEventListener('DOMContentLoaded', () => {
     fetchStatus();
+    if (typeof window.revealWindow === 'function') {
+        window.revealWindow();
+    }
     setInterval(fetchStatus, 1500);
 });
