@@ -44,7 +44,8 @@ type Engine struct {
 	singboxMgr         *singbox.Manager
 	telemetry          *TelemetryMonitor
 	pingMeter          *pingmeter.Meter
-	watchdogStop       chan struct{}
+	watchdogStop           chan struct{}
+	singboxRestartAttempts int
 }
 
 func New(cfg *config.Config, logCb func(string)) *Engine {
@@ -659,7 +660,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	return nil
 }
 
-// Disconnect gracefully disconnects Cloudflare WARP and Zapret without holding the mutex during I/O.
+// Disconnect gracefully disconnects Hysteria 2 and Zapret without holding the mutex during I/O.
 func (e *Engine) Disconnect() error {
 	e.transitionMu.Lock()
 	defer e.transitionMu.Unlock()
@@ -721,7 +722,7 @@ func (e *Engine) disconnectInternal() error {
 			// Seamlessly transition sing-box to Web-Only mode (remove game process)
 			_ = e.singboxMgr.Start(nil, true, e.log, "free_internet")
 		}
-		e.log("[INFO] Селективный туннель Cloudflare MASQUE остается активным для Telegram и WhatsApp")
+		e.log("[INFO] Селективный туннель Hysteria 2 остается активным для Telegram, Meta и WhatsApp")
 	}
 
 	e.mu.Lock()
@@ -912,8 +913,17 @@ func (e *Engine) checkProcessHealth() {
 		}
 
 		if startErr := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID); startErr != nil {
-			e.log(fmt.Sprintf("[ERROR] Не удалось перезапустить туннель: %v", startErr))
+			e.singboxRestartAttempts++
+			e.log(fmt.Sprintf("[ERROR] Не удалось перезапустить туннель (попытка %d/3): %v", e.singboxRestartAttempts, startErr))
+			if e.singboxRestartAttempts >= 3 {
+				e.log("[ERROR] Превышен лимит попыток восстановления туннеля (шлюз перегружен или недоступен). Сессия отключена.")
+				e.singboxRestartAttempts = 0
+				go func() {
+					_ = e.Disconnect()
+				}()
+			}
 		} else {
+			e.singboxRestartAttempts = 0
 			e.log("[OK] Туннель автоматически восстановлен")
 		}
 	}

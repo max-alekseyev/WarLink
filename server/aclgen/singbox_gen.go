@@ -74,13 +74,29 @@ var CRLDomains = []string{
 // DirectGameDomains contains domains that must route directly (bypassing Hysteria tunnel and FakeIP)
 // for maximum speed, compatibility, and anti-cheat validation.
 var DirectGameDomains = []string{
+	// Anti-cheat / game CDN
 	"elytra.ac",
 	"certainly.com",
 	"pki.goog",
+	// Steam
 	"steamserver.net",
 	"steampowered.com",
 	"steamcommunity.com",
 	"steamstatic.com",
+	"steamgames.com",
+	// Epic Games Store — WARDOGS lobby auth & backend
+	"epicgames.com",
+	"epicgames.dev",
+	"epicgames.net",
+	"unrealengine.com",
+	"ol.epicgames.com",
+	"api.epicgames.dev",
+	// EGS CDN & auth services
+	"cloudfront.net",
+	"amazonaws.com",
+	// AWS GameLift infrastructure (match server assignment API)
+	"gamelift.us-east-1.amazonaws.com",
+	// Time sync
 	"time.cloudflare.com",
 }
 
@@ -92,11 +108,24 @@ var DirectLauncherProcesses = []string{
 	"wardogslauncher.exe",
 	"Elytra-Setup.exe",
 	"elytra-setup.exe",
+	"elytra-launcher.exe",
+	"elytraclient.exe",
 	"service.exe",
 	"control.exe",
 	"crashpad_handler.exe",
 	"CrashReportClient.exe",
 	"crashreportclient.exe",
+	// Anti-cheat services and background daemons (must bypass tunnel)
+	"vgc.exe",
+	"vgtray.exe",
+	"EasyAntiCheat.exe",
+	"easyanticheat.exe",
+	"EasyAntiCheat_EOS.exe",
+	"easyanticheat_eos.exe",
+	"BEService.exe",
+	"beservice.exe",
+	"faceitclient.exe",
+	"faceitservice.exe",
 }
 
 type SingBoxLogConfig struct {
@@ -286,13 +315,13 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		{
 			Action: "sniff",
 		},
-		// 1. Exclude core daemons, local DNS proxies, WarLink, Antigravity IDE, and game launchers/anti-cheat from TUN routing
+		// 1. Exclude core daemons, local DNS proxies, WarLink, and Antigravity IDE from TUN routing
 		{
-			ProcessName: append([]string{
+			ProcessName: []string{
 				"sing-box.exe", "winws2.exe", "winws.exe", "WarLink.exe", "warlink.exe",
 				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe", "dnsproxy.exe", "cloudflared.exe", "stubby.exe", "AdGuardSvc.exe",
 				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
-			}, DirectLauncherProcesses...),
+			},
 			Outbound: "direct",
 		},
 		// 2. All plain HTTP (port 80) routes direct for instant CRL/OCSP revocation checks
@@ -326,9 +355,15 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			Outbound: "direct",
 		},
 		// 5. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
 			Outbound: "hy2-stockholm",
+		},
+		// 5b. Game launchers and anti-cheat processes route direct when connecting to real IPs
+		{
+			ProcessName: DirectLauncherProcesses,
+			Outbound:    "direct",
 		},
 		// 6. Hijack remaining DNS queries to resolve through sing-box DNS engine
 		{
@@ -521,7 +556,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
 				Address:       []string{"172.19.0.1/30"},
-				MTU:           1400,
+				MTU:           1360,
 				AutoRoute:     true,
 				StrictRoute:   false,
 				Stack:         "mixed",

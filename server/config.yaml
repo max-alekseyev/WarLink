@@ -23,10 +23,10 @@ bandwidth:
   down: 1 gbps
 
 quic:
-  initStreamReceiveWindow: 8388608
-  maxStreamReceiveWindow: 8388608
-  initConnReceiveWindow: 20971520
-  maxConnReceiveWindow: 20971520
+  initStreamReceiveWindow: 262144
+  maxStreamReceiveWindow: 262144
+  initConnReceiveWindow: 524288
+  maxConnReceiveWindow: 524288
   maxIdleTimeout: 30s
   keepAlivePeriod: 10s
 

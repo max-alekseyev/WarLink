@@ -18,32 +18,41 @@ var (
 	procDnsFlushResolverCache = modDnsApi.NewProc("DnsFlushResolverCache")
 )
 
-// CleanupZombieWintunAdapter removes phantom WarLink-Tun wintun interface via netsh.
+// CleanupZombieWintunAdapter removes phantom WarLink-Tun / Wintun interface via pnputil and netsh.
 func CleanupZombieWintunAdapter(logFn func(string)) {
 	if logFn != nil {
 		logFn("[INFO] Очистка остаточного сетевого адаптера WarLink-Tun...")
 	}
 
-	cmd := exec.Command("netsh", "interface", "delete", "interface", "name=WarLink-Tun")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	if out, err := cmd.CombinedOutput(); err == nil {
-		if logFn != nil {
-			logFn("[OK] Сетевой адаптер WarLink-Tun успешно удален")
+	// 1. Remove device node via Windows PnP utility
+	cmdEnum := exec.Command("pnputil", "/enum-devices", "/class", "Net")
+	cmdEnum.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	if out, err := cmdEnum.Output(); err == nil {
+		lines := strings.Split(string(out), "\n")
+		var currentInstanceID string
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Instance ID:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 3 {
+					currentInstanceID = parts[2]
+				}
+			} else if (strings.Contains(line, "sing-tun") || strings.Contains(line, "WarLink") || strings.Contains(line, "Wintun")) && strings.HasPrefix(currentInstanceID, "SWD\\Wintun\\") {
+				cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
+				cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+				_ = cmdRm.Run()
+				if logFn != nil {
+					logFn(fmt.Sprintf("[OK] Устройство сетевого адаптера %s удалено", currentInstanceID))
+				}
+				currentInstanceID = ""
+			}
 		}
-		return
-	} else {
-		_ = out
 	}
 
-	cmd2 := exec.Command("netsh", "interface", "delete", "interface", "WarLink-Tun")
-	cmd2.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	if out2, err2 := cmd2.CombinedOutput(); err2 == nil {
-		if logFn != nil {
-			logFn("[OK] Сетевой адаптер WarLink-Tun успешно удален")
-		}
-	} else {
-		_ = out2
-	}
+	// 2. Fallback to netsh
+	cmd := exec.Command("netsh", "interface", "delete", "interface", "name=WarLink-Tun")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	_ = cmd.Run()
 }
 
 // FlushDNSResolverCache flushes the Windows DNS resolver cache using dnsapi.dll!DnsFlushResolverCache

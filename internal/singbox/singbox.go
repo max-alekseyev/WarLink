@@ -1,9 +1,7 @@
 package singbox
 
 import (
-	"archive/zip"
 	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -25,11 +23,7 @@ import (
 
 	"golang.org/x/sys/windows/registry"
 	"warlink/internal/config"
-)
-
-const (
-	SingBoxDownloadURL = "https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.0-extended-2.7.1/sing-box-1.14.0-extended-2.7.1-windows-amd64.zip"
-	WintunDownloadURL  = "https://www.wintun.net/builds/wintun-0.14.1.zip"
+	"warlink/internal/embedded"
 )
 
 var (
@@ -317,11 +311,24 @@ var DirectLauncherProcesses = []string{
 	"wardogslauncher.exe",
 	"Elytra-Setup.exe",
 	"elytra-setup.exe",
+	"elytra-launcher.exe",
+	"elytraclient.exe",
 	"service.exe",
 	"control.exe",
 	"crashpad_handler.exe",
 	"CrashReportClient.exe",
 	"crashreportclient.exe",
+	// Anti-cheat services and background daemons (must bypass tunnel)
+	"vgc.exe",
+	"vgtray.exe",
+	"EasyAntiCheat.exe",
+	"easyanticheat.exe",
+	"EasyAntiCheat_EOS.exe",
+	"easyanticheat_eos.exe",
+	"BEService.exe",
+	"beservice.exe",
+	"faceitclient.exe",
+	"faceitservice.exe",
 }
 
 // WardogsGameProcesses contains process names for WARDOGS dedicated game client.
@@ -911,13 +918,13 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		{
 			Action: "sniff",
 		},
-		// 1. Exclude core daemons, local DNS proxies, WarLink, Antigravity IDE, and game launchers/anti-cheat from TUN routing
+		// 1. Exclude core daemons, local DNS proxies, WarLink, and Antigravity IDE from TUN routing
 		{
-			ProcessName: append([]string{
+			ProcessName: []string{
 				"sing-box.exe", "winws2.exe", "winws.exe", "WarLink.exe", "warlink.exe",
 				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe", "dnsproxy.exe", "cloudflared.exe", "stubby.exe", "AdGuardSvc.exe",
 				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
-			}, DirectLauncherProcesses...),
+			},
 			Outbound: "direct",
 		},
 		// 2. All plain HTTP (port 80) routes direct for instant CRL/OCSP revocation checks
@@ -951,9 +958,15 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			Outbound: "direct",
 		},
 		// 5. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
 			Outbound: "hy2-stockholm",
+		},
+		// 5b. Game launchers and anti-cheat processes route direct when connecting to real IPs
+		{
+			ProcessName: DirectLauncherProcesses,
+			Outbound:    "direct",
 		},
 		// 5b. Google, Antigravity, and AI services must NEVER be hijacked by sing-box DNS -
 		// they must resolve via local system / ag_dns directly without interference!
@@ -1163,7 +1176,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
 				Address:       []string{"172.19.0.1/30"},
-				MTU:           1400,
+				MTU:           1360,
 				AutoRoute:     true,
 				StrictRoute:   false,
 				Stack:         "mixed",
@@ -1274,7 +1287,7 @@ func (m *Manager) HasBinaries() bool {
 	return true
 }
 
-// EnsureFiles downloads and extracts sing-box and wintun if missing or outdated.
+// EnsureFiles unpacks sing-box and wintun from embedded assets without requiring network download.
 func (m *Manager) EnsureFiles(logFn func(string)) error {
 	if m.HasBinaries() {
 		return nil
@@ -1285,63 +1298,16 @@ func (m *Manager) EnsureFiles(logFn func(string)) error {
 		return fmt.Errorf("failed to create singbox dir: %w", err)
 	}
 
-	// 1. Check sing-box with with_quic
-	needDownload := false
-	if _, err := os.Stat(m.GetExePath()); err != nil {
-		needDownload = true
-	} else {
-		cmd := exec.Command(m.GetExePath(), "version")
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		out, err := cmd.Output()
-		if err != nil || !strings.Contains(string(out), "with_quic") {
-			needDownload = true
-		}
+	if logFn != nil {
+		logFn("[INFO] Распаковка встроенных компонентов sing-box и Wintun...")
 	}
 
-	if needDownload {
-		if logFn != nil {
-			logFn("[INFO] Загрузка сетевого роутера sing-box с поддержкой Hysteria 2 / QUIC...")
-		}
-		_ = os.Remove(m.GetExePath())
-		if err := downloadAndExtractZip(SingBoxDownloadURL, binDir, "sing-box.exe", m.GetExePath()); err != nil {
-			return fmt.Errorf("ошибка скачивания sing-box: %w", err)
-		}
-		if logFn != nil {
-			logFn("[OK] sing-box успешно установлен")
-		}
+	if err := embedded.EnsureSingBoxEmbedded(binDir); err != nil {
+		return fmt.Errorf("ошибка распаковки компонентов sing-box: %w", err)
 	}
 
-	// 2. Check/Copy/Download wintun.dll
-	if _, err := os.Stat(m.GetWintunPath()); err != nil {
-		// First check local system installations for existing signed wintun.dll
-		localCandidates := []string{
-			filepath.Join(os.Getenv("ProgramFiles"), "Cloudflare", "Cloudflare WARP", "wintun.dll"),
-			filepath.Join(os.Getenv("ProgramFiles"), "WireGuard", "wintun.dll"),
-			filepath.Join(os.Getenv("ProgramFiles"), "FlyFrogLLC", "Happ", "core", "wintun.dll"),
-		}
-		copied := false
-		for _, cand := range localCandidates {
-			if data, readErr := os.ReadFile(cand); readErr == nil && len(data) > 100000 {
-				if writeErr := os.WriteFile(m.GetWintunPath(), data, 0755); writeErr == nil {
-					if logFn != nil {
-						logFn("[OK] Драйвер WinTun успешно инициализирован из локальной системы")
-					}
-					copied = true
-					break
-				}
-			}
-		}
-		if !copied {
-			if logFn != nil {
-				logFn("[INFO] Скачивание официального драйвера WinTun...")
-			}
-			if err := downloadAndExtractZip(WintunDownloadURL, binDir, "wintun.dll", m.GetWintunPath()); err != nil {
-				return fmt.Errorf("ошибка скачивания wintun.dll: %w", err)
-			}
-			if logFn != nil {
-				logFn("[OK] wintun.dll готов к работе")
-			}
-		}
+	if logFn != nil {
+		logFn("[OK] sing-box и Wintun успешно инициализированы")
 	}
 
 	return nil
@@ -1647,67 +1613,7 @@ func (m *Manager) IsProcessAlive() bool {
 	return m.isProcessAliveLocked()
 }
 
-func downloadAndExtractZip(url, destDir, targetFileName, finalDestPath string) error {
-	client := &http.Client{
-		Timeout: 60 * time.Second,
-		Transport: &http.Transport{
-			Proxy: nil, // Bypass any system/env proxy — component downloads must go direct
-		},
-	}
-	req, err := http.NewRequestWithContext(context.Background(), "GET", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/2.0")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP error: %s", resp.Status)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	zipReader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-
-	for _, file := range zipReader.File {
-		if strings.EqualFold(filepath.Base(file.Name), targetFileName) {
-			// If it's wintun, ensure we pick amd64 if path has amd64
-			if targetFileName == "wintun.dll" && !strings.Contains(strings.ToLower(file.Name), "amd64") {
-				continue
-			}
-
-			rc, err := file.Open()
-			if err != nil {
-				return err
-			}
-			defer rc.Close()
-
-			outFile, err := os.OpenFile(finalDestPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-			if err != nil {
-				return err
-			}
-			defer outFile.Close()
-
-			if _, err := io.Copy(outFile, rc); err != nil {
-				return err
-			}
-			return nil
-		}
-	}
-
-	return fmt.Errorf("файл %s не найден в архиве", targetFileName)
-}
 
 func killProcessByName(name string) error {
 	cmd := exec.Command("taskkill", "/F", "/IM", name)

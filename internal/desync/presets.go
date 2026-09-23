@@ -361,7 +361,7 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 	}
 
 	// Game-Only Selective Filtering (Free Internet disabled):
-	// 1. Unblocks UDP 443 QUIC so Cloudflare WARP connects smoothly through ISP.
+	// 1. Unblocks UDP 443 QUIC so Hysteria 2 connects smoothly through ISP.
 	// 2. Unblocks voice UDP ports (Discord voice and RTP).
 	// WinDivert does NOT hook TCP 80/443, so browser and system traffic remain 100% direct!
 	const udpPortsStr = "19294-19344,50000-50100"

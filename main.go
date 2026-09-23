@@ -36,7 +36,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.0.4"
+var AppVersion = "v2.0.5"
 
 //go:embed ui/*
 var uiFS embed.FS
@@ -858,7 +858,7 @@ func main() {
 
 	// Background startup orchestrator:
 	// 1. Check for updates (blocking in-place updater)
-	// 2. Initial component check & setup (if missing WinDivert/singbox/Cloudflare WARP) with blocking UI overlay
+	// 2. Initial component check & setup (WinDivert/singbox/Wintun) with blocking UI overlay
 	// 3. Free Internet sync (if enabled)
 	go func() {
 		time.Sleep(300 * time.Millisecond)
@@ -1461,73 +1461,6 @@ func main() {
 			"title":    title,
 			"icon_url": iconURL,
 		})
-	})
-
-	mux.HandleFunc("/api/add-game", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Title      string `json:"title"`
-			ExePath    string `json:"exe_path"`
-			SteamAppID string `json:"steam_app_id"`
-			IconURL    string `json:"icon_url"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			title := strings.TrimSpace(body.Title)
-			steamAppID := strings.TrimSpace(body.SteamAppID)
-			iconURL := strings.TrimSpace(body.IconURL)
-
-			// If title was passed as a pure number, it's actually an App ID
-			isNumericTitle := regexp.MustCompile(`^\d{3,9}$`).MatchString(title)
-			if steamAppID == "" && isNumericTitle {
-				steamAppID = title
-			}
-
-			// If we have an App ID, and the title is missing/numeric or icon is missing/header/not .ico, resolve it!
-			isNotIco := !strings.HasSuffix(strings.ToLower(iconURL), ".ico")
-			if steamAppID != "" && (title == "" || title == steamAppID || isNumericTitle || iconURL == "" || strings.Contains(iconURL, "header.jpg") || isNotIco) {
-				sTitle, sIcon := resolveSteamIcon(steamAppID)
-				if (title == "" || title == steamAppID || isNumericTitle) && sTitle != "" {
-					title = sTitle
-				}
-				if (iconURL == "" || strings.Contains(iconURL, "header.jpg") || (isNotIco && strings.HasSuffix(strings.ToLower(sIcon), ".ico"))) && sIcon != "" {
-					iconURL = sIcon
-				}
-			}
-
-			if title == "" {
-				if body.ExePath != "" {
-					base := filepath.Base(body.ExePath)
-					title = strings.TrimSuffix(base, filepath.Ext(base))
-				} else if steamAppID != "" {
-					title = "Steam " + steamAppID
-				} else {
-					title = "Игра"
-				}
-			}
-
-			state.mu.Lock()
-			newID := fmt.Sprintf("game_%d", time.Now().UnixNano())
-			newGame := config.GameProfile{
-				ID:           newID,
-				Title:        title,
-				ExePath:      strings.TrimSpace(body.ExePath),
-				SteamAppID:   steamAppID,
-				IconURL:      iconURL,
-				LastPlayed:   time.Now().Unix(),
-				IsDefault:    false,
-				LaunchCount:  0,
-				PreferredAlt: "general (ALT13)",
-			}
-			state.cfg.Games = append(state.cfg.Games, newGame)
-			state.cfg.SelectedGameID = newID
-			_ = state.cfg.Save()
-			state.mu.Unlock()
-			updateTrayStatus(appTray, state)
-			appendLog(fmt.Sprintf("[SHOWCASE] Добавлен ярлык игры: %s", newGame.Title))
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(newGame)
-			return
-		}
-		http.Error(w, "invalid game data", http.StatusBadRequest)
 	})
 
 	mux.HandleFunc("/api/toggle-autolaunch", func(w http.ResponseWriter, r *http.Request) {

@@ -34,7 +34,7 @@
 
     <!-- Badges Row below Title -->
     <rect x="0" y="106" width="68" height="24" rx="3" fill="#161616" stroke="#262626" stroke-width="1" />
-    <text x="34" y="122.5" class="mono" font-size="11" font-weight="700" fill="#a3a3a3" text-anchor="middle">v2.0.4</text>
+    <text x="34" y="122.5" class="mono" font-size="11" font-weight="700" fill="#a3a3a3" text-anchor="middle">v2.0.5</text>
 
     <rect x="76" y="106" width="114" height="24" rx="3" fill="#161616" stroke="#262626" stroke-width="1" />
     <text x="133" y="122.5" class="sans" font-size="11" font-weight="500" fill="#a3a3a3" text-anchor="middle">Standalone app</text>

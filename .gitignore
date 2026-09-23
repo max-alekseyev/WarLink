@@ -12,6 +12,7 @@
 !internal/embedded/assets/bin/*.exe
 !internal/embedded/assets/bin/*.dll
 !internal/embedded/assets/bin/*.sys
+!internal/embedded/assets/bin/*.gz
 server/warlink-server*
 
 # Go Test and Profiling Artifacts
@@ -26,8 +27,8 @@ coverage.html
 *.zip
 *.7z
 *.rar
-*.tar.*
 *.gz
+!internal/embedded/assets/bin/*.gz
 
 # Sensitive Credentials and Configs
 config.json

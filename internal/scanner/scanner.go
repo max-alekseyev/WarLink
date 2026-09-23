@@ -18,6 +18,10 @@ var ConflictingProcessNames = []string{
 	"zapret.exe",
 	"warp-svc.exe",
 	"warp-cli.exe",
+	"wireguard.exe",
+	"openvpn.exe",
+	"amnezia-vpn.exe",
+	"clash-verge.exe",
 }
 
 // FindConflicts returns a list of conflicting processes currently running.
