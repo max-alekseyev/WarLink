@@ -100,12 +100,9 @@ var DirectGameDomains = []string{
 	"time.cloudflare.com",
 }
 
-// DirectLauncherProcesses contains launcher, anti-cheat installer, and background crash reporting
-// processes that should always route directly without tunnel encapsulation.
+// DirectLauncherProcesses contains anti-cheat installer, crash reporting,
+// and third-party anti-cheat daemons that must bypass the tunnel.
 var DirectLauncherProcesses = []string{
-	"WardogsLauncher-Shipping.exe",
-	"wardogslauncher-shipping.exe",
-	"wardogslauncher.exe",
 	"Elytra-Setup.exe",
 	"elytra-setup.exe",
 	"elytra-launcher.exe",
@@ -128,6 +125,17 @@ var DirectLauncherProcesses = []string{
 	"faceitservice.exe",
 }
 
+// WardogsGameProcesses contains process names for WARDOGS dedicated game client and launcher.
+var WardogsGameProcesses = []string{
+	"WardogsClient-Win64-Shipping.exe",
+	"wardogsclient-win64-shipping.exe",
+	"wardogs.exe",
+	"wardogs-win64-shipping.exe",
+	"WardogsLauncher-Shipping.exe",
+	"wardogslauncher-shipping.exe",
+	"wardogslauncher.exe",
+}
+
 type SingBoxLogConfig struct {
 	Disabled bool   `json:"disabled,omitempty"`
 	Level    string `json:"level,omitempty"`
@@ -135,14 +143,15 @@ type SingBoxLogConfig struct {
 }
 
 type SingBoxInbound struct {
-	Type          string   `json:"type"`
-	Tag           string   `json:"tag"`
-	InterfaceName string   `json:"interface_name"`
-	Address       []string `json:"address"`
-	MTU           int      `json:"mtu,omitempty"`
-	AutoRoute     bool     `json:"auto_route"`
-	StrictRoute   bool     `json:"strict_route"`
-	Stack         string   `json:"stack"`
+	Type                string   `json:"type"`
+	Tag                 string   `json:"tag"`
+	InterfaceName       string   `json:"interface_name"`
+	Address             []string `json:"address"`
+	MTU                 int      `json:"mtu,omitempty"`
+	AutoRoute           bool     `json:"auto_route"`
+	StrictRoute         bool     `json:"strict_route"`
+	Stack               string   `json:"stack"`
+	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
 }
 
 type SingBoxHysteria2Obfs struct {
@@ -420,13 +429,28 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	// Steam Datagram Relay (SDR) ping relays stay direct.
 	rules = append(rules,
 		SingBoxRouteRule{
-			Network:   "udp",
-			PortRange: []string{"4000:4500"},
-			Outbound:  "hy2-stockholm",
+			Network:     "udp",
+			PortRange:   []string{"4000:4500"},
+			ProcessName: WardogsGameProcesses,
+			Outbound:    "hy2-stockholm",
 		},
 		SingBoxRouteRule{
 			Network:   "udp",
 			PortRange: []string{"27000:27200"},
+			Outbound:  "direct",
+		},
+	)
+
+	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-50100, 3478) routes direct
+	rules = append(rules,
+		SingBoxRouteRule{
+			Network:  "udp",
+			Port:     []int{3478},
+			Outbound: "direct",
+		},
+		SingBoxRouteRule{
+			Network:   "udp",
+			PortRange: []string{"19294:19344", "50000:50100"},
 			Outbound:  "direct",
 		},
 	)
@@ -557,9 +581,10 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				InterfaceName: "WarLink-Tun",
 				Address:       []string{"172.19.0.1/30"},
 				MTU:           1360,
-				AutoRoute:     true,
-				StrictRoute:   false,
-				Stack:         "mixed",
+				AutoRoute:           true,
+				StrictRoute:         false,
+				Stack:               "mixed",
+				RouteExcludeAddress: []string{"162.159.0.0/16"},
 			},
 		},
 		Outbounds: []SingBoxOutbound{

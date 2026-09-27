@@ -130,7 +130,23 @@
           },
           "unit": "suffix: дн."
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "С балансом"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 4,
@@ -143,7 +159,7 @@
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -151,7 +167,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value_and_name"
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -161,9 +177,21 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_server_days_left",
+          "expr": "max(warlink_server_days_left) or vector(0)",
+          "legendFormat": "Оплачено",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_server_runway_days) or vector(0)",
+          "legendFormat": "С балансом",
+          "range": true,
+          "refId": "B"
         }
       ],
       "title": "Аренда сервера (Aeza)",
@@ -222,7 +250,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_donate_amount_rub",
+          "expr": "max(warlink_donate_amount_rub) or vector(98)",
           "range": true,
           "refId": "A"
         }
@@ -385,17 +413,33 @@
               },
               {
                 "color": "yellow",
-                "value": 2500
+                "value": 3000000000
               },
               {
                 "color": "red",
-                "value": 3500
+                "value": 3600000000
               }
             ]
           },
-          "unit": "decmbytes"
+          "unit": "bytes"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Потолок (Всего)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#737373",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 4,
@@ -408,7 +452,7 @@
         "colorMode": "value",
         "graphMode": "area",
         "justifyMode": "auto",
-        "orientation": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -416,7 +460,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value_and_name"
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -426,12 +470,24 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / 1024 / 1024",
+          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+          "legendFormat": "Занято",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "node_memory_MemTotal_bytes",
+          "legendFormat": "Потолок (Всего)",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Использование RAM",
+      "title": "Оперативная память (RAM)",
       "type": "stat"
     },
     {
@@ -1133,25 +1189,45 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "fixedColor": "#FF5E1F",
+            "fixedColor": "#22c55e",
             "mode": "fixed"
           },
           "unit": "currencyRUB"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "В евро"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 5,
         "x": 0,
         "y": 34
       },
       "id": 20,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
-        "orientation": "auto",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -1159,7 +1235,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value_and_name"
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -1169,64 +1245,24 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_donations_rub_total",
+          "expr": "max(warlink_donations_rub_total) or vector(0)",
+          "legendFormat": "В рублях",
           "range": true,
           "refId": "A"
-        }
-      ],
-      "title": "Собрано донатов",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#22c55e",
-            "mode": "fixed"
-          },
-          "unit": "short"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 34
-      },
-      "id": 21,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_donations_paid_total",
+          "expr": "(max(warlink_donations_rub_total) or vector(0)) / 130.67",
+          "legendFormat": "В евро",
           "range": true,
-          "refId": "A"
+          "refId": "B"
         }
       ],
-      "title": "Оплачено счетов комьюнити",
+      "title": "Собрано донатов комьюнити",
       "type": "stat"
     },
     {
@@ -1246,14 +1282,14 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 12,
+        "w": 3,
+        "x": 5,
         "y": 34
       },
-      "id": 22,
+      "id": 21,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "reduceOptions": {
@@ -1263,7 +1299,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value"
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -1273,12 +1309,199 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_invoices_created_total",
+          "expr": "max(warlink_donations_paid_total) or vector(0)",
+          "legendFormat": "Оплачено",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Выставлено счетов СБП",
+      "title": "Оплачено счетов",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#22c55e",
+            "mode": "fixed"
+          },
+          "unit": "suffix: дн."
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "С учетом баланса"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 34
+      },
+      "id": 22,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_server_days_left) or vector(0)",
+          "legendFormat": "Оплачено",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_server_runway_days) or vector(0)",
+          "legendFormat": "С учетом баланса",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Оплаченный срок VPS",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#FF5E1F",
+            "mode": "fixed"
+          },
+          "unit": "currencyRUB"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Бонусы (€1.82)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#a855f7",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Всего доступно"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#22c55e",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 34
+      },
+      "id": 25,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_aeza_balance_rub) or vector(0)",
+          "legendFormat": "Основной (€0.50)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_aeza_bonus_rub) or vector(0)",
+          "legendFormat": "Бонусы (€1.82)",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "(max(warlink_aeza_balance_rub) + max(warlink_aeza_bonus_rub)) or vector(0)",
+          "legendFormat": "Всего доступно",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Текущий баланс Aeza",
       "type": "stat"
     },
     {
@@ -1291,26 +1514,26 @@
           "color": {
             "mode": "thresholds"
           },
-          "max": 100,
           "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "#ef4444",
                 "value": null
               },
               {
-                "color": "yellow",
+                "color": "#eab308",
                 "value": 50
               },
               {
-                "color": "green",
+                "color": "#22c55e",
                 "value": 100
               }
             ]
           },
-          "unit": "percent"
+          "unit": "percent",
+          "max": 100
         },
         "overrides": []
       },
@@ -1322,7 +1545,7 @@
       },
       "id": 23,
       "options": {
-        "displayMode": "gradient",
+        "displayMode": "basic",
         "minVizHeight": 10,
         "minVizWidth": 0,
         "orientation": "horizontal",
@@ -1343,9 +1566,21 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "clamp_max((warlink_donations_rub_total / on() warlink_server_monthly_price_rub) * 100, 100)",
+          "expr": "max(warlink_server_coverage_percent) or vector(0)",
+          "legendFormat": "Общий горизонт (дни + баланс)",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "(max(warlink_donations_rub_total) / clamp_min(max(warlink_server_monthly_price_rub), 1)) * 100 or vector(0)",
+          "legendFormat": "Сбор донатов на месяц",
+          "range": true,
+          "refId": "B"
         }
       ],
       "title": "Покрытие аренды VPS (Aeza)",
@@ -1485,7 +1720,53 @@
           },
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wardogs"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#22c55e",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "wardogs (гибрид)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "free_internet"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -1697,7 +1978,7 @@
       },
       "id": 9,
       "options": {
-        "content": "<div style=\"background: #111111; border: 1px solid #242424; border-radius: 4px; padding: 20px; font-family: -apple-system, sans-serif;\">\n  <div style=\"display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #242424; padding-bottom: 12px; margin-bottom: 16px;\">\n    <div>\n      <span style=\"font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.5px;\">УПРАВЛЕНИЕ ПАРАМЕТРАМИ ШЛЮЗА</span>\n      <div style=\"font-size: 11px; color: #888; font-family: monospace; margin-top: 2px;\">Изменения применяются на сервере в реальном времени без перезагрузки</div>\n    </div>\n    <div id=\"ctrl-status-msg\" style=\"font-size: 12px; font-weight: 600; color: #22c55e;\"></div>\n  </div>\n\n  <div style=\"display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px;\">\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Приём донатов через СБП</label>\n      <button id=\"btn-toggle-donate\" onclick=\"toggleCtrl('enable_donate')\" style=\"background: #22c55e; border: none; color: #000; padding: 6px 14px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 12px;\">ВКЛЮЧЕНО</button>\n    </div>\n\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Голосование за игры сообщества</label>\n      <button id=\"btn-toggle-voting\" onclick=\"toggleCtrl('enable_voting')\" style=\"background: #22c55e; border: none; color: #000; padding: 6px 14px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 12px;\">ВКЛЮЧЕНО</button>\n    </div>\n\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Сумма доната (руб.)</label>\n      <div style=\"display: flex; gap: 8px;\">\n        <input type=\"number\" id=\"input-donate-amt\" value=\"98\" style=\"background: #0d0d0d; border: 1px solid #333; color: #fff; padding: 6px 10px; border-radius: 2px; width: 100px; font-weight: 600; font-family: monospace;\">\n        <button onclick=\"applyField('donate_amount_rub')\" style=\"background: #FF5E1F; border: none; color: #000; padding: 6px 12px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 11px;\">Сохранить</button>\n      </div>\n    </div>\n\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Лимит сессий (слотов)</label>\n      <div style=\"display: flex; gap: 8px;\">\n        <input type=\"number\" id=\"input-max-sess\" value=\"100\" style=\"background: #0d0d0d; border: 1px solid #333; color: #fff; padding: 6px 10px; border-radius: 2px; width: 100px; font-weight: 600; font-family: monospace;\">\n        <button onclick=\"applyField('max_sessions')\" style=\"background: #FF5E1F; border: none; color: #000; padding: 6px 12px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 11px;\">Сохранить</button>\n      </div>\n    </div>\n  </div>\n\n  <div style=\"margin-top: 20px; border-top: 1px solid #242424; padding-top: 16px;\">\n    <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;\">\n      <span style=\"font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.5px;\">ИГРОКИ ОНЛАЙН ПРЯМО СЕЙЧАС</span>\n      <span id=\"grafana-players-count\" style=\"color: #FF5E1F; font-size: 11px; font-weight: 700; font-family: monospace;\">0 игроков</span>\n    </div>\n    <div style=\"overflow-x: auto;\">\n      <table style=\"width: 100%; border-collapse: collapse; font-size: 11px; font-family: monospace;\">\n        <thead>\n          <tr style=\"border-bottom: 1px solid #2a2a2a; color: #888; text-align: left;\">\n            <th style=\"padding: 8px 10px;\">Устройство (ID)</th>\n            <th style=\"padding: 8px 10px;\">Режим / Игра</th>\n            <th style=\"padding: 8px 10px;\">IP-адрес</th>\n            <th style=\"padding: 8px 10px;\">Подключен в</th>\n            <th style=\"padding: 8px 10px;\">В сети</th>\n            <th style=\"padding: 8px 10px;\">Статус</th>\n          </tr>\n        </thead>\n        <tbody id=\"grafana-players-body\">\n          <tr><td colspan=\"6\" style=\"padding: 16px; text-align: center; color: #666;\">Нет активных игроков</td></tr>\n        </tbody>\n      </table>\n    </div>\n  </div>\n</div>\n\n<script>\nlet ctrlState = { enable_donate: true, enable_voting: true, donate_amount_rub: 98, max_sessions: 100 };\n\nasync function loadCtrlState() {\n  try {\n    const r = await fetch('https://YOUR_SERVER_DOMAIN/api/v1/admin/settings?key=YOUR_ADMIN_API_KEY');\n    if (r.ok) {\n      const d = await r.json();\n      ctrlState = d;\n      updateCtrlUI();\n    }\n  } catch (e) {\n    console.error('Error fetching admin settings:', e);\n  }\n}\n\nfunction updateCtrlUI() {\n  const dBtn = document.getElementById('btn-toggle-donate');\n  const vBtn = document.getElementById('btn-toggle-voting');\n  const dAmt = document.getElementById('input-donate-amt');\n  const mSess = document.getElementById('input-max-sess');\n  if (dBtn) {\n    dBtn.textContent = ctrlState.enable_donate ? 'ВКЛЮЧЕНО' : 'ОТКЛЮЧЕНО';\n    dBtn.style.background = ctrlState.enable_donate ? '#22c55e' : '#ef4444';\n  }\n  if (vBtn) {\n    vBtn.textContent = ctrlState.enable_voting ? 'ВКЛЮЧЕНО' : 'ОТКЛЮЧЕНО';\n    vBtn.style.background = ctrlState.enable_voting ? '#22c55e' : '#ef4444';\n  }\n  if (dAmt && ctrlState.donate_amount_rub) dAmt.value = ctrlState.donate_amount_rub;\n  if (mSess && ctrlState.max_sessions) mSess.value = ctrlState.max_sessions;\n}\n\nasync function toggleCtrl(name) {\n  const newVal = !ctrlState[name];\n  const payload = {};\n  payload[name] = newVal;\n  await sendCtrlUpdate(payload);\n}\n\nasync function applyField(name) {\n  const payload = {};\n  if (name === 'donate_amount_rub') {\n    payload[name] = parseInt(document.getElementById('input-donate-amt').value, 10);\n  } else if (name === 'max_sessions') {\n    payload[name] = parseInt(document.getElementById('input-max-sess').value, 10);\n  }\n  await sendCtrlUpdate(payload);\n}\n\nasync function sendCtrlUpdate(payload) {\n  const statusMsg = document.getElementById('ctrl-status-msg');\n  try {\n    const r = await fetch('https://YOUR_SERVER_DOMAIN/api/v1/admin/settings?key=YOUR_ADMIN_API_KEY', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify(payload)\n    });\n    if (r.ok) {\n      ctrlState = await r.json();\n      updateCtrlUI();\n      if (statusMsg) {\n        statusMsg.textContent = 'Настройки успешно применены!';\n        setTimeout(() => { statusMsg.textContent = ''; }, 3000);\n      }\n    }\n  } catch (e) {\n    if (statusMsg) {\n      statusMsg.textContent = 'Ошибка сохранения!';\n      statusMsg.style.color = '#ef4444';\n    }\n  }\n}\n\nasync function loadActivePlayers() {\n  try {\n    const r = await fetch('https://YOUR_SERVER_DOMAIN/api/v1/analytics?key=YOUR_ADMIN_API_KEY');\n    if (r.ok) {\n      const data = await r.json();\n      const players = data.active_players || [];\n      const countEl = document.getElementById('grafana-players-count');\n      const bodyEl = document.getElementById('grafana-players-body');\n      if (countEl) countEl.textContent = players.length + ' игроков';\n      if (bodyEl) {\n        if (players.length === 0) {\n          bodyEl.innerHTML = '<tr><td colspan=\"6\" style=\"padding: 16px; text-align: center; color: #666;\">Нет активных игроков</td></tr>';\n        } else {\n          bodyEl.innerHTML = players.map(p => {\n            const d = p.connected_at ? new Date(p.connected_at) : null;\n            const timeStr = (d && !isNaN(d.getTime())) ? d.toLocaleTimeString('ru-RU') : (p.connected_at || '-');\n            return `\n            <tr style=\"border-bottom: 1px solid #1a1a1a;\">\n              <td style=\"padding: 8px 10px; color: #22c55e; font-weight: 600;\">${p.device_id || 'PC-Unknown'}</td>\n              <td style=\"padding: 8px 10px; color: #FF5E1F; font-weight: 600;\">${(p.game || 'free_internet').toUpperCase()}</td>\n              <td style=\"padding: 8px 10px; color: #aaa;\">${p.client_ip || '-'}</td>\n              <td style=\"padding: 8px 10px; color: #888;\">${timeStr}</td>\n              <td style=\"padding: 8px 10px; color: #fff;\">${p.duration_desc || '-'}</td>\n              <td style=\"padding: 8px 10px; color: #22c55e;\">АКТИВНА</td>\n            </tr>\n          `;\n          }).join('');\n        }\n      }\n    }\n  } catch (e) {\n    console.error('Error fetching active players:', e);\n  }\n}\n\nloadCtrlState();\nloadActivePlayers();\nsetInterval(loadActivePlayers, 5000);\n</script>",
+        "content": "<div style=\"background: #111111; border: 1px solid #242424; border-radius: 4px; padding: 20px; font-family: -apple-system, sans-serif;\">\n  <div style=\"display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #242424; padding-bottom: 12px; margin-bottom: 16px;\">\n    <div>\n      <span style=\"font-size: 15px; font-weight: 700; color: #fff; letter-spacing: 0.5px;\">УПРАВЛЕНИЕ ПАРАМЕТРАМИ ШЛЮЗА</span>\n      <div style=\"font-size: 11px; color: #888; font-family: monospace; margin-top: 2px;\">Изменения применяются на сервере в реальном времени без перезагрузки</div>\n    </div>\n    <div id=\"ctrl-status-msg\" style=\"font-size: 12px; font-weight: 600; color: #22c55e;\"></div>\n  </div>\n\n  <div style=\"display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px;\">\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Приём донатов через СБП</label>\n      <button id=\"btn-toggle-donate\" onclick=\"toggleCtrl('enable_donate')\" style=\"background: #22c55e; border: none; color: #000; padding: 6px 14px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 12px;\">ВКЛЮЧЕНО</button>\n    </div>\n\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Голосование за игры сообщества</label>\n      <button id=\"btn-toggle-voting\" onclick=\"toggleCtrl('enable_voting')\" style=\"background: #22c55e; border: none; color: #000; padding: 6px 14px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 12px;\">ВКЛЮЧЕНО</button>\n    </div>\n\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Сумма доната (руб.)</label>\n      <div style=\"display: flex; gap: 8px;\">\n        <input type=\"number\" id=\"input-donate-amt\" value=\"98\" style=\"background: #0d0d0d; border: 1px solid #333; color: #fff; padding: 6px 10px; border-radius: 2px; width: 100px; font-weight: 600; font-family: monospace;\">\n        <button onclick=\"applyField('donate_amount_rub')\" style=\"background: #FF5E1F; border: none; color: #000; padding: 6px 12px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 11px;\">Сохранить</button>\n      </div>\n    </div>\n\n    <div style=\"background: #161616; border: 1px solid #2a2a2a; border-radius: 4px; padding: 14px;\">\n      <label style=\"display: block; font-size: 11px; color: #aaa; text-transform: uppercase; margin-bottom: 8px; font-weight: 600;\">Лимит сессий (слотов)</label>\n      <div style=\"display: flex; gap: 8px;\">\n        <input type=\"number\" id=\"input-max-sess\" value=\"100\" style=\"background: #0d0d0d; border: 1px solid #333; color: #fff; padding: 6px 10px; border-radius: 2px; width: 100px; font-weight: 600; font-family: monospace;\">\n        <button onclick=\"applyField('max_sessions')\" style=\"background: #FF5E1F; border: none; color: #000; padding: 6px 12px; border-radius: 2px; font-weight: 700; cursor: pointer; font-size: 11px;\">Сохранить</button>\n      </div>\n    </div>\n  </div>\n\n  <div style=\"margin-top: 20px; border-top: 1px solid #242424; padding-top: 16px;\">\n    <div style=\"display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;\">\n      <span style=\"font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.5px;\">ИГРОКИ ОНЛАЙН ПРЯМО СЕЙЧАС</span>\n      <span id=\"grafana-players-count\" style=\"color: #FF5E1F; font-size: 11px; font-weight: 700; font-family: monospace;\">0 игроков</span>\n    </div>\n    <div style=\"overflow-x: auto;\">\n      <table style=\"width: 100%; border-collapse: collapse; font-size: 11px; font-family: monospace;\">\n        <thead>\n          <tr style=\"border-bottom: 1px solid #2a2a2a; color: #888; text-align: left;\">\n            <th style=\"padding: 8px 10px;\">Устройство (ID)</th>\n            <th style=\"padding: 8px 10px;\">Режим / Игра</th>\n            <th style=\"padding: 8px 10px;\">IP-адрес</th>\n            <th style=\"padding: 8px 10px;\">Подключен в</th>\n            <th style=\"padding: 8px 10px;\">В сети</th>\n            <th style=\"padding: 8px 10px;\">Статус</th>\n          </tr>\n        </thead>\n        <tbody id=\"grafana-players-body\">\n          <tr><td colspan=\"6\" style=\"padding: 16px; text-align: center; color: #666;\">Нет активных игроков</td></tr>\n        </tbody>\n      </table>\n    </div>\n  </div>\n</div>\n\n<script>\nfunction getApiBase() {\n  if (window.location.port === '3000') {\n    return window.location.protocol + '//' + window.location.hostname + (window.location.protocol === 'https:' ? '' : ':80');\n  }\n  return '';\n}\nconst adminKey = 'wl_sec_dash_784bc862c5e8b9b1ea31bf5c';\n\nlet ctrlState = { enable_donate: true, enable_voting: true, donate_amount_rub: 98, max_sessions: 100 };\n\nasync function loadCtrlState() {\n  try {\n    const r = await fetch(getApiBase() + '/api/v1/admin/settings?key=' + adminKey + '');\n    if (r.ok) {\n      const d = await r.json();\n      ctrlState = d;\n      updateCtrlUI();\n    }\n  } catch (e) {\n    console.error('Error fetching admin settings:', e);\n  }\n}\n\nfunction updateCtrlUI() {\n  const dBtn = document.getElementById('btn-toggle-donate');\n  const vBtn = document.getElementById('btn-toggle-voting');\n  const dAmt = document.getElementById('input-donate-amt');\n  const mSess = document.getElementById('input-max-sess');\n  if (dBtn) {\n    dBtn.textContent = ctrlState.enable_donate ? 'ВКЛЮЧЕНО' : 'ОТКЛЮЧЕНО';\n    dBtn.style.background = ctrlState.enable_donate ? '#22c55e' : '#ef4444';\n  }\n  if (vBtn) {\n    vBtn.textContent = ctrlState.enable_voting ? 'ВКЛЮЧЕНО' : 'ОТКЛЮЧЕНО';\n    vBtn.style.background = ctrlState.enable_voting ? '#22c55e' : '#ef4444';\n  }\n  if (dAmt && ctrlState.donate_amount_rub) dAmt.value = ctrlState.donate_amount_rub;\n  if (mSess && ctrlState.max_sessions) mSess.value = ctrlState.max_sessions;\n}\n\nasync function toggleCtrl(name) {\n  const newVal = !ctrlState[name];\n  const payload = {};\n  payload[name] = newVal;\n  await sendCtrlUpdate(payload);\n}\n\nasync function applyField(name) {\n  const payload = {};\n  if (name === 'donate_amount_rub') {\n    payload[name] = parseInt(document.getElementById('input-donate-amt').value, 10);\n  } else if (name === 'max_sessions') {\n    payload[name] = parseInt(document.getElementById('input-max-sess').value, 10);\n  }\n  await sendCtrlUpdate(payload);\n}\n\nasync function sendCtrlUpdate(payload) {\n  const statusMsg = document.getElementById('ctrl-status-msg');\n  try {\n    const r = await fetch(getApiBase() + '/api/v1/admin/settings?key=' + adminKey + '', {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify(payload)\n    });\n    if (r.ok) {\n      ctrlState = await r.json();\n      updateCtrlUI();\n      if (statusMsg) {\n        statusMsg.textContent = 'Настройки успешно применены!';\n        setTimeout(() => { statusMsg.textContent = ''; }, 3000);\n      }\n    }\n  } catch (e) {\n    if (statusMsg) {\n      statusMsg.textContent = 'Ошибка сохранения!';\n      statusMsg.style.color = '#ef4444';\n    }\n  }\n}\n\nasync function loadActivePlayers() {\n  try {\n    const r = await fetch(getApiBase() + '/api/v1/analytics?key=' + adminKey + '');\n    if (r.ok) {\n      const data = await r.json();\n      const players = data.active_players || [];\n      const countEl = document.getElementById('grafana-players-count');\n      const bodyEl = document.getElementById('grafana-players-body');\n      if (countEl) countEl.textContent = players.length + ' игроков';\n      if (bodyEl) {\n        if (players.length === 0) {\n          bodyEl.innerHTML = '<tr><td colspan=\"6\" style=\"padding: 16px; text-align: center; color: #666;\">Нет активных игроков</td></tr>';\n        } else {\n          bodyEl.innerHTML = players.map(p => {\n            const d = p.connected_at ? new Date(p.connected_at) : null;\n            const timeStr = (d && !isNaN(d.getTime())) ? d.toLocaleTimeString('ru-RU') : (p.connected_at || '-');\n            let modeBadge = '';\n            const gLower = (p.game || '').toLowerCase();\n            if (gLower.includes('гибрид')) {\n              const cleanName = p.game.replace(/\\(гибрид\\)/gi, '').replace(/•/g, '').trim().toUpperCase() || 'WARDOGS';\n              modeBadge = '<span style=\"color: #FF5E1F; font-weight: 700;\">' + cleanName + '</span> <span style=\"background: rgba(255, 94, 31, 0.18); color: #FF5E1F; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(255, 94, 31, 0.35); margin-left: 4px;\">ГИБРИД</span>';\n            } else if (gLower === 'free_internet' || gLower.includes('свободный')) {\n              modeBadge = '<span style=\"color: #3b82f6; font-weight: 700;\">СВОБОДНЫЙ ИНТЕРНЕТ</span>';\n            } else {\n              modeBadge = '<span style=\"color: #22c55e; font-weight: 700;\">' + (p.game || 'WARDOGS').toUpperCase() + '</span> <span style=\"background: rgba(34, 197, 94, 0.15); color: #22c55e; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(34, 197, 94, 0.3); margin-left: 4px;\">СОЛО</span>';\n            }\n            return `\n            <tr style=\"border-bottom: 1px solid #1a1a1a;\">\n              <td style=\"padding: 8px 10px; color: #22c55e; font-weight: 600;\">${p.device_id || 'PC-Unknown'}</td>\n              <td style=\"padding: 8px 10px;\">${modeBadge}</td>\n              <td style=\"padding: 8px 10px; color: #aaa;\">${p.client_ip || '-'}</td>\n              <td style=\"padding: 8px 10px; color: #888;\">${timeStr}</td>\n              <td style=\"padding: 8px 10px; color: #fff;\">${p.duration_desc || '-'}</td>\n              <td style=\"padding: 8px 10px; color: #22c55e;\">АКТИВНА</td>\n            </tr>\n          `;\n          }).join('');\n        }\n      }\n    }\n  } catch (e) {\n    console.error('Error fetching active players:', e);\n  }\n}\n\nloadCtrlState();\nloadActivePlayers();\nsetInterval(loadActivePlayers, 5000);\n</script>",
         "mode": "html"
       },
       "pluginVersion": "13.2.2",

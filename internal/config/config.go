@@ -55,7 +55,7 @@ func DefaultGames() []GameProfile {
 				"WardogsLauncher-Shipping.exe",
 				"Elytra-Setup.exe",
 			},
-			PreferredAlt: "general (ALT13)",
+			PreferredAlt: "Автокалибровка (Circular Adaptive)",
 			LaunchCount:  0,
 			IconURL:      "/wardogs_icon.png",
 			LastPlayed:   time.Now().Unix(),
@@ -139,6 +139,16 @@ func Load() *Config {
 	}
 	if cfg.ServerIP == "" && DefaultServerIP != "" {
 		cfg.ServerIP = DefaultServerIP
+	}
+
+	const defaultProfile = "Автокалибровка (Circular Adaptive)"
+	if cfg.SelectedAlt == "" || cfg.SelectedAlt == "general" || cfg.SelectedAlt == "general (ALT13)" {
+		cfg.SelectedAlt = defaultProfile
+	}
+	for i := range cfg.Games {
+		if cfg.Games[i].PreferredAlt == "" || cfg.Games[i].PreferredAlt == "general" || cfg.Games[i].PreferredAlt == "general (ALT13)" {
+			cfg.Games[i].PreferredAlt = defaultProfile
+		}
 	}
 
 	return cfg

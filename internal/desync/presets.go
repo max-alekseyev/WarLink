@@ -10,12 +10,19 @@ type Preset struct {
 	Args []string `json:"args"`
 }
 
+const discordDomainsStr = "discord.com,discord.gg,discordapp.com,discordapp.net,discord.media,gateway.discord.gg,status.discord.com,dis.gd,discord-attachments-uploads-prd.storage.googleapis.com"
+
 func commonHeader() []string {
 	return []string{
+		"--blob=fake_discord:@%BIN%ACTIVE_DISCORD_UDP.bin",
 		"--wf-tcp-out=80,443,2053,2083,2087,2096,8443",
+		"--wf-tcp-in=80,443",
+		"--wf-tcp-empty=0",
 		"--wf-udp-out=443,19294-19344,50000-50100",
+		"--ctrack-timeouts=60:300:60:3600",
 		"--lua-init=@%LUA%zapret-lib.lua",
 		"--lua-init=@%LUA%zapret-antidpi.lua",
+		"--lua-init=@%LUA%zapret-auto.lua",
 	}
 }
 
@@ -25,6 +32,7 @@ func commonUdpRules() []string {
 		"--filter-l7=quic",
 		"--hostlist=%LISTS%list-general.txt",
 		"--hostlist=%LISTS%list-general-user.txt",
+		"--hostlist=%LISTS%list-auto.txt",
 		"--hostlist-exclude=%LISTS%list-exclude.txt",
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
@@ -35,10 +43,11 @@ func commonUdpRules() []string {
 		"--filter-udp=19294-19344,50000-50100",
 		"--filter-l7=discord,stun",
 		"--payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery",
-		"--lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=5",
+		"--out-range=-d3",
+		"--lua-desync=fake:blob=fake_discord:repeats=6",
 		"--new",
 		"--filter-tcp=2053,2083,2087,2096,8443",
-		"--hostlist-domains=discord.media",
+		"--hostlist-domains=" + discordDomainsStr,
 		"--payload=tls_client_hello",
 		"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
 		"--lua-desync=multisplit:pos=1,midsld",
@@ -52,6 +61,7 @@ func commonHttpRules() []string {
 		"--filter-l7=http",
 		"--hostlist=%LISTS%list-general.txt",
 		"--hostlist=%LISTS%list-general-user.txt",
+		"--hostlist=%LISTS%list-auto.txt",
 		"--hostlist-exclude=%LISTS%list-google.txt",
 		"--hostlist-exclude=%LISTS%list-exclude.txt",
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
@@ -63,8 +73,6 @@ func commonHttpRules() []string {
 		"--new",
 	}
 }
-
-const discordDomainsStr = "discord.com,discord.gg,discordapp.com,discordapp.net,discord.media,gateway.discord.gg,status.discord.com,dis.gd"
 
 func makeTlsRules(googleDesync []string, generalDesync []string) []string {
 	var rules []string
@@ -111,15 +119,46 @@ func makeTlsRules(googleDesync []string, generalDesync []string) []string {
 		"--filter-l7=tls",
 		"--hostlist=%LISTS%list-general.txt",
 		"--hostlist=%LISTS%list-general-user.txt",
+		"--hostlist=%LISTS%list-auto.txt",
+		"--hostlist-auto=%LISTS%list-auto.txt",
+		"--hostlist-auto-fail-threshold=3",
+		"--hostlist-auto-fail-time=60",
+		"--hostlist-auto-retrans-threshold=3",
+		"--hostlist-auto-retrans-maxseq=32768",
+		"--hostlist-auto-retrans-reset=1",
+		"--hostlist-auto-incoming-maxseq=4096",
 		"--hostlist-exclude=%LISTS%list-google.txt",
 		"--hostlist-exclude-domains="+discordDomainsStr,
 		"--hostlist-exclude=%LISTS%list-exclude.txt",
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--payload=tls_client_hello",
 	)
-	rules = append(rules, generalDesync...)
+
+	hasCircular := false
+	for _, a := range generalDesync {
+		if strings.Contains(a, "circular") {
+			hasCircular = true
+			break
+		}
+	}
+
+	if hasCircular {
+		for _, a := range generalDesync {
+			if strings.HasPrefix(a, "--in-range") || strings.Contains(a, "circular") {
+				rules = append(rules, a)
+			}
+		}
+		rules = append(rules, "--payload=tls_client_hello")
+		for _, a := range generalDesync {
+			if !strings.HasPrefix(a, "--in-range") && !strings.Contains(a, "circular") {
+				rules = append(rules, a)
+			}
+		}
+	} else {
+		rules = append(rules, "--payload=tls_client_hello")
+		rules = append(rules, generalDesync...)
+	}
 	rules = append(rules, "--new")
 
 	// 4. IP-based blocked destinations (ipset-all)
@@ -133,9 +172,23 @@ func makeTlsRules(googleDesync []string, generalDesync []string) []string {
 		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--payload=tls_client_hello",
 	)
-	rules = append(rules, generalDesync...)
+	if hasCircular {
+		for _, a := range generalDesync {
+			if strings.HasPrefix(a, "--in-range") || strings.Contains(a, "circular") {
+				rules = append(rules, a)
+			}
+		}
+		rules = append(rules, "--payload=tls_client_hello")
+		for _, a := range generalDesync {
+			if !strings.HasPrefix(a, "--in-range") && !strings.Contains(a, "circular") {
+				rules = append(rules, a)
+			}
+		}
+	} else {
+		rules = append(rules, "--payload=tls_client_hello")
+		rules = append(rules, generalDesync...)
+	}
 	return rules
 }
 
@@ -152,8 +205,91 @@ func buildPresetArgsWithGoogle(googleDesync []string, generalDesync ...string) [
 	return res
 }
 
-// BuiltinPresets provides all available DPI desync strategies for zapret2 (winws2).
+// BuiltinPresets provides the Russian TSPU evasion strategies for zapret2 (winws2).
 var BuiltinPresets = []Preset{
+	{
+		Name: "Автокалибровка (Circular Adaptive)",
+		Args: buildPresetArgs(
+			"--in-range=-s34228",
+			"--lua-desync=circular:fails=3:time=60:retrans=3:maxseq=32768:inseq=4096:reset",
+			"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8:strategy=1",
+			"--lua-desync=multidisorder:pos=1,midsld:strategy=1",
+			"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000:strategy=2",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-10000:repeats=6:strategy=3:final",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=3:final",
+		),
+	},
+	{
+		Name: "Стратегия 1 (EcoFilter SeqOverlap)",
+		Args: buildPresetArgs(
+			"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000",
+		),
+	},
+	{
+		Name: "Стратегия 2 (MultiDisorder TTL)",
+		Args: buildPresetArgs(
+			"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8",
+			"--lua-desync=multidisorder:pos=1,midsld",
+		),
+	},
+	{
+		Name: "Стратегия 3 (PAWS TimestampShift)",
+		Args: buildPresetArgs(
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-10000:repeats=6:tls_mod=rnd,dupsid",
+			"--lua-desync=multisplit:pos=1,midsld",
+		),
+	},
+	{
+		Name: "Стратегия 4 (FakedDisorder Interleaved)",
+		Args: buildPresetArgs(
+			"--lua-desync=fakeddisorder:pos=midsld:repeats=4:tcp_ts=-1000",
+		),
+	},
+	{
+		Name: "Стратегия 5 (L4 BadSum Saturator)",
+		Args: buildPresetArgs(
+			"--lua-desync=fake:blob=fake_default_tls:badsum:ip_ttl=8:ip_autottl=-2,3-20:repeats=11:tls_mod=rndsni",
+			"--lua-desync=multisplit:pos=1,midsld",
+		),
+	},
+	{
+		Name: "Стратегия 6 (WhiteSNI Mimicry)",
+		Args: buildPresetArgs(
+			"--lua-desync=fake:blob=fake_default_tls:tls_mod=sni=gosuslugi.ru:tcp_ts=-1000:repeats=6",
+			"--lua-desync=multisplit:pos=1,midsld",
+		),
+	},
+	{
+		Name: "Стратегия 7 (IPFrag L3 Bypass)",
+		Args: buildPresetArgs(
+			"--lua-desync=multisplit:pos=1,midsld:ipfrag2:ipfrag_pos_tcp=32:ipfrag_disorder",
+		),
+	},
+	{
+		Name: "Стратегия 8 (TCP MD5 BGP Mask)",
+		Args: buildPresetArgs(
+			"--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=8:tls_mod=rnd,dupsid",
+			"--lua-desync=multisplit:pos=1,midsld",
+		),
+	},
+	{
+		Name: "Стратегия 9 (Combined Burst DoubleFooling)",
+		Args: buildPresetArgs(
+			"--lua-desync=fake:blob=fake_default_tls:tcp_seq=-10000:repeats=6",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6:tls_mod=rnd,dupsid",
+			"--lua-desync=multidisorder:pos=1,midsld",
+		),
+	},
+	{
+		Name: "Стратегия 10 (Stealth MicroSplit)",
+		Args: buildPresetArgs(
+			"--lua-desync=multisplit:pos=1,midsld,endsld:nodrop",
+		),
+	},
+}
+
+// legacyPresets provides backward-compatible aliases for previously saved user profiles.
+var legacyPresets = []Preset{
 	{
 		Name: "general",
 		Args: buildPresetArgs(
@@ -316,6 +452,11 @@ func GetPreset(name string) *Preset {
 			return &BuiltinPresets[i]
 		}
 	}
+	for i := range legacyPresets {
+		if strings.EqualFold(legacyPresets[i].Name, norm) {
+			return &legacyPresets[i]
+		}
+	}
 	if len(BuiltinPresets) > 0 {
 		return &BuiltinPresets[0]
 	}
@@ -367,7 +508,9 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 	const udpPortsStr = "19294-19344,50000-50100"
 
 	return []string{
+		"--blob=fake_discord:@" + binSep + "ACTIVE_DISCORD_UDP.bin",
 		"--wf-udp-out=443," + udpPortsStr,
+		"--ctrack-timeouts=60:300:60:3600",
 		"--lua-init=@" + luaSep + "zapret-lib.lua",
 		"--lua-init=@" + luaSep + "zapret-antidpi.lua",
 		"--filter-udp=443",
@@ -393,7 +536,8 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 		"--filter-udp=" + udpPortsStr,
 		"--filter-l7=discord,stun",
 		"--payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery",
-		"--lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=5",
+		"--out-range=-d3",
+		"--lua-desync=fake:blob=fake_discord:repeats=6",
 	}
 }
 

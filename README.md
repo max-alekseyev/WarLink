@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.0.5"><img src="https://img.shields.io/badge/Релиз-v2.0.5-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.0.5"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.0.6"><img src="https://img.shields.io/badge/Релиз-v2.0.6-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.0.6"></a>
   <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe"><img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe"></a>
   <img src="https://img.shields.io/badge/Размер-~32_МБ-2d333b?style=for-the-badge" alt="Size">
   <a href="https://github.com/max-alekseyev/WarLink/releases"><img src="https://img.shields.io/github/downloads/max-alekseyev/WarLink/total?style=for-the-badge&color=0969da&label=Downloads" alt="Downloads"></a>
@@ -27,7 +27,7 @@
 - Ошибки «Connection lost / Server unreachable» при загрузке карты
 - Высокий пинг, подергивания и внезапная потеря пакетов (packet loss)
 
-**WarLink v2.0.5** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
+**WarLink v2.0.6** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ---
 
-## Ключевые возможности WarLink v2.0.5
+## Ключевые возможности WarLink v2.0.6
 
 - **Полная автономность (Zero Downloads):** все необходимые сетевые компоненты (`sing-box` и `wintun.dll`) встроены напрямую в исполняемый файл — приложение запускается мгновенно даже при блокировках внешних сайтов.
 - **Выделенный игровой шлюз в Стокгольме:** собственный высокоскоростной сервер Hysteria 2 (QUIC/UDP) на прямых магистральных линиях в непосредственной близости к европейским серверам игр, устраняющий потери пакетов и ошибки входа в лобби.

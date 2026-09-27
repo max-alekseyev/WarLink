@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +28,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/redis/go-redis/v9"
 	"warlink/server/aclgen"
 )
 
@@ -59,6 +62,7 @@ type ServerConfig struct {
 	ListenPublic    string `json:"listen_public"`
 	ListenInternal  string `json:"listen_internal"`
 	DatabaseURL     string `json:"database_url"`
+	RedisAddr       string `json:"redis_addr,omitempty"`
 }
 
 type SessionInfo struct {
@@ -171,6 +175,7 @@ type AppState struct {
 	cachedDueStr string
 	rateLimiter  *IPRateLimiter
 	db           *sql.DB
+	rdb          *redis.Client
 
 	// Server load telemetry
 	prevCPUTotal uint64
@@ -195,6 +200,10 @@ type AppState struct {
 	metricInvoicesCreated     uint64
 	metricDonationsPaid       uint64
 	metricDonationsRub        uint64
+	metricAezaBalanceRub      uint64
+	metricAezaBonusRub        uint64
+	metricAezaBalanceEurCents uint64
+	metricAezaBonusEurCents   uint64
 	cachedPrice               int
 	prevHyTraffic             map[string]UserTrafficStats
 }
@@ -235,20 +244,32 @@ func main() {
 		log.Printf("[ACL] Warning: startup ACL sync: %v", err)
 	}
 
-	// Background session cleaner
+	// Background session cleaner and active Hysteria reconciler
 	go func() {
-		ticker := time.NewTicker(1 * time.Minute)
+		state.cleanupExpiredSessions()
+		ticker := time.NewTicker(30 * time.Second)
 		for range ticker.C {
 			state.cleanupExpiredSessions()
 		}
 	}()
 
-	// Background Aeza due date updater
+	// Background Aeza due date updater and donation reconciler
 	go func() {
 		state.updateDueDateFromAeza()
-		ticker := time.NewTicker(3 * time.Hour)
-		for range ticker.C {
-			state.updateDueDateFromAeza()
+		state.syncAezaDonations()
+
+		dueTicker := time.NewTicker(2 * time.Minute)
+		donateTicker := time.NewTicker(2 * time.Minute)
+		defer dueTicker.Stop()
+		defer donateTicker.Stop()
+
+		for {
+			select {
+			case <-dueTicker.C:
+				state.updateDueDateFromAeza()
+			case <-donateTicker.C:
+				state.syncAezaDonations()
+			}
 		}
 	}()
 
@@ -275,6 +296,16 @@ func main() {
 	} else {
 		log.Printf("[DB] Notice: DATABASE_URL not configured")
 	}
+
+	// Connect to Redis (in-memory RAM session store)
+	redisAddr := state.cfg.RedisAddr
+	if redisAddr == "" {
+		redisAddr = os.Getenv("REDIS_ADDR")
+	}
+	if redisAddr == "" {
+		redisAddr = "127.0.0.1:6379"
+	}
+	state.initRedis(redisAddr)
 
 	// Internal HTTP Auth server for Hysteria 2 (listening only on 127.0.0.1:8080)
 	go func() {
@@ -397,16 +428,206 @@ func (s *AppState) updateDueDateFromAeza() {
 					s.mu.Lock()
 					s.cachedDue = parsed
 					s.cachedDueStr = item.ExpiresAt
+					priceRub := item.Price
 					if item.Price > 0 {
-						s.cachedPrice = item.Price
+						if item.Price < 500 {
+							priceRub = int(math.Round(float64(item.Price) * 1.3066667))
+						}
+						s.cachedPrice = priceRub
 					}
 					s.mu.Unlock()
-					log.Printf("[AEZA] Updated due date from API: %s (status: %s, price: %d RUB)", item.ExpiresAt, item.Status, item.Price)
+					log.Printf("[AEZA] Updated due date from API: %s (status: %s, price: %d RUB / %d cents)", item.ExpiresAt, item.Status, s.cachedPrice, item.Price)
 					break
 				}
 			}
 		}
 	}
+	s.fetchAezaAccount()
+	go s.syncAezaDonations()
+}
+
+func (s *AppState) fetchAezaAccount() {
+	s.fetchAezaAccountURL("https://my.aeza.net/api/v2/accounts/me")
+}
+
+func (s *AppState) fetchAezaAccountURL(apiEndpoint string) {
+	s.mu.RLock()
+	apiKey := s.cfg.AezaAPIKey
+	s.mu.RUnlock()
+
+	if apiKey == "" {
+		return
+	}
+
+	req, err := http.NewRequest(http.MethodGet, apiEndpoint, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("X-API-KEY", apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return
+	}
+	defer resp.Body.Close()
+
+	var acc struct {
+		Balance      float64 `json:"balance"`
+		BonusBalance float64 `json:"bonusBalance"`
+		Currency     string  `json:"currency"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&acc); err == nil {
+		balRub := int(math.Round(acc.Balance * 1.3066667))
+		bonusRub := int(math.Round(acc.BonusBalance * 1.3066667))
+		if strings.EqualFold(acc.Currency, "rub") {
+			balRub = int(math.Round(acc.Balance))
+			bonusRub = int(math.Round(acc.BonusBalance))
+		}
+		if balRub < 0 {
+			balRub = 0
+		}
+		if bonusRub < 0 {
+			bonusRub = 0
+		}
+		atomic.StoreUint64(&s.metricAezaBalanceRub, uint64(balRub))
+		atomic.StoreUint64(&s.metricAezaBonusRub, uint64(bonusRub))
+		atomic.StoreUint64(&s.metricAezaBalanceEurCents, uint64(math.Max(0, acc.Balance)))
+		atomic.StoreUint64(&s.metricAezaBonusEurCents, uint64(math.Max(0, acc.BonusBalance)))
+		log.Printf("[AEZA] Updated account balance: %d RUB (%.2f EUR) + bonus %d RUB (%.2f EUR)",
+			balRub, acc.Balance/100.0, bonusRub, acc.BonusBalance/100.0)
+	}
+}
+
+func (s *AppState) syncAezaDonations() {
+	s.syncAezaDonationsURL("https://my.aeza.net/api/v2/billing/transactions")
+}
+
+func (s *AppState) syncAezaDonationsURL(apiEndpoint string) {
+	s.mu.RLock()
+	apiKey := s.cfg.AezaAPIKey
+	donateRub := s.cfg.DonateAmountRub
+	s.mu.RUnlock()
+
+	if apiKey == "" {
+		return
+	}
+	if donateRub <= 0 {
+		donateRub = 98
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	offset := 0
+	limit := 100
+	var totalPaidCount uint64
+	var totalPaidRub uint64
+
+	sep := "?"
+	if strings.Contains(apiEndpoint, "?") {
+		sep = "&"
+	}
+
+	for {
+		url := fmt.Sprintf("%s%slimit=%d&offset=%d", apiEndpoint, sep, limit, offset)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			log.Printf("[DONATE-SYNC] Error creating request: %v", err)
+			return
+		}
+		req.Header.Set("X-API-KEY", apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[DONATE-SYNC] Request error: %v", err)
+			return
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			log.Printf("[DONATE-SYNC] HTTP status %d from Aeza transactions API", resp.StatusCode)
+			return
+		}
+
+		var result struct {
+			Items []struct {
+				ID          int     `json:"id"`
+				Amount      float64 `json:"amount"`
+				BonusAmount float64 `json:"bonusAmount"`
+				Status      string  `json:"status"`
+				Type        string  `json:"type"`
+				InvoiceID   *int    `json:"invoiceId"`
+				PerformedAt string  `json:"performedAt"`
+				CreatedAt   string  `json:"createdAt"`
+			} `json:"items"`
+			Total int `json:"total"`
+		}
+
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil {
+			log.Printf("[DONATE-SYNC] Failed to decode transactions: %v", decodeErr)
+			return
+		}
+
+		if len(result.Items) == 0 {
+			break
+		}
+
+		for _, item := range result.Items {
+			// Count only confirmed WarLink community donations:
+			// 1. Transaction must be performed replenishment
+			// 2. Created since WarLink project launch (2026-09-20T00:00:00Z)
+			// 3. Must be associated with an invoice (item.InvoiceID != nil)
+			// 4. Exclude personal account/server setup purchase transactions
+			if strings.EqualFold(item.Status, "performed") && strings.EqualFold(item.Type, "replenishment") {
+				if item.CreatedAt < "2026-09-20T00:00:00Z" {
+					continue
+				}
+				if item.InvoiceID == nil || *item.InvoiceID <= 0 {
+					continue
+				}
+				// Exclude initial VPS server order on 2026-09-19/20
+				if item.Amount == 199 && item.CreatedAt < "2026-09-20T12:00:00Z" {
+					continue
+				}
+
+				totalPaidCount++
+
+				rub := donateRub
+				if item.Amount > 0 && item.Amount != 75 {
+					if item.Amount < 500 {
+						rub = int(math.Round(item.Amount * 1.3066667))
+					} else {
+						rub = int(math.Round(item.Amount))
+					}
+				}
+				if rub <= 0 {
+					rub = donateRub
+				}
+				totalPaidRub += uint64(rub)
+			}
+		}
+
+		offset += len(result.Items)
+		if offset >= result.Total || len(result.Items) < limit || offset >= 1000 {
+			break
+		}
+	}
+
+	if totalPaidCount > 0 {
+		atomic.StoreUint64(&s.metricDonationsPaid, totalPaidCount)
+		atomic.StoreUint64(&s.metricDonationsRub, totalPaidRub)
+
+		if s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO telemetry_counters (name, value) VALUES ('donations_paid', $1) ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`, totalPaidCount)
+			_, _ = s.db.Exec(`INSERT INTO telemetry_counters (name, value) VALUES ('donations_rub', $1) ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`, totalPaidRub)
+		}
+	}
+
+	log.Printf("[DONATE-SYNC] Reconciled Aeza billing: %d paid donations, %d RUB total donations",
+		totalPaidCount, totalPaidRub)
 }
 
 func (s *AppState) getPublicIP(r *http.Request) string {
@@ -595,6 +816,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 			sess.ClientIP = clientIP
 			sess.Game = targetGame
 			sess.ExpiresAt = time.Now().Add(SessionTTL)
+			s.saveSessionAsync(sess)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"token":          sess.Token,
@@ -655,6 +877,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions[newToken] = sess
 	s.deviceTokens[req.DeviceID] = newToken
+	s.saveSessionAsync(sess)
 
 	log.Printf("[SESSION] Allocated slot for device %s (game: %s) from IP %s (Active: %d/%d, IP sessions: %d/%d)",
 		req.DeviceID, targetGame, clientIP, len(s.sessions), MaxActiveSessions, ipSessions+1, MaxSessionsPerIP)
@@ -800,6 +1023,14 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 					atomic.AddUint64(&s.metricInvoicesCreated, 1)
 					s.recordCounterAsync("invoices_created")
 
+					// Trigger background reconciliation after user has time to scan and pay via SBP
+					go func() {
+						time.Sleep(30 * time.Second)
+						s.syncAezaDonations()
+						time.Sleep(60 * time.Second)
+						s.syncAezaDonations()
+					}()
+
 					log.Printf("[DONATE] Created Aeza SBP invoice #%d for %d RUB (charged %d cents): %s",
 						invResp.ID, actualRub, aezaCents, invResp.Payload.URL)
 					w.Header().Set("Content-Type", "application/json")
@@ -853,6 +1084,7 @@ func (s *AppState) handleSessionRelease(w http.ResponseWriter, r *http.Request) 
 		if matchToken || matchDevice {
 			delete(s.sessions, tok)
 			delete(s.deviceTokens, sess.DeviceID)
+			go s.deleteSessionFromRedis(tok, sess.DeviceID)
 			log.Printf("[SESSION] Explicitly released slot for device %s (Active: %d/%d)", sess.DeviceID, len(s.sessions), MaxActiveSessions)
 			released = true
 		}
@@ -1191,6 +1423,25 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 func (s *AppState) cleanupExpiredSessions() {
 	activeDevices := make(map[string]bool)
 	hyClient := &http.Client{Timeout: 500 * time.Millisecond}
+
+	s.mu.Lock()
+	firstPoll := len(s.prevHyTraffic) == 0
+	s.mu.Unlock()
+
+	if firstPoll {
+		// On startup, take two samples spaced 2 seconds apart to accurately detect active transmitting sessions
+		if hyResp, err := hyClient.Get("http://127.0.0.1:9090/traffic"); err == nil {
+			var initialData map[string]UserTrafficStats
+			if err := json.NewDecoder(hyResp.Body).Decode(&initialData); err == nil {
+				s.mu.Lock()
+				s.prevHyTraffic = initialData
+				s.mu.Unlock()
+			}
+			hyResp.Body.Close()
+		}
+		time.Sleep(2 * time.Second)
+	}
+
 	if hyResp, err := hyClient.Get("http://127.0.0.1:9090/traffic"); err == nil {
 		var hyData map[string]UserTrafficStats
 		if err := json.NewDecoder(hyResp.Body).Decode(&hyData); err == nil {
@@ -1200,7 +1451,7 @@ func (s *AppState) cleanupExpiredSessions() {
 			}
 			for devID, cur := range hyData {
 				prev, exists := s.prevHyTraffic[devID]
-				// A device is considered actively transmitting ONLY if its byte count increased
+				// A device is actively transmitting ONLY if traffic increased between samples
 				if exists && (cur.Tx > prev.Tx || cur.Rx > prev.Rx) {
 					activeDevices[devID] = true
 				}
@@ -1212,20 +1463,76 @@ func (s *AppState) cleanupExpiredSessions() {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now()
+
+	// Re-attach active Hysteria 2 connections into active sessions if missing
+	for devID := range activeDevices {
+		tok, exists := s.deviceTokens[devID]
+		if !exists {
+			var restoredSess *SessionInfo
+			if s.rdb != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				if savedTok, err := s.rdb.Get(ctx, "wl:dev:"+devID).Result(); err == nil && savedTok != "" {
+					if raw, err := s.rdb.Get(ctx, "wl:sess:"+savedTok).Result(); err == nil {
+						var parsed SessionInfo
+						if json.Unmarshal([]byte(raw), &parsed) == nil {
+							restoredSess = &parsed
+							tok = savedTok
+						}
+					}
+				}
+				cancel()
+			}
+			if restoredSess != nil {
+				restoredSess.LastSeen = now
+				restoredSess.ExpiresAt = now.Add(SessionTTL)
+				s.deviceTokens[devID] = tok
+				s.sessions[tok] = restoredSess
+				s.saveSessionAsync(restoredSess)
+			} else {
+				tok = "wl_tok_hy2_" + devID
+				s.deviceTokens[devID] = tok
+				sess := &SessionInfo{
+					DeviceID:  devID,
+					Token:     tok,
+					Game:      "wardogs",
+					CreatedAt: now,
+					LastSeen:  now,
+					ExpiresAt: now.Add(SessionTTL),
+				}
+				if s.db != nil {
+					var cip string
+					_ = s.db.QueryRow(`SELECT client_ip FROM daily_active_devices WHERE device_id = $1 ORDER BY last_seen DESC LIMIT 1`, devID).Scan(&cip)
+					if cip != "" {
+						sess.ClientIP = cip
+					}
+				}
+				s.sessions[tok] = sess
+				s.saveSessionAsync(sess)
+			}
+		} else if sess, ok := s.sessions[tok]; ok {
+			sess.LastSeen = now
+		}
+	}
+
 	for token, sess := range s.sessions {
 		if activeDevices[sess.DeviceID] {
 			sess.LastSeen = now
 			continue
 		}
-		if now.After(sess.ExpiresAt) || now.Sub(sess.LastSeen) > SessionInactivityTTL {
+		// Inferred Hysteria sessions expire much faster when traffic ceases
+		maxInactivity := SessionInactivityTTL
+		if strings.HasPrefix(token, "wl_tok_hy2_") {
+			maxInactivity = 60 * time.Second
+		}
+		if now.After(sess.ExpiresAt) || now.Sub(sess.LastSeen) > maxInactivity {
 			delete(s.sessions, token)
 			delete(s.deviceTokens, sess.DeviceID)
+			go s.deleteSessionFromRedis(token, sess.DeviceID)
 			log.Printf("[CLEANUP] Released inactive slot for device %s (Active: %d/%d)", sess.DeviceID, len(s.sessions), MaxActiveSessions)
 		}
 	}
+	s.mu.Unlock()
 }
 
 func (s *AppState) handleProfiles(w http.ResponseWriter, r *http.Request) {
@@ -1589,11 +1896,13 @@ func (s *AppState) initDatabase() {
 		PRIMARY KEY(device_id, seen_date)
 	);
 	CREATE INDEX IF NOT EXISTS idx_daily_active_date ON daily_active_devices(seen_date);
+
+	DROP TABLE IF EXISTS active_sessions CASCADE;
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		log.Printf("[DB] Error initializing schema: %v", err)
 	} else {
-		log.Printf("[DB] Database tables initialized successfully")
+		log.Printf("[DB] Database tables initialized successfully (active sessions isolated to RAM/Redis)")
 	}
 }
 
@@ -1613,6 +1922,94 @@ func (s *AppState) recordDeviceActivityAsync(deviceID, clientIP string) {
 	go func() {
 		_, _ = s.db.Exec(`INSERT INTO daily_active_devices (device_id, seen_date, client_ip, last_seen) VALUES ($1, CURRENT_DATE, $2, NOW()) ON CONFLICT (device_id, seen_date) DO UPDATE SET last_seen = NOW(), client_ip = $2`, deviceID, clientIP)
 	}()
+}
+
+func (s *AppState) initRedis(addr string) {
+	s.rdb = redis.NewClient(&redis.Options{
+		Addr: addr,
+		DB:   0,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.rdb.Ping(ctx).Err(); err != nil {
+		log.Printf("[REDIS] Notice: Redis not reachable at %s (%v), active sessions will be kept in process RAM only", addr, err)
+		s.rdb = nil
+	} else {
+		log.Printf("[REDIS] Successfully connected to Redis in-memory session store at %s", addr)
+		s.loadSessionsFromRedis()
+	}
+}
+
+func (s *AppState) loadSessionsFromRedis() {
+	if s.rdb == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	iter := s.rdb.Scan(ctx, 0, "wl:sess:*", 500).Iterator()
+	loaded := 0
+	now := time.Now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for iter.Next(ctx) {
+		key := iter.Val()
+		val, err := s.rdb.Get(ctx, key).Result()
+		if err != nil {
+			continue
+		}
+		var sess SessionInfo
+		if err := json.Unmarshal([]byte(val), &sess); err == nil {
+			if now.Before(sess.ExpiresAt) && !strings.HasPrefix(sess.Token, "wl_tok_hy2_") {
+				s.sessions[sess.Token] = &sess
+				s.deviceTokens[sess.DeviceID] = sess.Token
+				loaded++
+			}
+		}
+	}
+	if loaded > 0 {
+		log.Printf("[REDIS] Restored %d active sessions from Redis RAM across restart", loaded)
+	}
+}
+
+func (s *AppState) saveSessionAsync(sess *SessionInfo) {
+	if sess == nil || s.rdb == nil {
+		return
+	}
+	tok := sess.Token
+	devID := sess.DeviceID
+	exp := sess.ExpiresAt
+	ttl := time.Until(exp)
+	if ttl <= 0 {
+		return
+	}
+	data, err := json.Marshal(sess)
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = s.rdb.Set(ctx, "wl:sess:"+tok, data, ttl).Err()
+		_ = s.rdb.Set(ctx, "wl:dev:"+devID, tok, ttl).Err()
+	}()
+}
+
+func (s *AppState) deleteSessionFromRedis(token, deviceID string) {
+	if s.rdb == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if token != "" && deviceID != "" {
+		_ = s.rdb.Del(ctx, "wl:sess:"+token, "wl:dev:"+deviceID).Err()
+	} else if token != "" {
+		_ = s.rdb.Del(ctx, "wl:sess:"+token).Err()
+	} else if deviceID != "" {
+		_ = s.rdb.Del(ctx, "wl:dev:"+deviceID).Err()
+	}
 }
 
 func (s *AppState) loadFeatureSettings() {
@@ -2009,7 +2406,11 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	sessionsByGame := make(map[string]int)
+	sessionsByGame := map[string]int{
+		"wardogs":          0,
+		"wardogs (гибрид)": 0,
+		"free_internet":    0,
+	}
 	for _, sess := range s.sessions {
 		g := sess.Game
 		if g == "" {
@@ -2050,6 +2451,43 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_server_monthly_price_rub Monthly VPS rental price in rubles\n")
 	sb.WriteString("# TYPE warlink_server_monthly_price_rub gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_monthly_price_rub %d\n\n", srvPrice))
+
+	aezaBalRub := atomic.LoadUint64(&s.metricAezaBalanceRub)
+	aezaBonusRub := atomic.LoadUint64(&s.metricAezaBonusRub)
+	aezaBalEurCents := atomic.LoadUint64(&s.metricAezaBalanceEurCents)
+	aezaBonusEurCents := atomic.LoadUint64(&s.metricAezaBonusEurCents)
+
+	sb.WriteString("# HELP warlink_aeza_balance_rub Current Aeza primary balance in rubles\n")
+	sb.WriteString("# TYPE warlink_aeza_balance_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_aeza_balance_rub %d\n\n", aezaBalRub))
+
+	sb.WriteString("# HELP warlink_aeza_bonus_rub Current Aeza bonus balance in rubles\n")
+	sb.WriteString("# TYPE warlink_aeza_bonus_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_aeza_bonus_rub %d\n\n", aezaBonusRub))
+
+	sb.WriteString("# HELP warlink_aeza_balance_eur_cents Current Aeza primary balance in EUR cents\n")
+	sb.WriteString("# TYPE warlink_aeza_balance_eur_cents gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_aeza_balance_eur_cents %d\n\n", aezaBalEurCents))
+
+	sb.WriteString("# HELP warlink_aeza_bonus_eur_cents Current Aeza bonus balance in EUR cents\n")
+	sb.WriteString("# TYPE warlink_aeza_bonus_eur_cents gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_aeza_bonus_eur_cents %d\n\n", aezaBonusEurCents))
+
+	dailyPrice := float64(srvPrice) / 30.0
+	if dailyPrice <= 0 {
+		dailyPrice = 8.67
+	}
+	balanceDays := float64(aezaBalRub) / dailyPrice
+	totalRunwayDays := float64(daysLeft) + balanceDays
+	coveragePercent := (totalRunwayDays / 30.0) * 100.0
+
+	sb.WriteString("# HELP warlink_server_runway_days Total days of server runway (prepaid + balance)\n")
+	sb.WriteString("# TYPE warlink_server_runway_days gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_server_runway_days %.1f\n\n", totalRunwayDays))
+
+	sb.WriteString("# HELP warlink_server_coverage_percent Financial runway coverage percentage\n")
+	sb.WriteString("# TYPE warlink_server_coverage_percent gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_server_coverage_percent %.1f\n\n", coveragePercent))
 
 	sb.WriteString("# HELP warlink_invoices_created_total Total invoices created via Aeza\n")
 	sb.WriteString("# TYPE warlink_invoices_created_total counter\n")

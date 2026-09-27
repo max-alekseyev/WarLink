@@ -53,6 +53,8 @@ config.json
 # WarLink Runtime and Working Directories
 warlink_core/
 zapret-*/
+zapret2-*/
+docs/manual (1).md
 dist/
 tmp/
 temp/

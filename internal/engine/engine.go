@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,6 +72,8 @@ func New(cfg *config.Config, logCb func(string)) *Engine {
 	}
 	// Sync upstream lists in background
 	eng.hostlistMgr.SyncUpstream()
+	// Start auto-discovered hostlist watcher
+	eng.hostlistMgr.StartAutoListWatcher(context.Background(), 30*time.Second)
 	return eng
 }
 
@@ -147,7 +150,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 				}
 				targets = []string{targetGameProcess}
 				for _, p := range selectedGame.ProcessNames {
-					if p != "" && p != targetGameProcess && !strings.Contains(strings.ToLower(p), "launcher") {
+					if p != "" && !strings.EqualFold(p, targetGameProcess) {
 						targets = append(targets, p)
 					}
 				}
@@ -209,7 +212,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 				}
 				targets := []string{targetGameProcess}
 				for _, p := range selectedGame.ProcessNames {
-					if p != "" && p != targetGameProcess && !strings.Contains(strings.ToLower(p), "launcher") {
+					if p != "" && !strings.EqualFold(p, targetGameProcess) {
 						targets = append(targets, p)
 					}
 				}
@@ -276,7 +279,7 @@ func (e *Engine) EnsureWinwsRunning() error {
 
 	preset := desync.GetPreset(bestAlt)
 	if preset == nil {
-		preset = desync.GetPreset("general (ALT13)")
+		preset = desync.GetPreset("Автокалибровка (Circular Adaptive)")
 	}
 
 	args := preset.BuildModularArgs(zapretDir, isFreeNet)
@@ -467,14 +470,14 @@ func (e *Engine) getBestAltLocked() string {
 	}
 	if e.cfg != nil {
 		selectedGame := e.cfg.GetSelectedGame()
-		if selectedGame.PreferredAlt != "" {
+		if selectedGame.PreferredAlt != "" && selectedGame.PreferredAlt != "general" {
 			return strings.TrimSuffix(selectedGame.PreferredAlt, ".bat")
 		}
 	}
 	if e.selectedAlt != "" {
 		return strings.TrimSuffix(e.selectedAlt, ".bat")
 	}
-	return "general (ALT6)"
+	return "Автокалибровка (Circular Adaptive)"
 }
 
 // ConnectPipeline runs the full 5-stage unified connect pipeline.
@@ -590,7 +593,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 
 	targets := []string{targetGameProcess}
 	for _, p := range selectedGame.ProcessNames {
-		if p != "" && p != targetGameProcess && !strings.Contains(strings.ToLower(p), "launcher") {
+		if p != "" && !strings.EqualFold(p, targetGameProcess) {
 			targets = append(targets, p)
 		}
 	}
@@ -880,8 +883,17 @@ func (e *Engine) checkProcessHealth() {
 	}
 
 	// 2. Check sing-box.exe if connected or free internet
-	if (isConn || isFreeNet) && e.singboxMgr != nil && !e.singboxMgr.IsProcessAlive() {
-		e.log("[WARN] Обнаружено неожиданное завершение sing-box.exe. Перезапуск туннеля...")
+	needRestart := false
+	if (isConn || isFreeNet) && e.singboxMgr != nil {
+		if !e.singboxMgr.IsProcessAlive() {
+			e.log("[WARN] Обнаружено неожиданное завершение sing-box.exe. Перезапуск туннеля...")
+			needRestart = true
+		} else if e.singboxMgr.HasAuthError() {
+			e.log("[WARN] Обнаружен сбой авторизации шлюза Hysteria 2 (404/expired). Обновление сессии и перезапуск туннеля...")
+			needRestart = true
+		}
+	}
+	if needRestart {
 		var targets []string
 		if isConn {
 			selectedGame := e.cfg.GetSelectedGame()
@@ -891,7 +903,7 @@ func (e *Engine) checkProcessHealth() {
 			}
 			targets = []string{targetGameProcess}
 			for _, p := range selectedGame.ProcessNames {
-				if p != "" && p != targetGameProcess && !strings.Contains(strings.ToLower(p), "launcher") {
+				if p != "" && !strings.EqualFold(p, targetGameProcess) {
 					targets = append(targets, p)
 				}
 			}
@@ -924,7 +936,25 @@ func (e *Engine) checkProcessHealth() {
 			}
 		} else {
 			e.singboxRestartAttempts = 0
+			e.singboxMgr.ResetAuthErrorOffset()
 			e.log("[OK] Туннель автоматически восстановлен")
 		}
 	}
 }
+
+// GetAutoDiscoveredCount returns the number of runtime auto-discovered domains.
+func (e *Engine) GetAutoDiscoveredCount() int {
+	if e.hostlistMgr != nil {
+		return e.hostlistMgr.GetAutoDiscoveredCount()
+	}
+	return 0
+}
+
+// ResetAutoList resets the runtime auto-discovered domains and files.
+func (e *Engine) ResetAutoList() error {
+	if e.hostlistMgr != nil {
+		return e.hostlistMgr.ResetAutoList()
+	}
+	return nil
+}
+

@@ -51,6 +51,9 @@ func TestBuildFilteredArgs(t *testing.T) {
 	if !strings.Contains(joinedGame, "fake_default_quic") {
 		t.Errorf("expected quic fake for WARP in game args")
 	}
+	if !strings.Contains(joinedGame, "--out-range=-d3") {
+		t.Errorf("expected --out-range=-d3 for Discord UDP in game args")
+	}
 
 	// 2. When freeInternet == true: all web hostlists and rules are included
 	fullArgs := p.BuildFilteredArgs("C:\\WarLink\\warlink_core", true)
@@ -80,6 +83,51 @@ func TestBuildFilteredArgs(t *testing.T) {
 	}
 }
 
+func TestTenTspuStrategies(t *testing.T) {
+	if len(BuiltinPresets) < 10 {
+		t.Fatalf("expected at least 10 TSPU strategies, got %d", len(BuiltinPresets))
+	}
+
+	for _, p := range BuiltinPresets {
+		t.Run(p.Name, func(t *testing.T) {
+			args := p.BuildArgs("C:\\WarLink\\warlink_core")
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, "50000-50100") {
+				t.Errorf("preset %s missing UDP voice port range 50000-50100", p.Name)
+			}
+			if !strings.Contains(joined, "--out-range=-d3") {
+				t.Errorf("preset %s missing --out-range=-d3 Discord UDP cutoff", p.Name)
+			}
+		})
+	}
+}
+
+func TestCircularAdaptivePreset(t *testing.T) {
+	p := GetPreset("Автокалибровка (Circular Adaptive)")
+	if p == nil {
+		t.Fatalf("preset 'Автокалибровка (Circular Adaptive)' not found")
+	}
+
+	args := p.BuildArgs("C:\\WarLink\\warlink_core")
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "circular:fails=3") {
+		t.Errorf("expected circular orchestrator in args, got: %s", joined)
+	}
+	if !strings.Contains(joined, "strategy=1") || !strings.Contains(joined, "strategy=2") || !strings.Contains(joined, "strategy=3:final") {
+		t.Errorf("expected strategy steps in circular preset, got: %s", joined)
+	}
+	if !strings.Contains(joined, "ip_autottl=-2,3-20") {
+		t.Errorf("expected ip_autottl in circular preset, got: %s", joined)
+	}
+	if !strings.Contains(joined, "--hostlist-auto=") {
+		t.Errorf("expected hostlist-auto in circular preset, got: %s", joined)
+	}
+	if !strings.Contains(joined, "--wf-tcp-in=80,443") {
+		t.Errorf("expected --wf-tcp-in=80,443 in header, got: %s", joined)
+	}
+}
+
 func TestGeneralAlt3Preset(t *testing.T) {
 	p := GetPreset("general (ALT3)")
 	if p == nil {
@@ -99,8 +147,11 @@ func TestGeneralAlt3Preset(t *testing.T) {
 }
 
 func TestGoogleAndDiscordRuleSafety(t *testing.T) {
-	// Verify across ALL builtin presets that Google and discord.media are protected from RST-inducing parameters
-	for _, p := range BuiltinPresets {
+	allPresets := append([]Preset{}, BuiltinPresets...)
+	allPresets = append(allPresets, legacyPresets...)
+
+	// Verify across ALL presets that Google and discord.media are protected from RST-inducing parameters
+	for _, p := range allPresets {
 		t.Run(p.Name, func(t *testing.T) {
 			fullArgs := p.BuildFilteredArgs("C:\\WarLink\\warlink_core", true)
 			var googleSection []string
@@ -147,6 +198,32 @@ func TestGoogleAndDiscordRuleSafety(t *testing.T) {
 				t.Errorf("preset %s: missing google exclusion from general rule", p.Name)
 			}
 		})
+	}
+}
+
+func TestDiscordVoiceWebRTCSafety(t *testing.T) {
+	p := GetPreset("Автокалибровка (Circular Adaptive)")
+	if p == nil {
+		t.Fatalf("preset not found")
+	}
+
+	fullArgs := p.BuildFilteredArgs("C:\\WarLink\\warlink_core", true)
+	joinedFull := strings.Join(fullArgs, " ")
+
+	if !strings.Contains(joinedFull, "--ctrack-timeouts=60:300:60:3600") {
+		t.Errorf("expected 1-hour conntrack timeout for long voice sessions")
+	}
+	if !strings.Contains(joinedFull, "ACTIVE_DISCORD_UDP.bin") {
+		t.Errorf("expected fake_discord to use ACTIVE_DISCORD_UDP.bin")
+	}
+	if !strings.Contains(joinedFull, "--filter-l7=discord,stun") && !strings.Contains(joinedFull, "--filter-l7=stun,discord") {
+		t.Errorf("expected L7 filter for discord,stun to protect SRTP voice audio")
+	}
+	if strings.Contains(joinedFull, "--payload=all") {
+		t.Errorf("payload=all must NOT be used for voice ports as it corrupts SRTP audio")
+	}
+	if !strings.Contains(joinedFull, "repeats=6") {
+		t.Errorf("expected repeats=6 on Discord UDP discovery for reliable DPI bypass")
 	}
 }
 

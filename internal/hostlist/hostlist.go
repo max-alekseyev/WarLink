@@ -2,6 +2,7 @@ package hostlist
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -337,5 +338,125 @@ func (m *Manager) ExportFreeInternetList() (string, error) {
 	}
 	_ = os.WriteFile(tgIpsetFile, []byte(tgSb.String()), 0644)
 
+	// Ensure list-auto.txt exists for winws2 runtime discovery
+	_, _ = m.EnsureAutoList()
+
 	return destFile, nil
 }
+
+// EnsureAutoList guarantees that list-auto.txt exists in warlink_core/zapret/lists.
+func (m *Manager) EnsureAutoList() (string, error) {
+	zapretListsDir := filepath.Join(deps.GetZapretDir(), "lists")
+	_ = os.MkdirAll(zapretListsDir, 0755)
+
+	autoFile := filepath.Join(zapretListsDir, "list-auto.txt")
+	if _, err := os.Stat(autoFile); os.IsNotExist(err) {
+		initialContent := "# WarLink - Auto-discovered blocked domains\n# Automatically populated by winws2 at runtime\n\n"
+		err = os.WriteFile(autoFile, []byte(initialContent), 0644)
+		if err != nil {
+			return "", err
+		}
+	}
+	return autoFile, nil
+}
+
+// StartAutoListWatcher starts a background goroutine that polls list-auto.txt
+// and merges newly discovered blocked domains into the cache.
+func (m *Manager) StartAutoListWatcher(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	autoFile, err := m.EnsureAutoList()
+	if err != nil {
+		m.log(fmt.Sprintf("[HOSTLIST] Ошибка инициализации автохостлиста: %v", err))
+		return
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		var lastModTime time.Time
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fi, err := os.Stat(autoFile)
+				if err != nil {
+					continue
+				}
+				if !fi.ModTime().After(lastModTime) {
+					continue
+				}
+				lastModTime = fi.ModTime()
+
+				f, err := os.Open(autoFile)
+				if err != nil {
+					continue
+				}
+
+				var newDomains []string
+				scanner := bufio.NewScanner(f)
+				for scanner.Scan() {
+					line := strings.TrimSpace(scanner.Text())
+					if line != "" && !strings.HasPrefix(line, "#") {
+						newDomains = append(newDomains, strings.ToLower(line))
+					}
+				}
+				_ = f.Close()
+
+				if len(newDomains) == 0 {
+					continue
+				}
+
+				m.mu.Lock()
+				existing := make(map[string]struct{})
+				for _, d := range m.categories["auto_discovered"] {
+					existing[d] = struct{}{}
+				}
+				addedCount := 0
+				for _, d := range newDomains {
+					if _, found := existing[d]; !found {
+						existing[d] = struct{}{}
+						m.categories["auto_discovered"] = append(m.categories["auto_discovered"], d)
+						addedCount++
+					}
+				}
+				if addedCount > 0 {
+					sort.Strings(m.categories["auto_discovered"])
+					m.rebuildAllHostsLocked()
+					m.mu.Unlock()
+					m.saveCache()
+					m.log(fmt.Sprintf("[HOSTLIST] Автоматически обнаружено и добавлено %d новых заблокированных доменов (всего в автосписке: %d)",
+						addedCount, len(m.categories["auto_discovered"])))
+				} else {
+					m.mu.Unlock()
+				}
+			}
+		}
+	}()
+}
+
+// GetAutoDiscoveredCount returns the number of runtime auto-discovered domains.
+func (m *Manager) GetAutoDiscoveredCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.categories["auto_discovered"])
+}
+
+// ResetAutoList clears all runtime auto-discovered domains and resets list-auto.txt.
+func (m *Manager) ResetAutoList() error {
+	m.mu.Lock()
+	m.categories["auto_discovered"] = nil
+	m.rebuildAllHostsLocked()
+	m.mu.Unlock()
+	m.saveCache()
+
+	zapretListsDir := filepath.Join(deps.GetZapretDir(), "lists")
+	autoFile := filepath.Join(zapretListsDir, "list-auto.txt")
+	initialContent := "# WarLink - Auto-discovered blocked domains\n# Automatically populated by winws2 at runtime\n\n"
+	return os.WriteFile(autoFile, []byte(initialContent), 0644)
+}
+
+

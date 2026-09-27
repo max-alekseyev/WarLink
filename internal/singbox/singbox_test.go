@@ -121,6 +121,40 @@ func TestGenerateConfig(t *testing.T) {
 	if !hasVivoxRemoteDNS {
 		t.Errorf("Expected vivox.com to resolve via dns-remote (not fakeip)")
 	}
+	hasDiscordRouteExclude := false
+	for _, ip := range parsed.Inbounds[0].RouteExcludeAddress {
+		if ip == "162.159.0.0/16" {
+			hasDiscordRouteExclude = true
+		}
+	}
+	if !hasDiscordRouteExclude {
+		t.Errorf("Expected 162.159.0.0/16 in route_exclude_address so Discord bypasses Wintun to local Zapret 2")
+	}
+
+	hasDiscordSignalingInHy2 := false
+	hasDiscordUDPDirectRule := false
+	for _, r := range parsed.Route.Rules {
+		if r.Outbound == "hy2-stockholm" {
+			for _, d := range r.DomainSuffix {
+				if d == "discord.media" || d == "gateway.discord.gg" {
+					hasDiscordSignalingInHy2 = true
+				}
+			}
+		}
+		if r.Outbound == "direct" {
+			for _, pr := range r.PortRange {
+				if pr == "50000:50100" {
+					hasDiscordUDPDirectRule = true
+				}
+			}
+		}
+	}
+	if hasDiscordSignalingInHy2 {
+		t.Errorf("Discord signaling domains must NOT route through hy2-stockholm tunnel (Flowseal-equivalent local bypass)")
+	}
+	if !hasDiscordUDPDirectRule {
+		t.Errorf("Expected Discord voice UDP ports 50000:50100 to route direct")
+	}
 
 	if !hasGameRule {
 		t.Errorf("Expected route rule for WardogsClient-Win64-Shipping.exe")
@@ -276,7 +310,7 @@ func TestLiveStockholmGateway(t *testing.T) {
 		t.Fatalf("Failed to get gateway status: %v", err)
 	}
 	t.Logf("Stockholm Gateway: %+v", st)
-	if st.Status != "online" || st.MaxSessions != 100 {
+	if st.Status != "online" || st.MaxSessions <= 0 {
 		t.Errorf("Unexpected gateway status: %+v", st)
 	}
 

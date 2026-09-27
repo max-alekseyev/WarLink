@@ -342,20 +342,26 @@ func TestGenerateSingBoxConfigDirectGameDomains(t *testing.T) {
 		t.Errorf("expected global port 80 direct route rule")
 	}
 
-	// 3. Verify WardogsLauncher-Shipping.exe is excluded to direct
+	// 3. Verify Elytra anti-cheat installer is excluded to direct, but WardogsLauncher-Shipping.exe routes to tunnel
+	hasElytraDirect := false
 	hasLauncherDirect := false
 	for _, r := range parsed.Route.Rules {
 		if r.Outbound == "direct" {
 			for _, p := range r.ProcessName {
+				if strings.EqualFold(p, "Elytra-Setup.exe") {
+					hasElytraDirect = true
+				}
 				if strings.EqualFold(p, "WardogsLauncher-Shipping.exe") {
 					hasLauncherDirect = true
-					break
 				}
 			}
 		}
 	}
-	if !hasLauncherDirect {
-		t.Errorf("expected WardogsLauncher-Shipping.exe to be routed direct")
+	if !hasElytraDirect {
+		t.Errorf("expected Elytra-Setup.exe to be routed direct")
+	}
+	if hasLauncherDirect {
+		t.Errorf("expected WardogsLauncher-Shipping.exe NOT to be routed direct (must route to tunnel)")
 	}
 
 	// 4. Verify Hysteria outbound has TLS ServerName set to gateway.warlink.network

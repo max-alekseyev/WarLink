@@ -170,33 +170,27 @@ function renderShowcase(games, activeId) {
         const activeDot = (isSelected && isConnected && !isLaunching) ? '<span class="shortcut-dot-active" title="В сети"></span>' : '';
         const spinnerOverlay = isLaunching ? `
             <div class="shortcut-spinner-overlay" title="Подключение и запуск...">
-                <svg class="shortcut-spinner-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="shortcut-spinner-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 12a9 9 0 1 1-6.219-8.56" />
                 </svg>
             </div>
         ` : '';
 
-        let deleteBtn = '';
-        if (!isDefault) {
-            deleteBtn = `
-                <button class="shortcut-delete-btn" onclick="deleteGame(event, '${g.id}')" title="Удалить ярлык">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                </button>
-            `;
-        }
+        const tooltip = (isSelected && isConnected) 
+            ? `${escapeHtml(g.title)} (В сети • Кликните для отключения)` 
+            : escapeHtml(g.title);
 
         html += `
             <div class="game-shortcut ${isSelected ? 'is-selected' : ''} ${isLaunching ? 'is-launching' : ''}" 
                  onclick="onGameClick('${g.id}')" 
                  oncontextmenu="showGameContextMenu(event, '${g.id}', ${isDefault})"
-                 title="${escapeHtml(g.title)}">
+                 title="${tooltip}">
                 <div class="shortcut-icon-wrapper">
                     ${iconHtml}
                     ${activeDot}
                     ${spinnerOverlay}
                 </div>
                 <div class="shortcut-title">${escapeHtml(g.title)}</div>
-                ${deleteBtn}
             </div>
         `;
     });
@@ -921,6 +915,18 @@ function updateUI(data) {
             selectProfile.value = data.profile;
         }
     }
+
+    // Auto-hosts count
+    const autoCountEl = document.getElementById('auto-hosts-count');
+    if (autoCountEl && typeof data.auto_hosts_count === 'number') {
+        autoCountEl.textContent = data.auto_hosts_count;
+    }
+
+    // Circular orchestrator strategy indicator
+    const circularRow = document.getElementById('circular-strategy-row');
+    if (circularRow) {
+        circularRow.style.display = data.circular_active ? 'flex' : 'none';
+    }
 }
 
 async function toggleConnect() {
@@ -960,6 +966,30 @@ function openLogFile() {
 
 function openSingboxLogFile() {
     fetch('/api/open-singbox-log').catch(() => {});
+}
+
+async function runBenchmark() {
+    const btn = document.getElementById('btn-run-benchmark');
+    if (btn) btn.disabled = true;
+    try {
+        await fetch('/api/run-benchmark');
+        fetchStatus();
+    } catch (e) {
+        console.error('Benchmark error:', e);
+    } finally {
+        setTimeout(() => {
+            if (btn) btn.disabled = false;
+        }, 1500);
+    }
+}
+
+async function resetAutoHosts() {
+    try {
+        await fetch('/api/reset-auto-hosts', { method: 'POST' });
+        fetchStatus();
+    } catch (e) {
+        console.error('Reset auto hosts error:', e);
+    }
 }
 
 async function donateServer(e) {

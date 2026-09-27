@@ -8,4 +8,9 @@ require (
 	golang.org/x/sys v0.45.0
 )
 
-require github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
+require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
+	github.com/redis/go-redis/v9 v9.22.0 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+)

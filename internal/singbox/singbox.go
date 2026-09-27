@@ -147,14 +147,15 @@ type LogConfig struct {
 }
 
 type InboundConfig struct {
-	Type          string   `json:"type"`
-	Tag           string   `json:"tag"`
-	InterfaceName string   `json:"interface_name"`
-	Address       []string `json:"address"`
-	MTU           int      `json:"mtu,omitempty"`
-	AutoRoute     bool     `json:"auto_route"`
-	StrictRoute   bool     `json:"strict_route"`
-	Stack         string   `json:"stack"`
+	Type                string   `json:"type"`
+	Tag                 string   `json:"tag"`
+	InterfaceName       string   `json:"interface_name"`
+	Address             []string `json:"address"`
+	MTU                 int      `json:"mtu,omitempty"`
+	AutoRoute           bool     `json:"auto_route"`
+	StrictRoute         bool     `json:"strict_route"`
+	Stack               string   `json:"stack"`
+	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
 }
 
 type Endpoint struct {
@@ -227,7 +228,6 @@ var BlockedServiceIPs = []string{
 	"91.108.16.0/22",
 	"91.108.20.0/22",
 	"91.108.56.0/22",
-	"91.105.192.0/23",
 }
 
 // BlockedServiceDomains contains domains that require tunneling through Stockholm GPN.
@@ -303,12 +303,9 @@ var DirectGameDomains = []string{
 	"time.cloudflare.com",
 }
 
-// DirectLauncherProcesses contains launcher, anti-cheat installer, and background crash reporting
-// processes that should always route directly without tunnel encapsulation.
+// DirectLauncherProcesses contains anti-cheat installer, crash reporting,
+// and third-party anti-cheat daemons that must bypass the tunnel.
 var DirectLauncherProcesses = []string{
-	"WardogsLauncher-Shipping.exe",
-	"wardogslauncher-shipping.exe",
-	"wardogslauncher.exe",
 	"Elytra-Setup.exe",
 	"elytra-setup.exe",
 	"elytra-launcher.exe",
@@ -331,12 +328,15 @@ var DirectLauncherProcesses = []string{
 	"faceitservice.exe",
 }
 
-// WardogsGameProcesses contains process names for WARDOGS dedicated game client.
+// WardogsGameProcesses contains process names for WARDOGS dedicated game client and launcher.
 var WardogsGameProcesses = []string{
 	"WardogsClient-Win64-Shipping.exe",
 	"wardogsclient-win64-shipping.exe",
 	"wardogs.exe",
 	"wardogs-win64-shipping.exe",
+	"WardogsLauncher-Shipping.exe",
+	"wardogslauncher-shipping.exe",
+	"wardogslauncher.exe",
 }
 
 type RouteRule struct {
@@ -378,6 +378,7 @@ type GatewayStatus struct {
 
 var (
 	cachedSessionToken  string
+	cachedSessionGame   string
 	cachedSessionObfs   string
 	cachedSessionServer string
 	cachedSessionPorts  string
@@ -416,7 +417,7 @@ func AcquireSession(game ...string) (string, error) {
 	}
 
 	sessionMu.Lock()
-	if cachedSessionToken != "" && time.Now().Before(cachedSessionExp) {
+	if cachedSessionToken != "" && cachedSessionGame == targetGame && time.Now().Before(cachedSessionExp) {
 		tok := cachedSessionToken
 		sessionMu.Unlock()
 		return tok, nil
@@ -467,7 +468,7 @@ func AcquireSession(game ...string) (string, error) {
 
 	resp, err := attemptAuth()
 	if err != nil {
-		return "", fmt.Errorf("шлюз Стокгольм временно недоступен (%s): %w", GetServerIP(), err)
+		return "", fmt.Errorf("шлюз Стокгольм временно недоступен: %w", err)
 	}
 
 	if sDate := resp.Header.Get("Date"); sDate != "" {
@@ -483,7 +484,7 @@ func AcquireSession(game ...string) (string, error) {
 		if strings.Contains(string(body), "expired timestamp") {
 			resp, err = attemptAuth()
 			if err != nil {
-				return "", fmt.Errorf("шлюз Стокгольм временно недоступен (%s): %w", GetServerIP(), err)
+				return "", fmt.Errorf("шлюз Стокгольм временно недоступен: %w", err)
 			}
 		} else {
 			return "", fmt.Errorf("ошибка авторизации на шлюзе (HTTP %d): %s", resp.StatusCode, string(body))
@@ -506,6 +507,7 @@ func AcquireSession(game ...string) (string, error) {
 
 	sessionMu.Lock()
 	cachedSessionToken = sessResp.Token
+	cachedSessionGame = targetGame
 	cachedSessionObfs = sessResp.Obfs
 	cachedSessionServer = sessResp.Server
 	cachedSessionPorts = sessResp.ServerPorts
@@ -520,6 +522,7 @@ func AcquireSession(game ...string) (string, error) {
 func InvalidateSession() {
 	sessionMu.Lock()
 	cachedSessionToken = ""
+	cachedSessionGame = ""
 	cachedSessionExp = time.Time{}
 	sessionMu.Unlock()
 }
@@ -529,6 +532,7 @@ func ReleaseSession() error {
 	sessionMu.Lock()
 	tok := cachedSessionToken
 	cachedSessionToken = ""
+	cachedSessionGame = ""
 	cachedSessionExp = time.Time{}
 	sessionMu.Unlock()
 
@@ -1050,6 +1054,21 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		},
 	)
 
+	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-50100, 3478) routes direct
+	// with WinDivert desync to avoid server UDP port limits and ensure minimum audio latency
+	rules = append(rules,
+		RouteRule{
+			Network:  "udp",
+			Port:     []int{3478},
+			Outbound: "direct",
+		},
+		RouteRule{
+			Network:   "udp",
+			PortRange: []string{"19294:19344", "50000:50100"},
+			Outbound:  "direct",
+		},
+	)
+
 	// Route specified target processes to hy2-stockholm
 	if len(allProcesses) > 0 {
 		rules = append(rules, RouteRule{
@@ -1091,11 +1110,13 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		}, DirectLauncherProcesses...),
 		Server: "dns-local",
 	})
-	// Vivox domains must resolve to real IPs via remote DNS (avoiding FakeIP SIP/SDP mismatches)
-	dnsRules = append(dnsRules, DNSRule{
-		DomainSuffix: []string{"vivox.com"},
-		Server:       "dns-remote",
-	})
+	// Vivox domains must resolve to real IPs via remote DNS (avoiding FakeIP WebRTC/SIP mismatches)
+	dnsRules = append(dnsRules,
+		DNSRule{
+			DomainSuffix: []string{"vivox.com"},
+			Server:       "dns-remote",
+		},
+	)
 
 	if len(allProcesses) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
@@ -1106,7 +1127,9 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 
 	var fakeDomains []string
 	if includeWebServices {
-		fakeDomains = append(fakeDomains, BlockedServiceDomains...)
+		for _, d := range BlockedServiceDomains {
+			fakeDomains = append(fakeDomains, d)
+		}
 	}
 	if len(allDomains) > 0 {
 		for _, d := range allDomains {
@@ -1172,14 +1195,15 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		DNS: dnsConfig,
 		Inbounds: []InboundConfig{
 			{
-				Type:          "tun",
-				Tag:           "tun-in",
-				InterfaceName: "WarLink-Tun",
-				Address:       []string{"172.19.0.1/30"},
-				MTU:           1360,
-				AutoRoute:     true,
-				StrictRoute:   false,
-				Stack:         "mixed",
+				Type:                "tun",
+				Tag:                 "tun-in",
+				InterfaceName:       "WarLink-Tun",
+				Address:             []string{"172.19.0.1/30"},
+				MTU:                 1360,
+				AutoRoute:           true,
+				StrictRoute:         false,
+				Stack:               "mixed",
+				RouteExcludeAddress: []string{"162.159.0.0/16"},
 			},
 		},
 		Outbounds: []Outbound{
@@ -1223,15 +1247,16 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 
 // Manager controls the lifecycle of sing-box.
 type Manager struct {
-	mu                 sync.Mutex
-	coreDir            string
-	cmd                *exec.Cmd
-	logFile            *os.File
-	isRunning          bool
-	targetProcesses    []string
-	includeWebServices bool
-	currentGame        string
-	OnProcessStart     func(pid int)
+	mu                  sync.Mutex
+	coreDir             string
+	cmd                 *exec.Cmd
+	logFile             *os.File
+	isRunning           bool
+	targetProcesses     []string
+	includeWebServices  bool
+	currentGame         string
+	lastAuthErrorOffset int64
+	OnProcessStart      func(pid int)
 }
 
 func sliceEqual(a, b []string) bool {
@@ -1348,7 +1373,7 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 
 	// Request active session from Stockholm server
 	if logFn != nil {
-		logFn(fmt.Sprintf("[INFO] Авторизация на шлюзе Стокгольм (%s, проверка свободных слотов)...", GetServerIP()))
+		logFn("[INFO] Авторизация на шлюзе Стокгольм (проверка свободных слотов)...")
 	}
 	token, err := AcquireSession(targetGame)
 	if err != nil {
@@ -1520,9 +1545,9 @@ func (m *Manager) AddTargetProcess(proc string, logFn func(string)) error {
 		return nil
 	}
 
-	token, _ := AcquireSession()
+	token, _ := AcquireSession(m.currentGame)
 	var cfgBytes []byte
-	if remoteCfg, rErr := FetchRemoteConfig(GetServerAPI(), token, "", m.targetProcesses, m.includeWebServices); rErr == nil && len(remoteCfg) > 0 {
+	if remoteCfg, rErr := FetchRemoteConfig(GetServerAPI(), token, m.currentGame, m.targetProcesses, m.includeWebServices); rErr == nil && len(remoteCfg) > 0 {
 		cfgBytes = remoteCfg
 	} else {
 		activeProfiles, _ := FetchProfiles()
@@ -1611,6 +1636,58 @@ func (m *Manager) IsProcessAlive() bool {
 		return false
 	}
 	return m.isProcessAliveLocked()
+}
+
+// HasAuthError checks the tail of singbox.log for Hysteria 2 authentication failure (HTTP 404 / expired session).
+func (m *Manager) HasAuthError() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	logPath := filepath.Join(m.GetBinDir(), "singbox.log")
+	info, err := os.Stat(logPath)
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+
+	size := info.Size()
+	if size <= m.lastAuthErrorOffset {
+		return false
+	}
+
+	readFrom := int64(0)
+	if size > 32768 {
+		readFrom = size - 32768
+	}
+	if readFrom < m.lastAuthErrorOffset {
+		readFrom = m.lastAuthErrorOffset
+	}
+
+	f, err := os.Open(logPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(readFrom, io.SeekStart); err != nil {
+		return false
+	}
+
+	buf := make([]byte, size-readFrom)
+	n, _ := io.ReadFull(f, buf)
+	content := string(buf[:n])
+
+	if strings.Contains(content, "authentication failed") || strings.Contains(content, "status code: 404") {
+		m.lastAuthErrorOffset = size
+		return true
+	}
+	return false
+}
+
+// ResetAuthErrorOffset clears the tracked log offset when a new session is acquired.
+func (m *Manager) ResetAuthErrorOffset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastAuthErrorOffset = 0
 }
 
 

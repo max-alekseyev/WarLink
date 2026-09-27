@@ -46,21 +46,15 @@ func TestBenchmarkTargets_NonEmpty(t *testing.T) {
 	}
 }
 
-func TestPreset22_Execution(t *testing.T) {
+func TestPreset_Execution(t *testing.T) {
 	zapretDir := filepath.Join("..", "..", "warlink_core", "zapret")
 	presets := desync.BuiltinPresets
-	var p22 *desync.Preset
-	for _, p := range presets {
-		if p.Name == "general (ALT13)" {
-			p22 = &p
-			break
-		}
+	if len(presets) == 0 {
+		t.Fatal("no builtin presets")
 	}
-	if p22 == nil {
-		t.Fatal("ALT13 not found")
-	}
-	t.Logf("Testing preset 22: %s", p22.Name)
-	args := p22.BuildModularArgs(zapretDir, true)
+	p := &presets[0]
+	t.Logf("Testing preset: %s", p.Name)
+	args := p.BuildModularArgs(zapretDir, true)
 	t.Logf("Args count: %d", len(args))
 	start := time.Now()
 	results := probeAllEndpoints(BenchmarkTargets)

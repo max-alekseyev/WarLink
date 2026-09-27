@@ -74,7 +74,15 @@ var BenchmarkTargets = []EndpointCheck{
 	{Name: "GoogleDNS8844", Host: "8.8.4.4", Port: 53, IsDNS: true},
 }
 
-// RunFullBenchmark sequentially evaluates all 22 builtin presets and returns the winning optimal profile.
+// CanaryTargets are the 2 critical canary services probed during Phase 1.
+// If a preset fails Google Video Redirect or Discord Gateway, it is pruned immediately in ~350ms.
+var CanaryTargets = []EndpointCheck{
+	{Name: "CanaryGoogle", Host: "redirector.googlevideo.com", Port: 443, CheckHTTP: true, CheckTLS3: true},
+	{Name: "CanaryDiscord", Host: "gateway.discord.gg", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: true},
+}
+
+// RunFullBenchmark sequentially evaluates builtin presets using an adaptive 2-phase canary cascade
+// (inspired by blockcheck2) and returns the winning optimal profile.
 func RunFullBenchmark(
 	coreDir string,
 	progressCb func(curr, total int, presetName, logLine string),
@@ -92,7 +100,7 @@ func RunFullBenchmark(
 
 	var scores []PresetScore
 
-	logCb(fmt.Sprintf("[BENCHMARK] Старт глобального тестирования %d профилей обхода DPI...", totalPresets))
+	logCb(fmt.Sprintf("[BENCHMARK] Старт адаптивного тестирования %d профилей обхода DPI (Canary Cascade)...", totalPresets))
 
 	for i, preset := range presets {
 		idx := i + 1
@@ -115,10 +123,44 @@ func RunFullBenchmark(
 		}
 
 		// Wait briefly for WinDivert driver filter hook
-		time.Sleep(120 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 
-		// 2. Concurrently probe all target endpoints
-		results := probeAllEndpoints(BenchmarkTargets)
+		// Phase 1: Fast Canary probe (350ms timeout)
+		canaryResults := probeAllEndpointsWithTimeout(CanaryTargets, 350*time.Millisecond)
+		canaryPassed := 0
+		for _, cr := range canaryResults {
+			if cr.HTTPOk || cr.TLS3Ok || cr.TLS2Ok {
+				canaryPassed++
+			}
+		}
+
+		var results []CheckResult
+		if canaryPassed < len(CanaryTargets) {
+			// Canary failed: stop winws immediately and prune preset (<450ms total)
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			}
+			_ = KillProcess("winws2.exe")
+			_ = KillProcess("winws.exe")
+			time.Sleep(30 * time.Millisecond)
+
+			logCb(fmt.Sprintf("[BENCHMARK] Пресет %s отсеян на фазе Canary (%d/%d канареек пройдено за <400ms)",
+				preset.Name, canaryPassed, len(CanaryTargets)))
+
+			score := PresetScore{
+				PresetName:   preset.Name,
+				PassedChecks: canaryPassed,
+				TotalChecks:  len(BenchmarkTargets) * 3,
+				AvgPingMs:    999,
+				Results:      canaryResults,
+			}
+			scores = append(scores, score)
+			continue
+		}
+
+		// Phase 2: Canary passed! Run full probing across all targets (600ms timeout)
+		results = probeAllEndpointsWithTimeout(BenchmarkTargets, 600*time.Millisecond)
 
 		// 3. Stop winws process and clean handles
 		if cmd.Process != nil {
@@ -127,7 +169,7 @@ func RunFullBenchmark(
 		}
 		_ = KillProcess("winws2.exe")
 		_ = KillProcess("winws.exe")
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
 
 		// 4. Calculate score and log formatted table
 		passed := 0
@@ -194,7 +236,11 @@ func RunFullBenchmark(
 	}
 
 	if len(scores) == 0 {
-		return "general (ALT13)", nil, fmt.Errorf("не удалось протестировать ни один профиль")
+		fallback := "Стратегия 1 (EcoFilter SeqOverlap)"
+		if len(desync.BuiltinPresets) > 0 {
+			fallback = desync.BuiltinPresets[0].Name
+		}
+		return fallback, nil, fmt.Errorf("не удалось протестировать ни один профиль")
 	}
 
 	// Sort scores: Highest passed checks first, then lowest ping
@@ -272,6 +318,10 @@ func formatResultLine(r CheckResult) string {
 }
 
 func probeAllEndpoints(targets []EndpointCheck) []CheckResult {
+	return probeAllEndpointsWithTimeout(targets, 800*time.Millisecond)
+}
+
+func probeAllEndpointsWithTimeout(targets []EndpointCheck, timeout time.Duration) []CheckResult {
 	results := make([]CheckResult, len(targets))
 	var wg sync.WaitGroup
 
@@ -279,7 +329,7 @@ func probeAllEndpoints(targets []EndpointCheck) []CheckResult {
 		wg.Add(1)
 		go func(idx int, tgt EndpointCheck) {
 			defer wg.Done()
-			results[idx] = probeSingle(tgt)
+			results[idx] = probeSingleWithTimeout(tgt, timeout)
 		}(i, t)
 	}
 
@@ -288,8 +338,14 @@ func probeAllEndpoints(targets []EndpointCheck) []CheckResult {
 }
 
 func probeSingle(t EndpointCheck) CheckResult {
+	return probeSingleWithTimeout(t, 800*time.Millisecond)
+}
+
+func probeSingleWithTimeout(t EndpointCheck, timeout time.Duration) CheckResult {
 	res := CheckResult{Name: t.Name}
-	const timeout = 1000 * time.Millisecond
+	if timeout <= 0 {
+		timeout = 800 * time.Millisecond
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 

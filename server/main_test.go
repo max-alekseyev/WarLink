@@ -199,3 +199,143 @@ func TestHandleAnalyticsActivePlayers(t *testing.T) {
 	}
 }
 
+func TestSyncAezaDonations(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-KEY") != "test_api_key" {
+			http.Error(w, "unauthorized", http.StatusForbidden)
+			return
+		}
+
+		respData := map[string]interface{}{
+			"items": []map[string]interface{}{
+				{
+					"id":          101,
+					"amount":      75.0, // 75 cents -> 98 RUB
+					"bonusAmount": 0.0,
+					"status":      "performed",
+					"type":        "replenishment",
+					"invoiceId":   1001,
+					"createdAt":   "2026-09-20T18:01:00.000Z",
+				},
+				{
+					"id":          102,
+					"amount":      150.0, // 150 cents -> 196 RUB
+					"bonusAmount": 0.0,
+					"status":      "performed",
+					"type":        "replenishment",
+					"invoiceId":   1002,
+					"createdAt":   "2026-09-26T01:46:00.000Z",
+				},
+				{
+					"id":          103,
+					"amount":      75.0,
+					"bonusAmount": 0.0,
+					"status":      "created", // Pending, not paid!
+					"type":        "replenishment",
+					"invoiceId":   1003,
+					"createdAt":   "2026-09-26T20:00:00.000Z",
+				},
+				{
+					"id":          104,
+					"amount":      1450.0,
+					"bonusAmount": 0.0,
+					"status":      "performed",
+					"type":        "buy", // VPS buy, not replenishment!
+					"serviceId":   42,
+					"createdAt":   "2026-09-26T20:00:00.000Z",
+				},
+				{
+					"id":          105,
+					"amount":      500.0,
+					"bonusAmount": 0.0,
+					"status":      "performed",
+					"type":        "replenishment",
+					"invoiceId":   999,
+					"createdAt":   "2024-11-03T14:22:21.000Z", // Pre-launch old transaction, should be ignored!
+				},
+			},
+			"total": 5,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(respData)
+	}))
+	defer mockServer.Close()
+
+	state := &AppState{
+		cfg: ServerConfig{
+			AezaAPIKey:      "test_api_key",
+			DonateAmountRub: 98,
+		},
+	}
+
+	state.syncAezaDonationsURL(mockServer.URL)
+
+	if state.metricDonationsPaid != 2 {
+		t.Fatalf("expected 2 paid donations, got %d", state.metricDonationsPaid)
+	}
+
+	// 98 + 196 = 294 RUB
+	if state.metricDonationsRub != 294 {
+		t.Fatalf("expected 294 RUB total donations, got %d", state.metricDonationsRub)
+	}
+
+	// Test Monotonicity: empty response does not reset counters
+	emptyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"items": []interface{}{},
+			"total": 0,
+		})
+	}))
+	defer emptyServer.Close()
+
+	state.syncAezaDonationsURL(emptyServer.URL)
+
+	if state.metricDonationsPaid != 2 {
+		t.Fatalf("expected metricDonationsPaid to remain 2, got %d", state.metricDonationsPaid)
+	}
+	if state.metricDonationsRub != 294 {
+		t.Fatalf("expected metricDonationsRub to remain 294, got %d", state.metricDonationsRub)
+	}
+}
+
+func TestFetchAezaAccount(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-KEY") != "test_key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":           568805,
+			"balance":      50.0,  // 50 cents EUR -> 65 RUB
+			"bonusBalance": 182.0, // 182 cents EUR -> 238 RUB
+			"currency":     "EUR",
+		})
+	}))
+	defer mockServer.Close()
+
+	state := &AppState{
+		cfg: ServerConfig{
+			AezaAPIKey: "test_key",
+		},
+	}
+
+	state.fetchAezaAccountURL(mockServer.URL)
+
+	if state.metricAezaBalanceEurCents != 50 {
+		t.Fatalf("expected 50 cents EUR, got %d", state.metricAezaBalanceEurCents)
+	}
+	if state.metricAezaBonusEurCents != 182 {
+		t.Fatalf("expected 182 cents bonus EUR, got %d", state.metricAezaBonusEurCents)
+	}
+	if state.metricAezaBalanceRub != 65 {
+		t.Fatalf("expected 65 RUB balance, got %d", state.metricAezaBalanceRub)
+	}
+	if state.metricAezaBonusRub != 238 {
+		t.Fatalf("expected 238 RUB bonus, got %d", state.metricAezaBonusRub)
+	}
+}
+
+

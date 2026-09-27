@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.0.5</span>
+                <span class="brand-version">v2.0.6</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Free Internet -->
@@ -78,22 +78,6 @@
 
                 <div class="details-content">
                     <div class="setting-group">
-                        <span class="setting-group-title">ИГРОВОЙ ШЛЮЗ</span>
-                        <div class="setting-info-row">
-                            <span class="info-label">Сервер:</span>
-                            <span class="info-value">Стокгольм, Швеция (Aeza VPS)</span>
-                        </div>
-                        <div class="setting-info-row">
-                            <span class="info-label">Протокол:</span>
-                            <span class="info-value">Hysteria 2 (QUIC/UDP, 443)</span>
-                        </div>
-                        <div class="setting-info-row">
-                            <span class="info-label">Сетевой роутер:</span>
-                            <span class="info-value">WinTun (L3 селективная маршрутизация)</span>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
                         <span class="setting-group-title">СВОБОДНЫЙ ИНТЕРНЕТ (DPI)</span>
                         <div class="setting-info-row">
                             <span class="info-label">Сетевой фильтр:</span>
@@ -102,8 +86,25 @@
                         <div class="setting-row" style="margin-top: 6px;">
                             <span class="setting-label">Профиль десинхронизации (Discord / YouTube):</span>
                             <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
-                                <option value="">Автоматический (оптимальный)</option>
+                                <option value="Автокалибровка (Circular Adaptive)">Автокалибровка (Circular Adaptive)</option>
                             </select>
+                        </div>
+                        <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+                            <button id="btn-run-benchmark" class="btn-link" style="font-size: 11px; padding: 2px 0; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--action);" onclick="runBenchmark()">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/></svg>
+                                Подобрать лучший профиль (автотест)
+                            </button>
+                        </div>
+                        <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                            <span class="info-label">Авто-доменов в списке:</span>
+                            <span style="display: flex; gap: 8px; align-items: center;">
+                                <span id="auto-hosts-count" class="info-value">0</span>
+                                <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
+                            </span>
+                        </div>
+                        <div id="circular-strategy-row" class="setting-info-row" style="margin-top: 4px; font-size: 11px; display: none;">
+                            <span class="info-label">Оркестратор:</span>
+                            <span id="circular-strategy-val" class="info-value" style="color: var(--action);">Авторотация активна</span>
                         </div>
                     </div>
 

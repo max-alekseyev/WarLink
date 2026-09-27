@@ -21,8 +21,8 @@ func TestEngineConcurrencyAndMutexSafety(t *testing.T) {
 	eng := New(cfg, func(msg string) {})
 
 	// Test 1: GetBestAlt default
-	if alt := eng.GetBestAlt(); alt != "general (ALT6)" {
-		t.Fatalf("expected default general (ALT6), got %s", alt)
+	if alt := eng.GetBestAlt(); alt != "Автокалибровка (Circular Adaptive)" {
+		t.Fatalf("expected default Автокалибровка (Circular Adaptive), got %s", alt)
 	}
 
 	// Test 2: SetSelectedAlt updates safely

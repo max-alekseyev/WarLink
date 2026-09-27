@@ -19,9 +19,17 @@ var ConflictingProcessNames = []string{
 	"warp-svc.exe",
 	"warp-cli.exe",
 	"wireguard.exe",
+	"wiresock-connect-service.exe",
+	"wiresock-client.exe",
+	"wiresock.exe",
+	"cmdagent.exe",
 	"openvpn.exe",
 	"amnezia-vpn.exe",
 	"clash-verge.exe",
+	"nekoray.exe",
+	"hiddify.exe",
+	"v2ray.exe",
+	"xray.exe",
 }
 
 // FindConflicts returns a list of conflicting processes currently running.

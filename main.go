@@ -36,7 +36,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.0.5"
+var AppVersion = "v2.0.6"
 
 //go:embed ui/*
 var uiFS embed.FS
@@ -1165,6 +1165,8 @@ func main() {
 			"init_msg":            state.initMsg,
 			"profile":             state.eng.GetBestAlt(),
 			"available_profiles":  state.eng.FindAvailableAlts(),
+			"auto_hosts_count":    state.eng.GetAutoDiscoveredCount(),
+			"circular_active":     strings.Contains(state.eng.GetBestAlt(), "Circular"),
 			"autolaunch_game":     state.cfg.AutolaunchGame,
 			"free_internet":       state.eng.IsFreeInternetActive(),
 			"games":               state.cfg.Games,
@@ -1423,6 +1425,16 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+	})
+
+	mux.HandleFunc("/api/reset-auto-hosts", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		_ = state.eng.ResetAutoList()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 	})
 
 	mux.HandleFunc("/api/games", func(w http.ResponseWriter, r *http.Request) {
