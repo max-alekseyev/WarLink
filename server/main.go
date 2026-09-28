@@ -27,18 +27,24 @@ import (
 	"sync/atomic"
 	"time"
 
+	"image"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
+
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"warlink/server/aclgen"
 )
 
 const (
+	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
 	DefaultServerIP      = ""
 	DefaultServerPorts   = "443,20000-30000"
 	DefaultDueDate       = "2026-10-19T14:48:00Z"
-	MaxActiveSessions    = 100
+	MaxActiveSessions    = 61 // 50 Free + 10 Sponsor + 1 Dedicated Admin
 	MaxSessionsPerIP     = 2
 	SessionTTL           = 24 * time.Hour
 	SessionInactivityTTL = 5 * time.Minute
@@ -47,32 +53,36 @@ const (
 )
 
 type ServerConfig struct {
-	ServerIP        string `json:"server_ip"`
-	ServerName      string `json:"server_name"`
-	ServerLocation  string `json:"server_location"`
-	ServerPorts     string `json:"server_ports"`
-	AezaAPIKey      string `json:"aeza_api_key"`
-	HMACSecret      string `json:"hmac_secret"`
-	ObfsPassword    string `json:"obfs_password"`
-	DashboardKey    string `json:"dashboard_key"`
-	FallbackDueDate string `json:"fallback_due_date"`
-	DonateURL       string `json:"donate_url"`
-	DonateAmountRub int    `json:"donate_amount_rub"`
-	MaxSessions     int    `json:"max_sessions"`
-	ListenPublic    string `json:"listen_public"`
-	ListenInternal  string `json:"listen_internal"`
-	DatabaseURL     string `json:"database_url"`
-	RedisAddr       string `json:"redis_addr,omitempty"`
+	ServerIP              string `json:"server_ip"`
+	ServerName            string `json:"server_name"`
+	ServerLocation        string `json:"server_location"`
+	ServerPorts           string `json:"server_ports"`
+	AezaAPIKey            string `json:"aeza_api_key"`
+	HMACSecret            string `json:"hmac_secret"`
+	ObfsPassword          string `json:"obfs_password"`
+	DashboardKey          string `json:"dashboard_key"`
+	FallbackDueDate       string `json:"fallback_due_date"`
+	DonateURL             string `json:"donate_url"`
+	DonateAmountRub       int    `json:"donate_amount_rub"`
+	MaxSessions           int    `json:"max_sessions"`
+	DedicatedSponsorSlots int    `json:"dedicated_sponsor_slots"`
+	ListenPublic          string `json:"listen_public"`
+	ListenInternal        string `json:"listen_internal"`
+	DatabaseURL           string `json:"database_url"`
+	RedisAddr             string `json:"redis_addr,omitempty"`
+	GeminiAPIKey          string `json:"gemini_api_key,omitempty"`
 }
 
 type SessionInfo struct {
-	DeviceID  string    `json:"device_id"`
-	Token     string    `json:"token"`
-	ClientIP  string    `json:"client_ip"`
-	Game      string    `json:"game"`
-	CreatedAt time.Time `json:"created_at"`
-	LastSeen  time.Time `json:"last_seen"`
-	ExpiresAt time.Time `json:"expires_at"`
+	DeviceID      string    `json:"device_id"`
+	AccountNumber string    `json:"account_number,omitempty"`
+	IsSponsor     bool      `json:"is_sponsor"`
+	Token         string    `json:"token"`
+	ClientIP      string    `json:"client_ip"`
+	Game          string    `json:"game"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastSeen      time.Time `json:"last_seen"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
 type IPRateLimiter struct {
@@ -165,6 +175,14 @@ type UserTrafficStats struct {
 	Rx uint64 `json:"rx"`
 }
 
+type GeoInfo struct {
+	Country     string  `json:"country"`
+	CountryCode string  `json:"country_code"`
+	City        string  `json:"city"`
+	Lat         float64 `json:"lat"`
+	Lon         float64 `json:"lon"`
+}
+
 type AppState struct {
 	mu           sync.RWMutex
 	cfg          ServerConfig
@@ -177,6 +195,10 @@ type AppState struct {
 	db           *sql.DB
 	rdb          *redis.Client
 
+	startTime time.Time
+	geoCache  map[string]GeoInfo
+	geoMu     sync.RWMutex
+
 	// Server load telemetry
 	prevCPUTotal uint64
 	prevCPUIdle  uint64
@@ -187,9 +209,10 @@ type AppState struct {
 	loadMu       sync.RWMutex
 
 	// Dynamic Feature Toggles
-	enableDonate bool
-	enableVoting bool
-	featureMu    sync.RWMutex
+	enableDonate        bool
+	enableVoting        bool
+	enableCommunityGoal bool
+	featureMu           sync.RWMutex
 
 	// Telemetry and Analytics Counters
 	metricRequestsTotal       uint64
@@ -197,6 +220,9 @@ type AppState struct {
 	metricRejectionsIPLimit   uint64
 	metricRejectionsBadSig    uint64
 	metricRejectionsCapacity  uint64
+	metricTerminationsUserRelease uint64
+	metricTerminationsInactivity  uint64
+	metricTerminationsTTLExpired  uint64
 	metricInvoicesCreated     uint64
 	metricDonationsPaid       uint64
 	metricDonationsRub        uint64
@@ -206,6 +232,7 @@ type AppState struct {
 	metricAezaBonusEurCents   uint64
 	cachedPrice               int
 	prevHyTraffic             map[string]UserTrafficStats
+	nicknameCache             sync.Map
 }
 
 func main() {
@@ -232,9 +259,12 @@ func main() {
 	state := &AppState{
 		sessions:      make(map[string]*SessionInfo),
 		deviceTokens:  make(map[string]string),
-		rateLimiter:   NewIPRateLimiter(5, 1*time.Minute),
-		enableDonate:  true,
-		enableVoting:  true,
+		rateLimiter:         NewIPRateLimiter(5, 1*time.Minute),
+		enableDonate:        true,
+		enableVoting:        true,
+		enableCommunityGoal: true,
+		startTime:           time.Now(),
+		geoCache:      make(map[string]GeoInfo),
 		prevHyTraffic: make(map[string]UserTrafficStats),
 	}
 	state.loadConfig(cfgPath)
@@ -329,11 +359,34 @@ func main() {
 	publicMux.HandleFunc("/api/v1/donate", state.handleDonate)
 	publicMux.HandleFunc("/api/v1/votes", state.handleVotes)
 	publicMux.HandleFunc("/api/v1/analytics", state.handleAnalytics)
+	publicMux.HandleFunc("/api/v1/releases", state.handleReleases)
+	publicMux.HandleFunc("/api/v1/notifications", state.handleNotifications)
+	publicMux.HandleFunc("/api/v1/notifications/read", state.handleNotificationRead)
+	publicMux.HandleFunc("/api/v1/admin/notifications", state.handleAdminNotifications)
+	publicMux.HandleFunc("/api/v1/sponsors", state.handleSponsors)
+	publicMux.HandleFunc("/api/v1/profile", state.handleProfile)
+	publicMux.HandleFunc("/api/v1/profile/avatar", state.handleProfileAvatar)
+
+	avatarsDir := "/opt/warlink-server/avatars"
+	if _, err := os.Stat("/opt/warlink-server"); os.IsNotExist(err) {
+		avatarsDir = "./avatars"
+	}
+	_ = os.MkdirAll(avatarsDir, 0755)
+	publicMux.Handle("/avatars/", http.StripPrefix("/avatars/", http.FileServer(http.Dir(avatarsDir))))
+
 	publicMux.HandleFunc("/api/v1/admin/features", state.handleAdminFeatures)
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
+	publicMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.6"})
+	})
 	publicMux.HandleFunc("/metrics", state.handleMetrics)
 	publicMux.HandleFunc("/dashboard", state.handleDashboard)
 	publicMux.HandleFunc("/dashboard/", state.handleDashboard)
+	publicMux.HandleFunc("/admin", state.handleDashboard)
+	publicMux.HandleFunc("/admin/", state.handleDashboard)
+	publicMux.HandleFunc("/control", state.handleDashboard)
+	publicMux.HandleFunc("/control/", state.handleDashboard)
 
 	log.Printf("[PUBLIC] Starting WarLink API on %s", state.cfg.ListenPublic)
 	if err := http.ListenAndServe(state.cfg.ListenPublic, publicMux); err != nil {
@@ -383,6 +436,12 @@ func (s *AppState) loadConfig(path string) {
 	}
 	if s.cfg.MaxSessions <= 0 {
 		s.cfg.MaxSessions = MaxActiveSessions
+	}
+	if s.cfg.DedicatedSponsorSlots <= 0 {
+		s.cfg.DedicatedSponsorSlots = 10
+	}
+	if s.cfg.GeminiAPIKey == "" {
+		s.cfg.GeminiAPIKey = os.Getenv("WARLINK_GEMINI_API_KEY")
 	}
 }
 
@@ -607,6 +666,40 @@ func (s *AppState) syncAezaDonationsURL(apiEndpoint string) {
 					rub = donateRub
 				}
 				totalPaidRub += uint64(rub)
+
+				if s.db != nil && item.InvoiceID != nil {
+					var accNum string
+					var pStatus string
+					var amtRub int
+					err := s.db.QueryRow(`SELECT account_number, status, amount_rub FROM pending_donations WHERE invoice_id = $1`, *item.InvoiceID).Scan(&accNum, &pStatus, &amtRub)
+					if err == nil && pStatus == "pending" {
+						if amtRub <= 0 {
+							amtRub = rub
+						}
+						days := (amtRub / 100) * 30
+						if days < 30 {
+							days = 30
+						}
+						_, _ = s.db.Exec(`UPDATE pending_donations SET status = 'paid' WHERE invoice_id = $1`, *item.InvoiceID)
+						if accNum != "" {
+							_, _ = s.db.Exec(`
+								INSERT INTO accounts (account_number, tier, sponsor_until, total_donated_rub)
+								VALUES ($1, 'sponsor', NOW() + ($2 * INTERVAL '1 day'), $3)
+								ON CONFLICT (account_number) DO UPDATE
+								SET tier = 'sponsor',
+								    sponsor_until = GREATEST(COALESCE(accounts.sponsor_until, NOW()), NOW()) + ($2 * INTERVAL '1 day'),
+								    total_donated_rub = accounts.total_donated_rub + $3,
+								    updated_at = NOW()
+							`, accNum, days, amtRub)
+
+							_, _ = s.db.Exec(`
+								INSERT INTO in_app_notifications (target_type, target_id, title, message, severity, created_at)
+								VALUES ('account', $1, 'Статус Спонсора активирован', $2, 'info', NOW())
+							`, accNum, fmt.Sprintf("Спасибо за поддержку WarLink! Статус Спонсора продлен на %d дней. Вам открыт приоритетный пул слотов.", days))
+							log.Printf("[DONATE-SYNC] Credited %d sponsor days to account %s for invoice #%d", days, accNum, *item.InvoiceID)
+						}
+					}
+				}
 			}
 		}
 
@@ -673,13 +766,36 @@ func (s *AppState) getClientIP(r *http.Request) string {
 func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	activeCount := len(s.sessions)
+	activeFreeCount := 0
+	activeSponsorCount := 0
+	for _, sess := range s.sessions {
+		if sess.IsSponsor {
+			activeSponsorCount++
+		} else {
+			activeFreeCount++
+		}
+	}
 	dueDate := s.cachedDue
 	dueDateStr := s.cachedDueStr
+	maxSessions := s.cfg.MaxSessions
+	if maxSessions <= 0 {
+		maxSessions = MaxActiveSessions
+	}
+	dedicatedAdmin := 1
+	dedicatedSponsor := s.cfg.DedicatedSponsorSlots
+	if dedicatedSponsor <= 0 {
+		dedicatedSponsor = 10
+	}
+	freeSlotsLimit := maxSessions - dedicatedSponsor - dedicatedAdmin
+	if freeSlotsLimit < 0 {
+		freeSlotsLimit = 50
+	}
 	s.mu.RUnlock()
 
 	s.featureMu.RLock()
 	enDonate := s.enableDonate
 	enVoting := s.enableVoting
+	enCommunityGoal := s.enableCommunityGoal
 	s.featureMu.RUnlock()
 
 	daysLeft := int(time.Until(dueDate).Hours() / 24)
@@ -687,28 +803,46 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		daysLeft = 0
 	}
 
+	var octoberPoolRub int64
+	if s.db != nil {
+		_ = s.db.QueryRow(`
+			SELECT COALESCE(SUM(amount_rub), 0)
+			FROM pending_donations
+			WHERE status = 'paid'
+			  AND created_at >= '2026-10-01 00:00:00+03'
+		`).Scan(&octoberPoolRub)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":            "online",
-		"location":          s.cfg.ServerLocation,
-		"ping_hint_ms":      27,
-		"active_sessions":   activeCount,
-		"max_sessions":      s.cfg.MaxSessions,
-		"server_ip":         s.getPublicIP(r),
-		"server_ports":      s.cfg.ServerPorts,
-		"due_date":          dueDateStr,
-		"days_left":         daysLeft,
-		"donate_amount_rub": s.cfg.DonateAmountRub,
-		"enable_donate":     enDonate,
-		"enable_voting":     enVoting,
+		"status":                  "online",
+		"location":                s.cfg.ServerLocation,
+		"ping_hint_ms":            27,
+		"active_sessions":         activeCount,
+		"max_sessions":            maxSessions,
+		"active_free_sessions":    activeFreeCount,
+		"free_slots_limit":        freeSlotsLimit,
+		"active_sponsor_sessions": activeSponsorCount,
+		"dedicated_sponsor_slots": dedicatedSponsor,
+		"dedicated_admin_slots":   dedicatedAdmin,
+		"server_ip":               s.getPublicIP(r),
+		"server_ports":            s.cfg.ServerPorts,
+		"due_date":                dueDateStr,
+		"days_left":               daysLeft,
+		"donate_amount_rub":       s.cfg.DonateAmountRub,
+		"enable_donate":           enDonate,
+		"enable_voting":           enVoting,
+		"enable_community_goal":   enCommunityGoal,
+		"october_pool_rub":        octoberPoolRub,
 	})
 }
 
 type SessionRequest struct {
-	DeviceID  string `json:"device_id"`
-	Timestamp int64  `json:"timestamp"`
-	Nonce     string `json:"nonce"`
-	Game      string `json:"game,omitempty"`
+	DeviceID      string `json:"device_id"`
+	AccountNumber string `json:"account_number,omitempty"`
+	Timestamp     int64  `json:"timestamp"`
+	Nonce         string `json:"nonce"`
+	Game          string `json:"game,omitempty"`
 }
 
 func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -794,6 +928,45 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 
 	s.recordDeviceActivityAsync(req.DeviceID, clientIP)
 
+	// Resolve account, sponsor and admin status
+	isSponsor := false
+	isAdmin := false
+	accountNumber := strings.TrimSpace(req.AccountNumber)
+	if accountNumber == AdminAccountNumber {
+		isAdmin = true
+		isSponsor = true
+	}
+	if s.db != nil {
+		if accountNumber != "" {
+			_, _ = s.db.Exec(`INSERT INTO accounts (account_number) VALUES ($1) ON CONFLICT (account_number) DO NOTHING`, accountNumber)
+			_, _ = s.db.Exec(`INSERT INTO account_devices (account_number, device_id) VALUES ($1, $2) ON CONFLICT (account_number, device_id) DO NOTHING`, accountNumber, req.DeviceID)
+			var sponsorUntil *time.Time
+			_ = s.db.QueryRow(`SELECT sponsor_until FROM accounts WHERE account_number = $1`, accountNumber).Scan(&sponsorUntil)
+			if (sponsorUntil != nil && sponsorUntil.After(time.Now())) || isAdmin {
+				isSponsor = true
+			}
+		} else if req.DeviceID != "" {
+			var sponsorUntil *time.Time
+			var linkedAcc string
+			_ = s.db.QueryRow(`
+				SELECT a.account_number, a.sponsor_until 
+				FROM account_devices ad 
+				JOIN accounts a ON ad.account_number = a.account_number 
+				WHERE ad.device_id = $1 
+				ORDER BY a.sponsor_until DESC NULLS LAST LIMIT 1
+			`, req.DeviceID).Scan(&linkedAcc, &sponsorUntil)
+			if linkedAcc != "" {
+				accountNumber = linkedAcc
+				if linkedAcc == AdminAccountNumber {
+					isAdmin = true
+					isSponsor = true
+				} else if sponsorUntil != nil && sponsorUntil.After(time.Now()) {
+					isSponsor = true
+				}
+			}
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -801,6 +974,20 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	serverField := ":443"
 	if pubIP != "" {
 		serverField = fmt.Sprintf("%s:443", pubIP)
+	}
+
+	maxSessions := s.cfg.MaxSessions
+	if maxSessions <= 0 {
+		maxSessions = MaxActiveSessions
+	}
+	dedicatedAdmin := 1
+	dedicatedSponsor := s.cfg.DedicatedSponsorSlots
+	if dedicatedSponsor <= 0 {
+		dedicatedSponsor = 10
+	}
+	freeSlotsLimit := maxSessions - dedicatedSponsor - dedicatedAdmin
+	if freeSlotsLimit < 0 {
+		freeSlotsLimit = 50
 	}
 
 	// Check if this device already has an active session
@@ -815,6 +1002,8 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 			sess.LastSeen = time.Now()
 			sess.ClientIP = clientIP
 			sess.Game = targetGame
+			sess.AccountNumber = accountNumber
+			sess.IsSponsor = isSponsor
 			sess.ExpiresAt = time.Now().Add(SessionTTL)
 			s.saveSessionAsync(sess)
 			w.Header().Set("Content-Type", "application/json")
@@ -824,6 +1013,8 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 				"server_ports":   serverPorts,
 				"obfs":           s.cfg.ObfsPassword,
 				"expires_in_sec": int(SessionTTL.Seconds()),
+				"is_sponsor":     isSponsor,
+				"is_admin":       isAdmin,
 			})
 			return
 		}
@@ -836,7 +1027,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 			ipSessions++
 		}
 	}
-	if ipSessions >= MaxSessionsPerIP {
+	if !isAdmin && ipSessions >= MaxSessionsPerIP {
 		atomic.AddUint64(&s.metricRejectionsIPLimit, 1)
 		s.recordCounterAsync("rejections_ip_limit")
 		w.Header().Set("Content-Type", "application/json")
@@ -848,15 +1039,39 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check global concurrency cap
-	if len(s.sessions) >= MaxActiveSessions {
+	// Check dedicated sponsor slot reservation
+	activeFreeCount := 0
+	for _, activeSess := range s.sessions {
+		if !activeSess.IsSponsor {
+			activeFreeCount++
+		}
+	}
+
+	if !isSponsor && activeFreeCount >= freeSlotsLimit {
 		atomic.AddUint64(&s.metricRejectionsCapacity, 1)
 		s.recordCounterAsync("rejections_capacity")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   "server_full",
-			"message": "Все 100 слотов шлюза заняты. Пожалуйста, подождите освобождения места.",
+			"error":          "server_full",
+			"message":        fmt.Sprintf("Общий пул слотов (%d/%d) заполнен. %d слотов зарезервированы для Спонсоров WarLink. Ожидайте освобождения места или поддержите сервер для гарантированного слота.", activeFreeCount, freeSlotsLimit, dedicatedSponsor),
+			"is_sponsor":     false,
+			"free_pool_full": true,
+		})
+		return
+	}
+
+	// Global concurrency cap (Strict zero-kick / no-preemption policy)
+	// Normal players cannot take the dedicated admin slot (maxSessions - dedicatedAdmin = 60)
+	if !isAdmin && len(s.sessions) >= (maxSessions - dedicatedAdmin) {
+		atomic.AddUint64(&s.metricRejectionsCapacity, 1)
+		s.recordCounterAsync("rejections_capacity")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "server_full",
+			"message":    fmt.Sprintf("Все %d слотов шлюза заняты. Мы не отключаем активных игроков. Пожалуйста, подождите несколько минут.", maxSessions - dedicatedAdmin),
+			"is_sponsor": isSponsor,
 		})
 		return
 	}
@@ -867,20 +1082,22 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	newToken := "wl_tok_" + hex.EncodeToString(tokenBytes)
 
 	sess := &SessionInfo{
-		DeviceID:  req.DeviceID,
-		Token:     newToken,
-		ClientIP:  clientIP,
-		Game:      targetGame,
-		CreatedAt: time.Now(),
-		LastSeen:  time.Now(),
-		ExpiresAt: time.Now().Add(SessionTTL),
+		DeviceID:      req.DeviceID,
+		AccountNumber: accountNumber,
+		IsSponsor:     isSponsor,
+		Token:         newToken,
+		ClientIP:      clientIP,
+		Game:          targetGame,
+		CreatedAt:     time.Now(),
+		LastSeen:      time.Now(),
+		ExpiresAt:     time.Now().Add(SessionTTL),
 	}
 	s.sessions[newToken] = sess
 	s.deviceTokens[req.DeviceID] = newToken
 	s.saveSessionAsync(sess)
 
-	log.Printf("[SESSION] Allocated slot for device %s (game: %s) from IP %s (Active: %d/%d, IP sessions: %d/%d)",
-		req.DeviceID, targetGame, clientIP, len(s.sessions), MaxActiveSessions, ipSessions+1, MaxSessionsPerIP)
+	log.Printf("[SESSION] Allocated slot for device %s (acc: %s, sponsor: %t, game: %s) from IP %s (Active: %d/%d, Free: %d/%d)",
+		req.DeviceID, accountNumber, isSponsor, targetGame, clientIP, len(s.sessions), maxSessions, activeFreeCount+1, freeSlotsLimit)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -889,6 +1106,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 		"server_ports":   serverPorts,
 		"obfs":           s.cfg.ObfsPassword,
 		"expires_in_sec": int(SessionTTL.Seconds()),
+		"is_sponsor":     isSponsor,
 	})
 }
 
@@ -974,23 +1192,30 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var reqBody struct {
+		AccountNumber string `json:"account_number"`
+		DeviceID      string `json:"device_id"`
+		AmountRub     int    `json:"amount_rub"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&reqBody)
+	}
+
 	s.mu.RLock()
 	apiKey := s.cfg.AezaAPIKey
 	s.mu.RUnlock()
 
 	if apiKey != "" {
 		amount := s.cfg.DonateAmountRub
-		if amount <= 0 {
-			amount = 98
+		if reqBody.AmountRub >= 100 {
+			amount = reqBody.AmountRub
+		} else if amount <= 0 {
+			amount = 100
 		}
-		// Aeza API v2 uses minor currency units (cents). 75 cents EUR ≈ 98 RUB.
-		aezaCents := 75
-		if amount != 98 {
-			// If admin configured custom RUB amount, scale cents proportionally (approx 1 EUR ≈ 130 RUB)
-			aezaCents = int(float64(amount) / 1.3066)
-			if aezaCents < 50 {
-				aezaCents = 50
-			}
+		// Aeza API v2 uses minor currency units (cents). 1 EUR ≈ 130.66 RUB.
+		aezaCents := int(float64(amount) / 1.3066)
+		if aezaCents < 50 {
+			aezaCents = 50
 		}
 		payload := map[string]interface{}{
 			"method": "yookassa:sbp",
@@ -1015,13 +1240,21 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 					} `json:"payload"`
 				}
 				if err := json.NewDecoder(resp.Body).Decode(&invResp); err == nil && invResp.Payload.URL != "" {
-					actualRub := invResp.Amount
+					actualRub := amount
 					if actualRub <= 0 {
-						actualRub = amount
+						actualRub = 100
 					}
 
 					atomic.AddUint64(&s.metricInvoicesCreated, 1)
 					s.recordCounterAsync("invoices_created")
+
+					if s.db != nil && invResp.ID > 0 {
+						_, _ = s.db.Exec(`
+							INSERT INTO pending_donations (invoice_id, account_number, device_id, amount_rub, status, created_at)
+							VALUES ($1, $2, $3, $4, 'pending', NOW())
+							ON CONFLICT (invoice_id) DO UPDATE SET amount_rub = EXCLUDED.amount_rub, account_number = EXCLUDED.account_number, device_id = EXCLUDED.device_id
+						`, invResp.ID, reqBody.AccountNumber, reqBody.DeviceID, actualRub)
+					}
 
 					// Trigger background reconciliation after user has time to scan and pay via SBP
 					go func() {
@@ -1031,12 +1264,14 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 						s.syncAezaDonations()
 					}()
 
-					log.Printf("[DONATE] Created Aeza SBP invoice #%d for %d RUB (charged %d cents): %s",
-						invResp.ID, actualRub, aezaCents, invResp.Payload.URL)
+					log.Printf("[DONATE] Created Aeza SBP invoice #%d for %d RUB (charged %d cents) for acc %s: %s",
+						invResp.ID, actualRub, aezaCents, reqBody.AccountNumber, invResp.Payload.URL)
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(map[string]interface{}{
-						"success": true,
-						"pay_url": invResp.Payload.URL,
+						"success":     true,
+						"pay_url":     invResp.Payload.URL,
+						"payment_url": invResp.Payload.URL,
+						"url":         invResp.Payload.URL,
 					})
 					return
 				}
@@ -1085,6 +1320,8 @@ func (s *AppState) handleSessionRelease(w http.ResponseWriter, r *http.Request) 
 			delete(s.sessions, tok)
 			delete(s.deviceTokens, sess.DeviceID)
 			go s.deleteSessionFromRedis(tok, sess.DeviceID)
+			atomic.AddUint64(&s.metricTerminationsUserRelease, 1)
+			s.recordCounterAsync("terminations_user_release")
 			log.Printf("[SESSION] Explicitly released slot for device %s (Active: %d/%d)", sess.DeviceID, len(s.sessions), MaxActiveSessions)
 			released = true
 		}
@@ -1180,11 +1417,28 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		userVotePower := 1
+		if deviceID != "" {
+			var tier string
+			var spUntil *time.Time
+			_ = s.db.QueryRow(`
+				SELECT a.tier, a.sponsor_until
+				FROM account_devices ad
+				JOIN accounts a ON ad.account_number = a.account_number
+				WHERE ad.device_id = $1
+				ORDER BY CASE WHEN a.tier = 'sponsor' OR (a.sponsor_until IS NOT NULL AND a.sponsor_until > NOW()) THEN 1 ELSE 2 END LIMIT 1
+			`, deviceID).Scan(&tier, &spUntil)
+			if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) {
+				userVotePower = 3
+			}
+		}
+
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":         true,
 			"target_votes":    50,
 			"max_user_votes":  3,
 			"user_votes_used": userVotesUsed,
+			"user_vote_power": userVotePower,
 			"games":           games,
 		})
 
@@ -1311,19 +1565,33 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		voteWeight := 1
+		var tier string
+		var spUntil *time.Time
+		_ = tx.QueryRow(`
+			SELECT a.tier, a.sponsor_until
+			FROM account_devices ad
+			JOIN accounts a ON ad.account_number = a.account_number
+			WHERE ad.device_id = $1
+			ORDER BY CASE WHEN a.tier = 'sponsor' OR (a.sponsor_until IS NOT NULL AND a.sponsor_until > NOW()) THEN 1 ELSE 2 END LIMIT 1
+		`, req.DeviceID).Scan(&tier, &spUntil)
+		if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) {
+			voteWeight = 3
+		}
+
 		// Upsert game_suggestions
 		var newVotes int
 		var currStatus string
 		err = tx.QueryRow(`
 			INSERT INTO game_suggestions (steam_app_id, title, icon_url, votes_count, status, created_at, updated_at)
-			VALUES ($1, $2, $3, 1, 'voting', NOW(), NOW())
+			VALUES ($1, $2, $3, $4, 'voting', NOW(), NOW())
 			ON CONFLICT (steam_app_id) DO UPDATE
-			SET votes_count = game_suggestions.votes_count + 1,
+			SET votes_count = game_suggestions.votes_count + $4,
 			    title = EXCLUDED.title,
 			    icon_url = CASE WHEN EXCLUDED.icon_url <> '' THEN EXCLUDED.icon_url ELSE game_suggestions.icon_url END,
 			    updated_at = NOW()
 			RETURNING votes_count, status
-		`, req.SteamAppID, req.Title, iconURL).Scan(&newVotes, &currStatus)
+		`, req.SteamAppID, req.Title, iconURL, voteWeight).Scan(&newVotes, &currStatus)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1337,7 +1605,7 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Record vote
-		_, err = tx.Exec("INSERT INTO device_votes (device_id, steam_app_id, client_ip, created_at) VALUES ($1, $2, $3, NOW())", req.DeviceID, req.SteamAppID, clientIP)
+		_, err = tx.Exec("INSERT INTO device_votes (device_id, steam_app_id, client_ip, vote_weight, created_at) VALUES ($1, $2, $3, $4, NOW())", req.DeviceID, req.SteamAppID, clientIP, voteWeight)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1348,10 +1616,11 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("[VOTES] Device %s voted for %s (AppID: %d, Total: %d)", req.DeviceID, req.Title, req.SteamAppID, newVotes)
+		log.Printf("[VOTES] Device %s voted for %s (AppID: %d, Weight: %d, Total: %d)", req.DeviceID, req.Title, req.SteamAppID, voteWeight, newVotes)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":     true,
 			"votes_count": newVotes,
+			"vote_weight": voteWeight,
 			"status":      currStatus,
 		})
 
@@ -1388,6 +1657,12 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 		defer tx.Rollback()
 
+		var voteWeight int = 1
+		_ = tx.QueryRow("SELECT vote_weight FROM device_votes WHERE device_id = $1 AND steam_app_id = $2", req.DeviceID, req.SteamAppID).Scan(&voteWeight)
+		if voteWeight <= 0 {
+			voteWeight = 1
+		}
+
 		res, err := tx.Exec("DELETE FROM device_votes WHERE device_id = $1 AND steam_app_id = $2", req.DeviceID, req.SteamAppID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1398,14 +1673,14 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			var newVotes int
 			err = tx.QueryRow(`
 				UPDATE game_suggestions
-				SET votes_count = GREATEST(0, votes_count - 1),
-				    status = CASE WHEN votes_count - 1 < 50 AND status = 'queue_integration' THEN 'voting' ELSE status END,
+				SET votes_count = GREATEST(0, votes_count - $2),
+				    status = CASE WHEN votes_count - $2 < 50 AND status = 'queue_integration' THEN 'voting' ELSE status END,
 				    updated_at = NOW()
 				WHERE steam_app_id = $1
 				RETURNING votes_count
-			`, req.SteamAppID).Scan(&newVotes)
+			`, req.SteamAppID, voteWeight).Scan(&newVotes)
 			if err == nil {
-				log.Printf("[VOTES] Device %s unvoted for AppID %d (New total: %d)", req.DeviceID, req.SteamAppID, newVotes)
+				log.Printf("[VOTES] Device %s unvoted for AppID %d (Weight: %d, New total: %d)", req.DeviceID, req.SteamAppID, voteWeight, newVotes)
 			}
 		}
 
@@ -1525,10 +1800,19 @@ func (s *AppState) cleanupExpiredSessions() {
 		if strings.HasPrefix(token, "wl_tok_hy2_") {
 			maxInactivity = 60 * time.Second
 		}
-		if now.After(sess.ExpiresAt) || now.Sub(sess.LastSeen) > maxInactivity {
+		if now.After(sess.ExpiresAt) {
 			delete(s.sessions, token)
 			delete(s.deviceTokens, sess.DeviceID)
 			go s.deleteSessionFromRedis(token, sess.DeviceID)
+			atomic.AddUint64(&s.metricTerminationsTTLExpired, 1)
+			s.recordCounterAsync("terminations_ttl_expired")
+			log.Printf("[CLEANUP] Released expired slot for device %s (Active: %d/%d)", sess.DeviceID, len(s.sessions), MaxActiveSessions)
+		} else if now.Sub(sess.LastSeen) > maxInactivity {
+			delete(s.sessions, token)
+			delete(s.deviceTokens, sess.DeviceID)
+			go s.deleteSessionFromRedis(token, sess.DeviceID)
+			atomic.AddUint64(&s.metricTerminationsInactivity, 1)
+			s.recordCounterAsync("terminations_inactivity")
 			log.Printf("[CLEANUP] Released inactive slot for device %s (Active: %d/%d)", sess.DeviceID, len(s.sessions), MaxActiveSessions)
 		}
 	}
@@ -1873,6 +2157,7 @@ func (s *AppState) initDatabase() {
 		UNIQUE(device_id, steam_app_id)
 	);
 	ALTER TABLE device_votes ADD COLUMN IF NOT EXISTS client_ip TEXT;
+	ALTER TABLE device_votes ADD COLUMN IF NOT EXISTS vote_weight INT NOT NULL DEFAULT 1;
 	CREATE INDEX IF NOT EXISTS idx_device_votes_ip ON device_votes(client_ip);
 	CREATE INDEX IF NOT EXISTS idx_device_votes_device ON device_votes(device_id);
 
@@ -1887,6 +2172,9 @@ func (s *AppState) initDatabase() {
 	INSERT INTO telemetry_counters (name, value) VALUES ('rejections_ip_limit', 0) ON CONFLICT (name) DO NOTHING;
 	INSERT INTO telemetry_counters (name, value) VALUES ('rejections_bad_sig', 0) ON CONFLICT (name) DO NOTHING;
 	INSERT INTO telemetry_counters (name, value) VALUES ('rejections_capacity', 0) ON CONFLICT (name) DO NOTHING;
+	INSERT INTO telemetry_counters (name, value) VALUES ('terminations_user_release', 0) ON CONFLICT (name) DO NOTHING;
+	INSERT INTO telemetry_counters (name, value) VALUES ('terminations_inactivity', 0) ON CONFLICT (name) DO NOTHING;
+	INSERT INTO telemetry_counters (name, value) VALUES ('terminations_ttl_expired', 0) ON CONFLICT (name) DO NOTHING;
 
 	CREATE TABLE IF NOT EXISTS daily_active_devices (
 		device_id TEXT NOT NULL,
@@ -1897,13 +2185,142 @@ func (s *AppState) initDatabase() {
 	);
 	CREATE INDEX IF NOT EXISTS idx_daily_active_date ON daily_active_devices(seen_date);
 
+	CREATE TABLE IF NOT EXISTS ip_geo_cache (
+		ip TEXT PRIMARY KEY,
+		country TEXT NOT NULL DEFAULT 'Unknown',
+		country_code TEXT NOT NULL DEFAULT 'XX',
+		city TEXT NOT NULL DEFAULT 'Unknown',
+		lat DOUBLE PRECISION NOT NULL DEFAULT 0,
+		lon DOUBLE PRECISION NOT NULL DEFAULT 0,
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS accounts (
+		account_number TEXT PRIMARY KEY,
+		nickname TEXT NOT NULL DEFAULT '',
+		avatar_url TEXT NOT NULL DEFAULT '',
+		tier TEXT NOT NULL DEFAULT 'free',
+		sponsor_until TIMESTAMPTZ,
+		total_donated_rub INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_accounts_sponsor ON accounts(sponsor_until);
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS steam_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS motto TEXT NOT NULL DEFAULT '';
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS hide_donation_amount BOOLEAN NOT NULL DEFAULT FALSE;
+
+	CREATE TABLE IF NOT EXISTS account_devices (
+		account_number TEXT NOT NULL,
+		device_id TEXT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY(account_number, device_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_account_devices_dev ON account_devices(device_id);
+
+	CREATE TABLE IF NOT EXISTS in_app_notifications (
+		id BIGSERIAL PRIMARY KEY,
+		target_type TEXT NOT NULL DEFAULT 'broadcast',
+		target_id TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL,
+		message TEXT NOT NULL,
+		severity TEXT NOT NULL DEFAULT 'info',
+		action_label TEXT NOT NULL DEFAULT '',
+		action_url TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_notifications_target ON in_app_notifications(target_type, target_id);
+
+	CREATE TABLE IF NOT EXISTS notification_reads (
+		notification_id BIGINT NOT NULL,
+		reader_id TEXT NOT NULL,
+		read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		PRIMARY KEY(notification_id, reader_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS pending_donations (
+		invoice_id INT PRIMARY KEY,
+		account_number TEXT NOT NULL DEFAULT '',
+		device_id TEXT NOT NULL DEFAULT '',
+		amount_rub INT NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'pending',
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
 	DROP TABLE IF EXISTS active_sessions CASCADE;
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		log.Printf("[DB] Error initializing schema: %v", err)
 	} else {
-		log.Printf("[DB] Database tables initialized successfully (active sessions isolated to RAM/Redis)")
+		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, active sessions in RAM)")
 	}
+}
+
+func (s *AppState) resolveIPGeo(ip string) GeoInfo {
+	if ip == "" || ip == "127.0.0.1" || ip == "::1" || ip == "localhost" {
+		return GeoInfo{Country: "Local", CountryCode: "LO", City: "Localhost", Lat: 59.3293, Lon: 18.0686}
+	}
+	s.geoMu.RLock()
+	if info, ok := s.geoCache[ip]; ok {
+		s.geoMu.RUnlock()
+		return info
+	}
+	s.geoMu.RUnlock()
+
+	// Try DB
+	if s.db != nil {
+		var info GeoInfo
+		err := s.db.QueryRow(`SELECT country, country_code, city, lat, lon FROM ip_geo_cache WHERE ip = $1`, ip).
+			Scan(&info.Country, &info.CountryCode, &info.City, &info.Lat, &info.Lon)
+		if err == nil {
+			s.geoMu.Lock()
+			s.geoCache[ip] = info
+			s.geoMu.Unlock()
+			return info
+		}
+	}
+
+	// Default fallback
+	info := GeoInfo{Country: "Unknown", CountryCode: "XX", City: "Unknown", Lat: 0, Lon: 0}
+
+	// Fetch asynchronously so we never block callers
+	go func(targetIP string) {
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Get("http://ip-api.com/json/" + targetIP + "?fields=status,country,countryCode,city,lat,lon")
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		var res struct {
+			Status      string  `json:"status"`
+			Country     string  `json:"country"`
+			CountryCode string  `json:"countryCode"`
+			City        string  `json:"city"`
+			Lat         float64 `json:"lat"`
+			Lon         float64 `json:"lon"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&res); err == nil && res.Status == "success" {
+			fetched := GeoInfo{
+				Country:     res.Country,
+				CountryCode: res.CountryCode,
+				City:        res.City,
+				Lat:         res.Lat,
+				Lon:         res.Lon,
+			}
+			s.geoMu.Lock()
+			if s.geoCache == nil {
+				s.geoCache = make(map[string]GeoInfo)
+			}
+			s.geoCache[targetIP] = fetched
+			s.geoMu.Unlock()
+			if s.db != nil {
+				_, _ = s.db.Exec(`INSERT INTO ip_geo_cache (ip, country, country_code, city, lat, lon, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW()) ON CONFLICT (ip) DO UPDATE SET country = $2, country_code = $3, city = $4, lat = $5, lon = $6, updated_at = NOW()`,
+					targetIP, fetched.Country, fetched.CountryCode, fetched.City, fetched.Lat, fetched.Lon)
+			}
+		}
+	}(ip)
+
+	return info
 }
 
 func (s *AppState) recordCounterAsync(name string) {
@@ -2038,6 +2455,8 @@ func (s *AppState) loadFeatureSettings() {
 				s.enableDonate = (v == "true" || v == "1")
 			case "enable_voting":
 				s.enableVoting = (v == "true" || v == "1")
+			case "enable_community_goal":
+				s.enableCommunityGoal = (v == "true" || v == "1")
 			case "donate_amount_rub":
 				if amt, err := strconv.Atoi(v); err == nil && amt > 0 {
 					s.mu.Lock()
@@ -2048,6 +2467,12 @@ func (s *AppState) loadFeatureSettings() {
 				if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
 					s.mu.Lock()
 					s.cfg.MaxSessions = ms
+					s.mu.Unlock()
+				}
+			case "dedicated_sponsor_slots":
+				if ds, err := strconv.Atoi(v); err == nil && ds >= 0 {
+					s.mu.Lock()
+					s.cfg.DedicatedSponsorSlots = ds
 					s.mu.Unlock()
 				}
 			}
@@ -2078,6 +2503,12 @@ func (s *AppState) loadFeatureSettings() {
 					atomic.StoreUint64(&s.metricRejectionsBadSig, v)
 				case "rejections_capacity":
 					atomic.StoreUint64(&s.metricRejectionsCapacity, v)
+				case "terminations_user_release":
+					atomic.StoreUint64(&s.metricTerminationsUserRelease, v)
+				case "terminations_inactivity":
+					atomic.StoreUint64(&s.metricTerminationsInactivity, v)
+				case "terminations_ttl_expired":
+					atomic.StoreUint64(&s.metricTerminationsTTLExpired, v)
 				}
 			}
 		}
@@ -2092,15 +2523,38 @@ func (s *AppState) loadFeatureSettings() {
 }
 
 type AdminFeaturesPayload struct {
-	EnableDonate *bool `json:"enable_donate"`
-	EnableVoting *bool `json:"enable_voting"`
+	EnableDonate        *bool `json:"enable_donate"`
+	EnableVoting        *bool `json:"enable_voting"`
+	EnableCommunityGoal *bool `json:"enable_community_goal"`
+}
+
+func (s *AppState) checkAdminAuth(r *http.Request) bool {
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" || clientIP == ""
+	if isLocal {
+		return true
+	}
+
+	if s.cfg.DashboardKey == "" {
+		return false
+	}
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		key = r.Header.Get("X-Dashboard-Key")
+	}
+	if key == "" {
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			key = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	return key != "" && key == s.cfg.DashboardKey
 }
 
 func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	key := r.URL.Query().Get("key")
-	if s.cfg.DashboardKey == "" || key != s.cfg.DashboardKey {
+	if !s.checkAdminAuth(r) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
 		return
@@ -2111,12 +2565,14 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 		s.featureMu.RLock()
 		enDonate := s.enableDonate
 		enVoting := s.enableVoting
+		enCommunityGoal := s.enableCommunityGoal
 		s.featureMu.RUnlock()
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":       true,
-			"enable_donate": enDonate,
-			"enable_voting": enVoting,
+			"success":               true,
+			"enable_donate":         enDonate,
+			"enable_voting":         enVoting,
+			"enable_community_goal": enCommunityGoal,
 		})
 
 	case http.MethodPost:
@@ -2134,8 +2590,12 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 		if req.EnableVoting != nil {
 			s.enableVoting = *req.EnableVoting
 		}
+		if req.EnableCommunityGoal != nil {
+			s.enableCommunityGoal = *req.EnableCommunityGoal
+		}
 		currentDonate := s.enableDonate
 		currentVoting := s.enableVoting
+		currentGoal := s.enableCommunityGoal
 		s.featureMu.Unlock()
 
 		if s.db != nil {
@@ -2161,14 +2621,26 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 				`, val)
 			}
+			if req.EnableCommunityGoal != nil {
+				val := "false"
+				if *req.EnableCommunityGoal {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value)
+					VALUES ('enable_community_goal', $1)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, val)
+			}
 		}
 
-		log.Printf("[ADMIN] Dynamic feature toggles updated: Donate=%v, Voting=%v", currentDonate, currentVoting)
+		log.Printf("[ADMIN] Dynamic feature toggles updated: Donate=%v, Voting=%v, CommunityGoal=%v", currentDonate, currentVoting, currentGoal)
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":       true,
-			"enable_donate": currentDonate,
-			"enable_voting": currentVoting,
+			"success":               true,
+			"enable_donate":         currentDonate,
+			"enable_voting":         currentVoting,
+			"enable_community_goal": currentGoal,
 		})
 
 	default:
@@ -2177,14 +2649,17 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 }
 
 type AdminSettingsPayload struct {
-	EnableDonate    *bool   `json:"enable_donate,omitempty"`
-	EnableVoting    *bool   `json:"enable_voting,omitempty"`
-	DonateAmountRub *int    `json:"donate_amount_rub,omitempty"`
-	MaxSessions     *int    `json:"max_sessions,omitempty"`
-	ServerName      *string `json:"server_name,omitempty"`
-	ServerLocation  *string `json:"server_location,omitempty"`
-	DonationsPaid   *uint64 `json:"donations_paid,omitempty"`
-	DonationsRub    *uint64 `json:"donations_rub,omitempty"`
+	EnableDonate          *bool   `json:"enable_donate,omitempty"`
+	EnableVoting          *bool   `json:"enable_voting,omitempty"`
+	EnableCommunityGoal   *bool   `json:"enable_community_goal,omitempty"`
+	DonateAmountRub       *int    `json:"donate_amount_rub,omitempty"`
+	MaxSessions           *int    `json:"max_sessions,omitempty"`
+	DedicatedSponsorSlots *int    `json:"dedicated_sponsor_slots,omitempty"`
+	FreeSlotsLimit        *int    `json:"free_slots_limit,omitempty"`
+	ServerName            *string `json:"server_name,omitempty"`
+	ServerLocation        *string `json:"server_location,omitempty"`
+	DonationsPaid         *uint64 `json:"donations_paid,omitempty"`
+	DonationsRub          *uint64 `json:"donations_rub,omitempty"`
 }
 
 func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
@@ -2198,14 +2673,7 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" || clientIP == ""
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		key = r.Header.Get("X-Dashboard-Key")
-	}
-
-	if !isLocal && (s.cfg.DashboardKey == "" || key != s.cfg.DashboardKey) {
+	if !s.checkAdminAuth(r) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
 		return
@@ -2216,14 +2684,36 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		s.featureMu.RLock()
 		enDonate := s.enableDonate
 		enVoting := s.enableVoting
+		enCommunityGoal := s.enableCommunityGoal
 		s.featureMu.RUnlock()
 
 		s.mu.RLock()
 		donateAmt := s.cfg.DonateAmountRub
 		maxSess := s.cfg.MaxSessions
+		if maxSess <= 0 {
+			maxSess = MaxActiveSessions
+		}
+		dedicatedSponsor := s.cfg.DedicatedSponsorSlots
+		if dedicatedSponsor <= 0 {
+			dedicatedSponsor = 10
+		}
+		dedicatedAdmin := 1
+		freeSlotsLimit := maxSess - dedicatedSponsor - dedicatedAdmin
+		if freeSlotsLimit < 0 {
+			freeSlotsLimit = 0
+		}
 		srvName := s.cfg.ServerName
 		srvLoc := s.cfg.ServerLocation
 		activeSess := len(s.sessions)
+		activeFreeCount := 0
+		activeSponsorCount := 0
+		for _, sess := range s.sessions {
+			if sess.IsSponsor {
+				activeSponsorCount++
+			} else {
+				activeFreeCount++
+			}
+		}
 		s.mu.RUnlock()
 
 		var dau, wau int
@@ -2233,26 +2723,34 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":           true,
-			"enable_donate":     enDonate,
-			"enable_voting":     enVoting,
-			"donate_amount_rub": donateAmt,
-			"max_sessions":      maxSess,
-			"active_sessions":   activeSess,
-			"server_name":       srvName,
-			"server_location":   srvLoc,
-			"invoices_created":  atomic.LoadUint64(&s.metricInvoicesCreated),
-			"donations_paid":    atomic.LoadUint64(&s.metricDonationsPaid),
-			"donations_rub":     atomic.LoadUint64(&s.metricDonationsRub),
-			"dau":               dau,
-			"wau":               wau,
+			"success":                 true,
+			"enable_donate":           enDonate,
+			"enable_voting":           enVoting,
+			"enable_community_goal":   enCommunityGoal,
+			"donate_amount_rub":       donateAmt,
+			"max_sessions":            maxSess,
+			"dedicated_sponsor_slots": dedicatedSponsor,
+			"free_slots_limit":        freeSlotsLimit,
+			"dedicated_admin_slots":   dedicatedAdmin,
+			"active_sessions":         activeSess,
+			"active_free_sessions":    activeFreeCount,
+			"active_sponsor_sessions": activeSponsorCount,
+			"server_name":             srvName,
+			"server_location":         srvLoc,
+			"invoices_created":        atomic.LoadUint64(&s.metricInvoicesCreated),
+			"donations_paid":          atomic.LoadUint64(&s.metricDonationsPaid),
+			"donations_rub":           atomic.LoadUint64(&s.metricDonationsRub),
+			"dau":                     dau,
+			"wau":                     wau,
 		})
 
 	case http.MethodPost:
+		bodyBytes, _ := io.ReadAll(r.Body)
 		var req AdminSettingsPayload
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(bodyBytes, &req); err != nil {
+			log.Printf("[ADMIN-SETTINGS] Decode error: %v, body was: %s", err, string(bodyBytes))
 			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad_request"})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad_request", "details": err.Error()})
 			return
 		}
 
@@ -2282,6 +2780,19 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if req.EnableCommunityGoal != nil {
+			s.featureMu.Lock()
+			s.enableCommunityGoal = *req.EnableCommunityGoal
+			s.featureMu.Unlock()
+			if s.db != nil {
+				val := "false"
+				if *req.EnableCommunityGoal {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('enable_community_goal', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+			}
+		}
+
 		if req.DonateAmountRub != nil && *req.DonateAmountRub > 0 {
 			s.mu.Lock()
 			s.cfg.DonateAmountRub = *req.DonateAmountRub
@@ -2297,6 +2808,32 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 			if s.db != nil {
 				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('max_sessions', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.MaxSessions))
+			}
+		}
+
+		if req.DedicatedSponsorSlots != nil && *req.DedicatedSponsorSlots >= 0 {
+			s.mu.Lock()
+			s.cfg.DedicatedSponsorSlots = *req.DedicatedSponsorSlots
+			s.mu.Unlock()
+			if s.db != nil {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('dedicated_sponsor_slots', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.DedicatedSponsorSlots))
+			}
+		}
+
+		if req.FreeSlotsLimit != nil && *req.FreeSlotsLimit >= 0 {
+			s.mu.Lock()
+			maxS := s.cfg.MaxSessions
+			if maxS <= 0 {
+				maxS = MaxActiveSessions
+			}
+			newDedicated := maxS - *req.FreeSlotsLimit - 1
+			if newDedicated < 0 {
+				newDedicated = 0
+			}
+			s.cfg.DedicatedSponsorSlots = newDedicated
+			s.mu.Unlock()
+			if s.db != nil {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('dedicated_sponsor_slots', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(newDedicated))
 			}
 		}
 
@@ -2326,30 +2863,58 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		s.featureMu.RLock()
 		enDonate := s.enableDonate
 		enVoting := s.enableVoting
+		enCommunityGoal := s.enableCommunityGoal
 		s.featureMu.RUnlock()
 
 		s.mu.RLock()
 		donateAmt := s.cfg.DonateAmountRub
 		maxSess := s.cfg.MaxSessions
+		if maxSess <= 0 {
+			maxSess = MaxActiveSessions
+		}
+		dedicatedSponsor := s.cfg.DedicatedSponsorSlots
+		if dedicatedSponsor <= 0 {
+			dedicatedSponsor = 10
+		}
+		dedicatedAdmin := 1
+		freeSlotsLimit := maxSess - dedicatedSponsor - dedicatedAdmin
+		if freeSlotsLimit < 0 {
+			freeSlotsLimit = 0
+		}
 		srvName := s.cfg.ServerName
 		srvLoc := s.cfg.ServerLocation
 		activeSess := len(s.sessions)
+		activeFreeCount := 0
+		activeSponsorCount := 0
+		for _, sess := range s.sessions {
+			if sess.IsSponsor {
+				activeSponsorCount++
+			} else {
+				activeFreeCount++
+			}
+		}
 		s.mu.RUnlock()
 
-		log.Printf("[ADMIN] Settings updated live: Donate=%v, Voting=%v, DonateAmt=%d, MaxSessions=%d",
-			enDonate, enVoting, donateAmt, maxSess)
+		log.Printf("[ADMIN] Settings updated live: Donate=%v, Voting=%v, CommunityGoal=%v, MaxSessions=%d, DedicatedSponsorSlots=%d, FreeSlotsLimit=%d",
+			enDonate, enVoting, enCommunityGoal, maxSess, dedicatedSponsor, freeSlotsLimit)
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":           true,
-			"enable_donate":     enDonate,
-			"enable_voting":     enVoting,
-			"donate_amount_rub": donateAmt,
-			"max_sessions":      maxSess,
-			"active_sessions":   activeSess,
-			"server_name":       srvName,
-			"server_location":   srvLoc,
-			"donations_paid":    atomic.LoadUint64(&s.metricDonationsPaid),
-			"donations_rub":     atomic.LoadUint64(&s.metricDonationsRub),
+			"success":                 true,
+			"enable_donate":           enDonate,
+			"enable_voting":           enVoting,
+			"enable_community_goal":   enCommunityGoal,
+			"donate_amount_rub":       donateAmt,
+			"max_sessions":            maxSess,
+			"dedicated_sponsor_slots": dedicatedSponsor,
+			"free_slots_limit":        freeSlotsLimit,
+			"dedicated_admin_slots":   dedicatedAdmin,
+			"active_sessions":         activeSess,
+			"active_free_sessions":    activeFreeCount,
+			"active_sponsor_sessions": activeSponsorCount,
+			"server_name":             srvName,
+			"server_location":         srvLoc,
+			"donations_paid":          atomic.LoadUint64(&s.metricDonationsPaid),
+			"donations_rub":           atomic.LoadUint64(&s.metricDonationsRub),
 		})
 
 	default:
@@ -2371,6 +2936,26 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	activeSessions := len(s.sessions)
 	maxSessions := s.cfg.MaxSessions
+	if maxSessions <= 0 {
+		maxSessions = MaxActiveSessions
+	}
+	dedicatedSponsor := s.cfg.DedicatedSponsorSlots
+	if dedicatedSponsor <= 0 {
+		dedicatedSponsor = 10
+	}
+	freeSlotsLimit := maxSessions - dedicatedSponsor - 1
+	if freeSlotsLimit < 0 {
+		freeSlotsLimit = 0
+	}
+	activeFreeSessions := 0
+	activeSponsorSessions := 0
+	for _, sess := range s.sessions {
+		if sess.IsSponsor {
+			activeSponsorSessions++
+		} else {
+			activeFreeSessions++
+		}
+	}
 	due := s.cachedDue
 	donateAmt := s.cfg.DonateAmountRub
 	s.mu.RUnlock()
@@ -2393,16 +2978,36 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.enableVoting {
 		enVoting = 1
 	}
+	enCommunityGoal := 0
+	if s.enableCommunityGoal {
+		enCommunityGoal = 1
+	}
 	s.featureMu.RUnlock()
 
 	var totalVotes, gamesVoting, gamesGraduated int
 	var dau, wau int
+	type gameVoteMetric struct {
+		title  string
+		status string
+		votes  int
+	}
+	var gameVoteList []gameVoteMetric
 	if s.db != nil {
 		_ = s.db.QueryRow("SELECT COALESCE(SUM(votes_count), 0) FROM game_suggestions").Scan(&totalVotes)
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM game_suggestions WHERE status = 'voting'").Scan(&gamesVoting)
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM game_suggestions WHERE status = 'queue_integration'").Scan(&gamesGraduated)
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM daily_active_devices WHERE seen_date = CURRENT_DATE").Scan(&dau)
 		_ = s.db.QueryRow("SELECT COUNT(DISTINCT device_id) FROM daily_active_devices WHERE seen_date >= CURRENT_DATE - INTERVAL '7 days'").Scan(&wau)
+
+		if vRows, err := s.db.Query("SELECT title, status, votes_count FROM game_suggestions ORDER BY votes_count DESC LIMIT 10"); err == nil {
+			defer vRows.Close()
+			for vRows.Next() {
+				var gvm gameVoteMetric
+				if err := vRows.Scan(&gvm.title, &gvm.status, &gvm.votes); err == nil {
+					gameVoteList = append(gameVoteList, gvm)
+				}
+			}
+		}
 	}
 
 	s.mu.RLock()
@@ -2411,12 +3016,15 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"wardogs (гибрид)": 0,
 		"free_internet":    0,
 	}
+	geoCounts := make(map[GeoInfo]int)
 	for _, sess := range s.sessions {
 		g := sess.Game
 		if g == "" {
 			g = "wardogs"
 		}
 		sessionsByGame[g]++
+		geo := s.resolveIPGeo(sess.ClientIP)
+		geoCounts[geo]++
 	}
 	srvPrice := 1450
 	if s.cachedPrice > 0 {
@@ -2439,6 +3047,22 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_max_sessions Maximum configured sessions limit\n")
 	sb.WriteString("# TYPE warlink_max_sessions gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_max_sessions %d\n\n", maxSessions))
+
+	sb.WriteString("# HELP warlink_dedicated_sponsor_slots Dedicated sponsor slots reservation\n")
+	sb.WriteString("# TYPE warlink_dedicated_sponsor_slots gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_dedicated_sponsor_slots %d\n\n", dedicatedSponsor))
+
+	sb.WriteString("# HELP warlink_free_slots_limit Free sessions limit\n")
+	sb.WriteString("# TYPE warlink_free_slots_limit gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_free_slots_limit %d\n\n", freeSlotsLimit))
+
+	sb.WriteString("# HELP warlink_active_free_sessions Active free players sessions\n")
+	sb.WriteString("# TYPE warlink_active_free_sessions gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_active_free_sessions %d\n\n", activeFreeSessions))
+
+	sb.WriteString("# HELP warlink_active_sponsor_sessions Active sponsor sessions\n")
+	sb.WriteString("# TYPE warlink_active_sponsor_sessions gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_active_sponsor_sessions %d\n\n", activeSponsorSessions))
 
 	sb.WriteString("# HELP warlink_server_days_left Days remaining until server rent expiration\n")
 	sb.WriteString("# TYPE warlink_server_days_left gauge\n")
@@ -2473,21 +3097,73 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_aeza_bonus_eur_cents gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_aeza_bonus_eur_cents %d\n\n", aezaBonusEurCents))
 
-	dailyPrice := float64(srvPrice) / 30.0
-	if dailyPrice <= 0 {
-		dailyPrice = 8.67
-	}
-	balanceDays := float64(aezaBalRub) / dailyPrice
-	totalRunwayDays := float64(daysLeft) + balanceDays
-	coveragePercent := (totalRunwayDays / 30.0) * 100.0
+	sb.WriteString("# HELP warlink_server_version Server software release version info\n")
+	sb.WriteString("# TYPE warlink_server_version gauge\n")
+	sb.WriteString("warlink_server_version{version=\"v2.1.6\"} 1\n\n")
 
-	sb.WriteString("# HELP warlink_server_runway_days Total days of server runway (prepaid + balance)\n")
+	clusterBudgetEur := 10
+	clusterBudgetRub := 1300
+	stockholmCostEur := 2
+	stockholmCostRub := 260
+	frankfurtCostEur := 6
+	frankfurtCostRub := 780
+	reserveCostEur := 2
+	reserveCostRub := 260
+
+	sb.WriteString("# HELP warlink_cluster_budget_eur Monthly cluster maintenance budget in EUR\n")
+	sb.WriteString("# TYPE warlink_cluster_budget_eur gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_cluster_budget_eur %d\n\n", clusterBudgetEur))
+
+	sb.WriteString("# HELP warlink_cluster_budget_rub Monthly cluster maintenance budget in RUB\n")
+	sb.WriteString("# TYPE warlink_cluster_budget_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_cluster_budget_rub %d\n\n", clusterBudgetRub))
+
+	sb.WriteString("# HELP warlink_stockholm_cost_eur Stockholm node monthly cost in EUR\n")
+	sb.WriteString("# TYPE warlink_stockholm_cost_eur gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_stockholm_cost_eur %d\n\n", stockholmCostEur))
+
+	sb.WriteString("# HELP warlink_frankfurt_cost_eur Frankfurt node monthly cost in EUR\n")
+	sb.WriteString("# TYPE warlink_frankfurt_cost_eur gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_frankfurt_cost_eur %d\n\n", frankfurtCostEur))
+
+	sb.WriteString("# HELP warlink_frankfurt_cost_rub Frankfurt node monthly cost in RUB\n")
+	sb.WriteString("# TYPE warlink_frankfurt_cost_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_frankfurt_cost_rub %d\n\n", frankfurtCostRub))
+
+	sb.WriteString("# HELP warlink_reserve_cost_eur Cluster reserve monthly cost in EUR\n")
+	sb.WriteString("# TYPE warlink_reserve_cost_eur gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_reserve_cost_eur %d\n\n", reserveCostEur))
+
+	sb.WriteString("# HELP warlink_reserve_cost_rub Cluster reserve monthly cost in RUB\n")
+	sb.WriteString("# TYPE warlink_reserve_cost_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_reserve_cost_rub %d\n\n", reserveCostRub))
+
+	stockholmDailyPrice := float64(stockholmCostRub) / 30.0
+	prepaidStockholmRub := float64(daysLeft) * stockholmDailyPrice
+	totalAvailableRub := prepaidStockholmRub + float64(aezaBalRub+aezaBonusRub)
+
+	clusterCoveragePercent := (totalAvailableRub / float64(clusterBudgetRub)) * 100.0
+	donationsRubTotal := atomic.LoadUint64(&s.metricDonationsRub)
+	donationsGoalPercent := (float64(donationsRubTotal) / float64(clusterBudgetRub)) * 100.0
+
+	clusterDailyPrice := float64(clusterBudgetRub) / 30.0
+	totalRunwayDays := totalAvailableRub / clusterDailyPrice
+
+	sb.WriteString("# HELP warlink_server_runway_days Total days of cluster runway at 10 EUR / mo\n")
 	sb.WriteString("# TYPE warlink_server_runway_days gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_runway_days %.1f\n\n", totalRunwayDays))
 
 	sb.WriteString("# HELP warlink_server_coverage_percent Financial runway coverage percentage\n")
 	sb.WriteString("# TYPE warlink_server_coverage_percent gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_server_coverage_percent %.1f\n\n", coveragePercent))
+	sb.WriteString(fmt.Sprintf("warlink_server_coverage_percent %.1f\n\n", clusterCoveragePercent))
+
+	sb.WriteString("# HELP warlink_cluster_coverage_percent Financial cluster coverage percentage (10 EUR target)\n")
+	sb.WriteString("# TYPE warlink_cluster_coverage_percent gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_cluster_coverage_percent %.1f\n\n", clusterCoveragePercent))
+
+	sb.WriteString("# HELP warlink_donations_goal_percent Community donations progress towards 10 EUR target\n")
+	sb.WriteString("# TYPE warlink_donations_goal_percent gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_donations_goal_percent %.1f\n\n", donationsGoalPercent))
 
 	sb.WriteString("# HELP warlink_invoices_created_total Total invoices created via Aeza\n")
 	sb.WriteString("# TYPE warlink_invoices_created_total counter\n")
@@ -2520,6 +3196,12 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString(fmt.Sprintf("warlink_session_rejections_total{reason=\"bad_signature\"} %d\n", atomic.LoadUint64(&s.metricRejectionsBadSig)))
 	sb.WriteString(fmt.Sprintf("warlink_session_rejections_total{reason=\"capacity\"} %d\n\n", atomic.LoadUint64(&s.metricRejectionsCapacity)))
 
+	sb.WriteString("# HELP warlink_session_terminations_total Total session terminations by reason\n")
+	sb.WriteString("# TYPE warlink_session_terminations_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_session_terminations_total{reason=\"user_release\"} %d\n", atomic.LoadUint64(&s.metricTerminationsUserRelease)))
+	sb.WriteString(fmt.Sprintf("warlink_session_terminations_total{reason=\"inactivity\"} %d\n", atomic.LoadUint64(&s.metricTerminationsInactivity)))
+	sb.WriteString(fmt.Sprintf("warlink_session_terminations_total{reason=\"ttl_expired\"} %d\n\n", atomic.LoadUint64(&s.metricTerminationsTTLExpired)))
+
 	sb.WriteString("# HELP warlink_sessions_by_game Number of active sessions per game\n")
 	sb.WriteString("# TYPE warlink_sessions_by_game gauge\n")
 	if len(sessionsByGame) == 0 {
@@ -2539,6 +3221,10 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_enable_voting gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_enable_voting %d\n\n", enVoting))
 
+	sb.WriteString("# HELP warlink_enable_community_goal Community goal progress display feature toggle\n")
+	sb.WriteString("# TYPE warlink_enable_community_goal gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_enable_community_goal %d\n\n", enCommunityGoal))
+
 	sb.WriteString("# HELP warlink_total_votes Total community votes cast\n")
 	sb.WriteString("# TYPE warlink_total_votes gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_total_votes %d\n\n", totalVotes))
@@ -2550,6 +3236,30 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_games_graduated Games that won voting\n")
 	sb.WriteString("# TYPE warlink_games_graduated gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_games_graduated %d\n\n", gamesGraduated))
+
+	sb.WriteString("# HELP warlink_game_votes Number of community votes per game\n")
+	sb.WriteString("# TYPE warlink_game_votes gauge\n")
+	for _, gvm := range gameVoteList {
+		cleanTitle := strings.ReplaceAll(gvm.title, "\"", "'")
+		sb.WriteString(fmt.Sprintf("warlink_game_votes{title=\"%s\",status=\"%s\"} %d\n", cleanTitle, gvm.status, gvm.votes))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("# HELP process_start_time_seconds Start time of the process since unix epoch in seconds\n")
+	sb.WriteString("# TYPE process_start_time_seconds gauge\n")
+	sb.WriteString(fmt.Sprintf("process_start_time_seconds %d\n\n", s.startTime.Unix()))
+
+	sb.WriteString("# HELP warlink_active_sessions_by_geo Active sessions grouped by geographic region\n")
+	sb.WriteString("# TYPE warlink_active_sessions_by_geo gauge\n")
+	if len(geoCounts) == 0 {
+		sb.WriteString("warlink_active_sessions_by_geo{country=\"Unknown\",country_code=\"XX\",city=\"Unknown\"} 0\n\n")
+	} else {
+		for gk, cnt := range geoCounts {
+			sb.WriteString(fmt.Sprintf("warlink_active_sessions_by_geo{country=\"%s\",country_code=\"%s\",city=\"%s\"} %d\n",
+				gk.Country, gk.CountryCode, gk.City, cnt))
+		}
+		sb.WriteString("\n")
+	}
 
 	if live != nil {
 		sb.WriteString("# HELP warlink_cpu_percent Server CPU usage percent\n")
@@ -2798,8 +3508,104 @@ func (s *AppState) startAnalyticsCollector() {
 	}
 }
 
+type GitHubReleaseItem struct {
+	Tag         string `json:"tag"`
+	Name        string `json:"name"`
+	PublishedAt string `json:"published_at"`
+	PublishedMs int64  `json:"published_ms"`
+	Body        string `json:"body"`
+	HTMLURL     string `json:"html_url"`
+}
+
+var (
+	ghReleasesCache     []GitHubReleaseItem
+	ghReleasesCacheTime time.Time
+	ghReleasesMu        sync.Mutex
+)
+
+func (s *AppState) handleReleases(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ghReleasesMu.Lock()
+	defer ghReleasesMu.Unlock()
+
+	if len(ghReleasesCache) > 0 && time.Since(ghReleasesCacheTime) < 10*time.Minute {
+		_ = json.NewEncoder(w).Encode(ghReleasesCache)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://api.github.com/repos/max-alekseyev/WarLink/releases?per_page=15", nil)
+	if err == nil {
+		req.Header.Set("User-Agent", "WarLink-Server")
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			var raw []struct {
+				TagName     string `json:"tag_name"`
+				Name        string `json:"name"`
+				PublishedAt string `json:"published_at"`
+				Body        string `json:"body"`
+				HTMLURL     string `json:"html_url"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&raw); err == nil {
+				resp.Body.Close()
+				var items []GitHubReleaseItem
+				for _, it := range raw {
+					t, _ := time.Parse(time.RFC3339, it.PublishedAt)
+					ms := t.UnixMilli()
+					body := strings.TrimSpace(it.Body)
+					if len(body) > 300 {
+						body = body[:300] + "..."
+					}
+					name := it.Name
+					if name == "" {
+						name = it.TagName
+					}
+					items = append(items, GitHubReleaseItem{
+						Tag:         it.TagName,
+						Name:        name,
+						PublishedAt: it.PublishedAt,
+						PublishedMs: ms,
+						Body:        body,
+						HTMLURL:     it.HTMLURL,
+					})
+				}
+				ghReleasesCache = items
+				ghReleasesCacheTime = time.Now()
+				_ = json.NewEncoder(w).Encode(items)
+				return
+			}
+			resp.Body.Close()
+		}
+	}
+
+	if len(ghReleasesCache) > 0 {
+		_ = json.NewEncoder(w).Encode(ghReleasesCache)
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode([]GitHubReleaseItem{
+		{Tag: "v2.1.6", Name: "v2.1.6", PublishedAt: "2026-09-27T08:00:00Z", PublishedMs: 1790496000000, Body: "Anonymous Accounts, In-App Notifications, Dedicated Sponsor Slots, Profile Customization", HTMLURL: "https://github.com/max-alekseyev/WarLink/releases"},
+		{Tag: "v2.0.6", Name: "v2.0.6", PublishedAt: "2026-09-27T02:00:00Z", PublishedMs: 1790474400000, Body: "Dark Cloudflare UI, Adaptive Engine, Zapret 2", HTMLURL: "https://github.com/max-alekseyev/WarLink/releases"},
+	})
+}
+
 func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.DashboardKey == "" || r.URL.Query().Get("key") != s.cfg.DashboardKey {
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" || clientIP == ""
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		key = r.Header.Get("X-Dashboard-Key")
+	}
+	if key == "" {
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			key = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+
+	if !isLocal && (s.cfg.DashboardKey == "" || key != s.cfg.DashboardKey) {
 		http.NotFound(w, r)
 		return
 	}
@@ -2861,15 +3667,30 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type ActivePlayerInfo struct {
-		DeviceID     string `json:"device_id"`
-		Game         string `json:"game"`
-		ClientIP     string `json:"client_ip"`
-		ConnectedAt  string `json:"connected_at"`
-		DurationSec  int    `json:"duration_sec"`
-		DurationDesc string `json:"duration_desc"`
+		DeviceID     string  `json:"device_id"`
+		Game         string  `json:"game"`
+		ClientIP     string  `json:"client_ip"`
+		ConnectedAt  string  `json:"connected_at"`
+		DurationSec  int     `json:"duration_sec"`
+		DurationDesc string  `json:"duration_desc"`
+		Status       string  `json:"status"`
+		Country      string  `json:"country"`
+		City         string  `json:"city"`
+		Lat          float64 `json:"lat"`
+		Lon          float64 `json:"lon"`
+	}
+
+	type GeoPointInfo struct {
+		Country     string  `json:"country"`
+		CountryCode string  `json:"country_code"`
+		City        string  `json:"city"`
+		Lat         float64 `json:"lat"`
+		Lon         float64 `json:"lon"`
+		Count       int     `json:"count"`
 	}
 
 	activePlayers := make([]ActivePlayerInfo, 0)
+	geoAgg := make(map[GeoInfo]int)
 	now := time.Now()
 	s.mu.RLock()
 	for _, sess := range s.sessions {
@@ -2893,6 +3714,9 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 				gameName = "Свободный интернет"
 			}
 
+			geo := s.resolveIPGeo(sess.ClientIP)
+			geoAgg[geo]++
+
 			activePlayers = append(activePlayers, ActivePlayerInfo{
 				DeviceID:     devID,
 				Game:         gameName,
@@ -2900,16 +3724,729 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 				ConnectedAt:  sess.CreatedAt.Format(time.RFC3339),
 				DurationSec:  dur,
 				DurationDesc: desc,
+				Status:       "АКТИВНА",
+				Country:      geo.Country,
+				City:         geo.City,
+				Lat:          geo.Lat,
+				Lon:          geo.Lon,
 			})
 		}
 	}
 	s.mu.RUnlock()
+
+	geoPoints := make([]GeoPointInfo, 0)
+	for gi, cnt := range geoAgg {
+		geoPoints = append(geoPoints, GeoPointInfo{
+			Country:     gi.Country,
+			CountryCode: gi.CountryCode,
+			City:        gi.City,
+			Lat:         gi.Lat,
+			Lon:         gi.Lon,
+			Count:       cnt,
+		})
+	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":        true,
 		"live":           live,
 		"history":        history,
 		"active_players": activePlayers,
+		"geo_points":     geoPoints,
+	})
+}
+
+func resizeImage(src image.Image, targetWidth, targetHeight int) *image.RGBA {
+	dst := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
+	srcBounds := src.Bounds()
+	srcW := srcBounds.Dx()
+	srcH := srcBounds.Dy()
+
+	if srcW <= 0 || srcH <= 0 {
+		return dst
+	}
+
+	for y := 0; y < targetHeight; y++ {
+		for x := 0; x < targetWidth; x++ {
+			srcX := srcBounds.Min.X + (x*srcW)/targetWidth
+			srcY := srcBounds.Min.Y + (y*srcH)/targetHeight
+			dst.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+	return dst
+}
+
+func (s *AppState) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if s.db == nil {
+		_ = json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+
+	account := strings.TrimSpace(r.URL.Query().Get("account"))
+	device := strings.TrimSpace(r.URL.Query().Get("device"))
+
+	rows, err := s.db.Query(`
+		SELECT n.id, n.target_type, n.title, n.message, n.severity, n.action_label, n.action_url,
+		       TO_CHAR(n.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+		       EXISTS (
+		           SELECT 1 FROM notification_reads nr 
+		           WHERE nr.notification_id = n.id AND (nr.reader_id = $1 OR (nr.reader_id = $2 AND $2 != ''))
+		       ) AS is_read
+		FROM in_app_notifications n
+		WHERE n.target_type = 'broadcast' 
+		   OR (n.target_type = 'account' AND n.target_id = $1 AND $1 != '')
+		   OR (n.target_type = 'device' AND n.target_id = $2 AND $2 != '')
+		ORDER BY n.created_at DESC
+		LIMIT 50
+	`, account, device)
+	if err != nil {
+		log.Printf("[NOTIFICATIONS] Query error: %v", err)
+		_ = json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+	defer rows.Close()
+
+	type NotifItem struct {
+		ID          int64  `json:"id"`
+		TargetType  string `json:"target_type"`
+		Title       string `json:"title"`
+		Message     string `json:"message"`
+		Severity    string `json:"severity"`
+		ActionLabel string `json:"action_label,omitempty"`
+		ActionURL   string `json:"action_url,omitempty"`
+		CreatedAt   string `json:"created_at"`
+		IsRead      bool   `json:"is_read"`
+	}
+
+	items := make([]NotifItem, 0)
+	for rows.Next() {
+		var it NotifItem
+		var actLabel, actURL sql.NullString
+		if err := rows.Scan(&it.ID, &it.TargetType, &it.Title, &it.Message, &it.Severity, &actLabel, &actURL, &it.CreatedAt, &it.IsRead); err == nil {
+			if actLabel.Valid {
+				it.ActionLabel = actLabel.String
+			}
+			if actURL.Valid {
+				it.ActionURL = actURL.String
+			}
+			items = append(items, it)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(items)
+}
+
+func (s *AppState) handleNotificationRead(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		NotificationID int64  `json:"notification_id"`
+		AccountNumber  string `json:"account_number"`
+		DeviceID       string `json:"device_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NotificationID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "bad_request"})
+		return
+	}
+
+	readerID := strings.TrimSpace(req.AccountNumber)
+	if readerID == "" {
+		readerID = strings.TrimSpace(req.DeviceID)
+	}
+	if readerID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "missing_reader_id"})
+		return
+	}
+
+	if s.db != nil {
+		_, _ = s.db.Exec(`
+			INSERT INTO notification_reads (notification_id, reader_id, read_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (notification_id, reader_id) DO NOTHING
+		`, req.NotificationID, readerID)
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (s *AppState) handleAdminNotifications(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dashboard-Key, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		type AdminNotifItem struct {
+			ID          int64  `json:"id"`
+			TargetType  string `json:"target_type"`
+			TargetID    string `json:"target_id"`
+			Title       string `json:"title"`
+			Message     string `json:"message"`
+			Severity    string `json:"severity"`
+			ActionLabel string `json:"action_label"`
+			ActionURL   string `json:"action_url"`
+			CreatedAt   string `json:"created_at"`
+		}
+		items := make([]AdminNotifItem, 0)
+		if s.db != nil {
+			rows, err := s.db.Query(`
+				SELECT id, target_type, target_id, title, message, severity, COALESCE(action_label, ''), COALESCE(action_url, ''), TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				FROM in_app_notifications
+				ORDER BY created_at DESC
+				LIMIT 30
+			`)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var item AdminNotifItem
+					if err := rows.Scan(&item.ID, &item.TargetType, &item.TargetID, &item.Title, &item.Message, &item.Severity, &item.ActionLabel, &item.ActionURL, &item.CreatedAt); err == nil {
+						items = append(items, item)
+					}
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"notifications": items,
+		})
+
+	case http.MethodDelete:
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			var dReq struct {
+				ID int64 `json:"id"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&dReq)
+			if dReq.ID > 0 {
+				idStr = strconv.FormatInt(dReq.ID, 10)
+			}
+		}
+		if s.db != nil && idStr != "" {
+			_, _ = s.db.Exec(`DELETE FROM in_app_notifications WHERE id = $1`, idStr)
+			_, _ = s.db.Exec(`DELETE FROM notification_reads WHERE notification_id = $1`, idStr)
+		}
+		log.Printf("[ADMIN-NOTIF] Deleted notification #%s", idStr)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+
+	case http.MethodPost:
+		var req struct {
+			Title       string `json:"title"`
+			Message     string `json:"message"`
+			Severity    string `json:"severity"`     // info | update | warning | urgent
+			TargetType  string `json:"target_type"`  // broadcast | account | device
+			TargetID    string `json:"target_id"`
+			ActionLabel string `json:"action_label"`
+			ActionURL   string `json:"action_url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Message) == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "title_and_message_required"})
+			return
+		}
+
+		sev := strings.ToLower(strings.TrimSpace(req.Severity))
+		if sev != "info" && sev != "update" && sev != "warning" && sev != "urgent" {
+			sev = "info"
+		}
+		ttype := strings.ToLower(strings.TrimSpace(req.TargetType))
+		if ttype != "broadcast" && ttype != "account" && ttype != "device" {
+			ttype = "broadcast"
+		}
+
+		title := strings.TrimSpace(req.Title)
+		if len(title) > 120 {
+			title = title[:120]
+		}
+		msg := strings.TrimSpace(req.Message)
+		if len(msg) > 1000 {
+			msg = msg[:1000]
+		}
+		actLabel := strings.TrimSpace(req.ActionLabel)
+		if len(actLabel) > 40 {
+			actLabel = actLabel[:40]
+		}
+		actURL := strings.TrimSpace(req.ActionURL)
+		if len(actURL) > 500 {
+			actURL = actURL[:500]
+		}
+		if actURL != "" && !strings.HasPrefix(actURL, "http://") && !strings.HasPrefix(actURL, "https://") {
+			actURL = ""
+		}
+		tgtID := strings.TrimSpace(req.TargetID)
+		if len(tgtID) > 64 {
+			tgtID = tgtID[:64]
+		}
+
+		var newID int64
+		if s.db != nil {
+			err := s.db.QueryRow(`
+				INSERT INTO in_app_notifications (target_type, target_id, title, message, severity, action_label, action_url, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+				RETURNING id
+			`, ttype, tgtID, title, msg, sev, actLabel, actURL).Scan(&newID)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+				return
+			}
+		}
+
+		log.Printf("[ADMIN-NOTIF] Created notification #%d (%s, target: %s/%s): %s", newID, sev, ttype, tgtID, title)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"id":      newID,
+		})
+
+	default:
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if s.db == nil {
+		_ = json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT account_number, nickname, avatar_url,
+		       COALESCE(steam_id, ''), COALESCE(motto, ''),
+		       TO_CHAR(created_at, 'YYYY-MM-DD'),
+		       (sponsor_until IS NOT NULL AND sponsor_until > NOW()) AS is_active,
+		       total_donated_rub,
+		       COALESCE(hide_donation_amount, FALSE)
+		FROM accounts
+		WHERE (sponsor_until IS NOT NULL AND sponsor_until > NOW()) OR total_donated_rub > 0
+		ORDER BY is_active DESC, sponsor_until DESC NULLS LAST, total_donated_rub DESC
+		LIMIT 100
+	`)
+	if err != nil {
+		log.Printf("[SPONSORS] Query error: %v", err)
+		_ = json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+	defer rows.Close()
+
+	type SponsorCard struct {
+		AccountNumber      string `json:"account_number"`
+		Nickname           string `json:"nickname"`
+		AvatarURL          string `json:"avatar_url"`
+		SteamID            string `json:"steam_id"`
+		Motto              string `json:"motto"`
+		JoinedDate         string `json:"joined_date"`
+		IsActive           bool   `json:"is_active"`
+		TotalDonated       int64  `json:"total_donated_rub"`
+		HideDonationAmount bool   `json:"hide_donation_amount"`
+	}
+
+	sponsors := make([]SponsorCard, 0)
+	for rows.Next() {
+		var sp SponsorCard
+		var nick, av, st, mo sql.NullString
+		if err := rows.Scan(&sp.AccountNumber, &nick, &av, &st, &mo, &sp.JoinedDate, &sp.IsActive, &sp.TotalDonated, &sp.HideDonationAmount); err == nil {
+			if sp.HideDonationAmount {
+				sp.TotalDonated = 0
+			}
+			if nick.Valid && nick.String != "" {
+				sp.Nickname = nick.String
+			} else {
+				if len(sp.AccountNumber) >= 19 {
+					sp.Nickname = sp.AccountNumber[:4] + "-****-****-" + sp.AccountNumber[15:]
+				} else {
+					sp.Nickname = "Спонсор WarLink"
+				}
+			}
+			if av.Valid {
+				sp.AvatarURL = av.String
+			}
+			if st.Valid {
+				sp.SteamID = st.String
+			}
+			if mo.Valid {
+				sp.Motto = mo.String
+			}
+			if len(sp.AccountNumber) >= 19 {
+				sp.AccountNumber = sp.AccountNumber[:4] + "-****-****-" + sp.AccountNumber[15:]
+			}
+			sponsors = append(sponsors, sp)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(sponsors)
+}
+
+func validateServerNickname(nick string) error {
+	return FastValidateNickname(nick)
+}
+
+func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "db_unavailable"})
+		return
+	}
+
+	type DonationItem struct {
+		InvoiceID int    `json:"invoice_id"`
+		AmountRub int    `json:"amount_rub"`
+		Status    string `json:"status"`
+		CreatedAt string `json:"created_at"`
+	}
+
+	type ProfileResp struct {
+		AccountNumber      string         `json:"account_number"`
+		Nickname           string         `json:"nickname"`
+		AvatarURL          string         `json:"avatar_url"`
+		SteamID            string         `json:"steam_id"`
+		Motto              string         `json:"motto"`
+		Tier               string         `json:"tier"`
+		SponsorUntil       int64          `json:"sponsor_until"`
+		DaysRemaining      int            `json:"days_remaining"`
+		CreatedAt          string         `json:"created_at"`
+		TotalDonatedRub    int            `json:"total_donated_rub"`
+		HideDonationAmount bool           `json:"hide_donation_amount"`
+		DeviceCount        int            `json:"device_count"`
+		Donations          []DonationItem `json:"donations"`
+	}
+
+	if r.Method == http.MethodGet {
+		acc := strings.TrimSpace(r.URL.Query().Get("account"))
+		dev := strings.TrimSpace(r.URL.Query().Get("device"))
+		if acc == "" && dev == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "missing_account_or_device"})
+			return
+		}
+
+		var resp ProfileResp
+		resp.Donations = []DonationItem{}
+		var sponsorTime *time.Time
+		var createdAt time.Time
+		var totalDonated int
+		var err error
+		var st, mo sql.NullString
+
+		if acc != "" {
+			err = s.db.QueryRow(`
+				SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE) 
+				FROM accounts WHERE account_number = $1
+			`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount)
+		} else {
+			err = s.db.QueryRow(`
+				SELECT a.account_number, a.nickname, a.avatar_url, a.steam_id, a.motto, a.tier, a.sponsor_until, a.total_donated_rub, a.created_at, COALESCE(a.hide_donation_amount, FALSE) 
+				FROM account_devices ad
+				JOIN accounts a ON ad.account_number = a.account_number
+				WHERE ad.device_id = $1
+				ORDER BY a.sponsor_until DESC NULLS LAST LIMIT 1
+			`, dev).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount)
+		}
+
+		if st.Valid {
+			resp.SteamID = st.String
+		}
+		if mo.Valid {
+			resp.Motto = mo.String
+		}
+
+		if err != nil {
+			resp.AccountNumber = acc
+			resp.Tier = "free"
+			resp.CreatedAt = time.Now().Format("02.01.2006")
+			resp.DeviceCount = 1
+			if acc != "" {
+				_, _ = s.db.Exec(`INSERT INTO accounts (account_number, created_at, updated_at) VALUES ($1, NOW(), NOW()) ON CONFLICT DO NOTHING`, acc)
+				if dev != "" {
+					_, _ = s.db.Exec(`INSERT INTO account_devices (account_number, device_id, created_at) VALUES ($1, $2, NOW()) ON CONFLICT DO NOTHING`, acc, dev)
+				}
+			}
+		} else {
+			resp.TotalDonatedRub = totalDonated
+			if !createdAt.IsZero() {
+				resp.CreatedAt = createdAt.Format("02.01.2006")
+			} else {
+				resp.CreatedAt = time.Now().Format("02.01.2006")
+			}
+		}
+
+		if resp.AccountNumber != "" {
+			var devCount int
+			_ = s.db.QueryRow(`SELECT COUNT(*) FROM account_devices WHERE account_number = $1`, resp.AccountNumber).Scan(&devCount)
+			if devCount <= 0 {
+				devCount = 1
+			}
+			resp.DeviceCount = devCount
+
+			rows, qErr := s.db.Query(`
+				SELECT invoice_id, amount_rub, status, created_at 
+				FROM pending_donations 
+				WHERE account_number = $1 
+				ORDER BY created_at DESC LIMIT 20
+			`, resp.AccountNumber)
+			if qErr == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var item DonationItem
+					var dTime time.Time
+					if err := rows.Scan(&item.InvoiceID, &item.AmountRub, &item.Status, &dTime); err == nil {
+						item.CreatedAt = dTime.Format("02.01.2006 15:04")
+						resp.Donations = append(resp.Donations, item)
+					}
+				}
+			}
+		}
+
+		if resp.AccountNumber == AdminAccountNumber {
+			resp.Tier = "admin"
+			resp.DaysRemaining = 9999
+		} else if sponsorTime != nil && sponsorTime.After(time.Now()) {
+			resp.Tier = "sponsor"
+			resp.SponsorUntil = sponsorTime.Unix()
+			resp.DaysRemaining = int(time.Until(*sponsorTime).Hours() / 24)
+		} else {
+			resp.Tier = "free"
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			AccountNumber      string `json:"account_number"`
+			DeviceID           string `json:"device_id"`
+			Nickname           string `json:"nickname"`
+			SteamID            string `json:"steam_id"`
+			Motto              string `json:"motto"`
+			HideDonationAmount *bool  `json:"hide_donation_amount"`
+			Action             string `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad_request"})
+			return
+		}
+
+		acc := strings.TrimSpace(req.AccountNumber)
+		dev := strings.TrimSpace(req.DeviceID)
+		nick := strings.TrimSpace(req.Nickname)
+		steamID := strings.TrimSpace(req.SteamID)
+		motto := strings.TrimSpace(req.Motto)
+		if len(nick) > 24 {
+			nick = nick[:24]
+		}
+		nick = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(nick, "")
+		nick = strings.TrimSpace(nick)
+
+		if req.Action == "reset_devices" && acc != "" && dev != "" {
+			_, _ = s.db.Exec(`DELETE FROM account_devices WHERE account_number = $1 AND device_id != $2`, acc, dev)
+		}
+
+		if nick != "" {
+			if err := ValidateNicknameHybrid(r.Context(), nick, s.cfg.GeminiAPIKey, &s.nicknameCache); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":   "forbidden_nickname",
+					"message": err.Error(),
+				})
+				return
+			}
+		}
+
+		if acc == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "account_number_required"})
+			return
+		}
+
+		_, _ = s.db.Exec(`
+			INSERT INTO accounts (account_number, nickname, steam_id, motto, updated_at)
+			VALUES ($1, $2, $3, $4, NOW())
+			ON CONFLICT (account_number) DO UPDATE
+			SET nickname = CASE WHEN $2 != '' THEN $2 ELSE accounts.nickname END,
+			    steam_id = CASE WHEN $3 != '' THEN $3 ELSE accounts.steam_id END,
+			    motto = CASE WHEN $4 != '' THEN $4 ELSE accounts.motto END,
+			    updated_at = NOW()
+		`, acc, nick, steamID, motto)
+
+		if req.HideDonationAmount != nil {
+			_, _ = s.db.Exec(`UPDATE accounts SET hide_donation_amount = $1, updated_at = NOW() WHERE account_number = $2`, *req.HideDonationAmount, acc)
+		}
+
+		if dev != "" {
+			_, _ = s.db.Exec(`
+				INSERT INTO account_devices (account_number, device_id, created_at)
+				VALUES ($1, $2, NOW())
+				ON CONFLICT (account_number, device_id) DO NOTHING
+			`, acc, dev)
+		}
+
+		var resp ProfileResp
+		resp.Donations = []DonationItem{}
+		var sponsorTime *time.Time
+		var createdAt time.Time
+		var totalDonated int
+		var st, mo sql.NullString
+		_ = s.db.QueryRow(`
+			SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE) 
+			FROM accounts WHERE account_number = $1
+		`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount)
+		if st.Valid {
+			resp.SteamID = st.String
+		}
+		if mo.Valid {
+			resp.Motto = mo.String
+		}
+
+		resp.TotalDonatedRub = totalDonated
+		if !createdAt.IsZero() {
+			resp.CreatedAt = createdAt.Format("02.01.2006")
+		} else {
+			resp.CreatedAt = time.Now().Format("02.01.2006")
+		}
+
+		var devCount int
+		_ = s.db.QueryRow(`SELECT COUNT(*) FROM account_devices WHERE account_number = $1`, acc).Scan(&devCount)
+		if devCount <= 0 {
+			devCount = 1
+		}
+		resp.DeviceCount = devCount
+
+		rows, qErr := s.db.Query(`
+			SELECT invoice_id, amount_rub, status, created_at 
+			FROM pending_donations 
+			WHERE account_number = $1 
+			ORDER BY created_at DESC LIMIT 20
+		`, acc)
+		if qErr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var item DonationItem
+				var dTime time.Time
+				if err := rows.Scan(&item.InvoiceID, &item.AmountRub, &item.Status, &dTime); err == nil {
+					item.CreatedAt = dTime.Format("02.01.2006 15:04")
+					resp.Donations = append(resp.Donations, item)
+				}
+			}
+		}
+
+		if resp.AccountNumber == AdminAccountNumber {
+			resp.Tier = "admin"
+			resp.DaysRemaining = 9999
+		} else if sponsorTime != nil && sponsorTime.After(time.Now()) {
+			resp.Tier = "sponsor"
+			resp.SponsorUntil = sponsorTime.Unix()
+			resp.DaysRemaining = int(time.Until(*sponsorTime).Hours() / 24)
+		} else {
+			resp.Tier = "free"
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+}
+
+func (s *AppState) handleProfileAvatar(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "db_unavailable"})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "file_too_large_max_4mb"})
+		return
+	}
+
+	account := strings.TrimSpace(r.FormValue("account_number"))
+	if account == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "missing_account_number"})
+		return
+	}
+
+	file, _, err := r.FormFile("avatar")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "missing_avatar_file"})
+		return
+	}
+	defer file.Close()
+
+	srcImg, _, err := image.Decode(file)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "invalid_image_format"})
+		return
+	}
+
+	scaled := resizeImage(srcImg, 128, 128)
+
+	avatarsDir := "/opt/warlink-server/avatars"
+	if _, err := os.Stat("/opt/warlink-server"); os.IsNotExist(err) {
+		avatarsDir = "./avatars"
+	}
+	_ = os.MkdirAll(avatarsDir, 0755)
+
+	hash := sha256.Sum256([]byte(account))
+	filename := fmt.Sprintf("%x.jpg", hash[:8])
+	targetPath := filepath.Join(avatarsDir, filename)
+
+	outF, err := os.Create(targetPath)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "failed_saving_avatar"})
+		return
+	}
+	defer outF.Close()
+
+	if err := jpeg.Encode(outF, scaled, &jpeg.Options{Quality: 85}); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "failed_encoding_avatar"})
+		return
+	}
+
+	avatarURL := "/avatars/" + filename
+	_, _ = s.db.Exec(`
+		UPDATE accounts 
+		SET avatar_url = $1, updated_at = NOW() 
+		WHERE account_number = $2
+	`, avatarURL, account)
+
+	log.Printf("[AVATAR] Saved 128x128 avatar for %s -> %s", account, avatarURL)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"avatar_url": avatarURL,
 	})
 }
 
@@ -3238,31 +4775,69 @@ const dashboardHTML = `<!DOCTYPE html>
             </div>
         </header>
 
-        <!-- Dynamic Client Feature Controls (Live Zero Restart) -->
-        <div class="features-bar" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 2px; padding: 12px 18px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="4" y1="21" x2="4" y2="14"></line>
-                    <line x1="4" y1="10" x2="4" y2="3"></line>
-                    <line x1="12" y1="21" x2="12" y2="12"></line>
-                    <line x1="12" y1="8" x2="12" y2="3"></line>
-                    <line x1="20" y1="21" x2="20" y2="16"></line>
-                    <line x1="20" y1="12" x2="20" y2="3"></line>
-                    <line x1="1" y1="14" x2="7" y2="14"></line>
-                    <line x1="9" y1="8" x2="15" y2="8"></line>
-                    <line x1="17" y1="16" x2="23" y2="16"></line>
-                </svg>
-                <span style="font-weight: 600; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted);">Переключатели функций клиента (Zero-Restart)</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 16px;">
+        <!-- WarLink Control Plane (Zero-Restart Dynamic Config) -->
+        <div class="features-bar" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 2px; padding: 16px 20px; margin-bottom: 24px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 12px; color: var(--text-main);">Кнопка доната:</span>
-                    <button id="toggle-donate-btn" class="btn" onclick="toggleFeature('enable_donate')" style="font-family: var(--font-mono); min-width: 80px; text-align: center; font-weight: 700;">ВКЛ</button>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="4" y1="21" x2="4" y2="14"></line>
+                        <line x1="4" y1="10" x2="4" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12" y2="3"></line>
+                        <line x1="20" y1="21" x2="20" y2="16"></line>
+                        <line x1="20" y1="12" x2="20" y2="3"></line>
+                        <line x1="1" y1="14" x2="7" y2="14"></line>
+                        <line x1="9" y1="8" x2="15" y2="8"></line>
+                        <line x1="17" y1="16" x2="23" y2="16"></line>
+                    </svg>
+                    <span style="font-weight: 700; font-size: 12px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-main);">Панель управления шлюзом (WarLink Control Plane)</span>
                 </div>
-                <div style="width: 1px; height: 18px; background: var(--border);"></div>
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="font-size: 12px; color: var(--text-main);">Голосование игр:</span>
-                    <button id="toggle-voting-btn" class="btn" onclick="toggleFeature('enable_voting')" style="font-family: var(--font-mono); min-width: 80px; text-align: center; font-weight: 700;">ВКЛ</button>
+                <div id="ctrl-status-msg" style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--green);"></div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: center;">
+                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Приём донатов СБП</div>
+                        <div style="font-size: 10px; color: var(--text-muted);">Кнопка в приложении</div>
+                    </div>
+                    <button id="toggle-donate-btn" class="btn" onclick="toggleFeature('enable_donate')" style="font-family: var(--font-mono); min-width: 90px; text-align: center; font-weight: 700; padding: 6px 12px;">ВКЛ</button>
+                </div>
+                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Голосование за игры</div>
+                        <div style="font-size: 10px; color: var(--text-muted);">Каталог сообщества</div>
+                    </div>
+                    <button id="toggle-voting-btn" class="btn" onclick="toggleFeature('enable_voting')" style="font-family: var(--font-mono); min-width: 90px; text-align: center; font-weight: 700; padding: 6px 12px;">ВКЛ</button>
+                </div>
+                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Общий пул слотов</div>
+                        <div style="font-size: 10px; color: var(--text-muted);">Всего подключений</div>
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <input type="number" id="input-max-sess" value="100" min="5" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
+                        <button class="btn" onclick="saveSetting('max_sessions', 'input-max-sess')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
+                    </div>
+                </div>
+                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Резерв спонсоров</div>
+                        <div style="font-size: 10px; color: var(--text-muted);">Слоты поддержки</div>
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <input type="number" id="input-sponsor-slots" value="10" min="0" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
+                        <button class="btn" onclick="saveSetting('dedicated_sponsor_slots', 'input-sponsor-slots')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
+                    </div>
+                </div>
+                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Бесплатный пул</div>
+                        <div style="font-size: 10px; color: var(--text-muted);">Лимит без статуса</div>
+                    </div>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <input type="number" id="input-free-slots" value="89" min="1" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
+                        <button class="btn" onclick="saveSetting('free_slots_limit', 'input-free-slots')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3695,69 +5270,92 @@ const dashboardHTML = `<!DOCTYPE html>
             }
         }
 
-        let featuresState = { enable_donate: true, enable_voting: true };
+        let featuresState = { enable_donate: true, enable_voting: true, max_sessions: 100, dedicated_sponsor_slots: 10, free_slots_limit: 89 };
 
         async function loadFeatures() {
             try {
-                let url = '/api/v1/admin/features';
+                let url = '/api/v1/admin/settings';
                 if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
                 const res = await fetch(url);
                 if (res.ok) {
                     const data = await res.json();
                     if (data && data.success) {
-                        featuresState.enable_donate = data.enable_donate;
-                        featuresState.enable_voting = data.enable_voting;
-                        renderFeatureButtons();
+                        featuresState = data;
+                        renderControlUI();
                     }
                 }
             } catch (err) {
-                console.error('Failed to load features:', err);
+                console.error('Failed to load settings:', err);
             }
         }
 
-        function renderFeatureButtons() {
+        function renderControlUI() {
             const dBtn = document.getElementById('toggle-donate-btn');
             if (dBtn) {
                 if (featuresState.enable_donate) {
-                    dBtn.textContent = 'ВКЛ';
+                    dBtn.textContent = 'ВКЛЮЧЕНО';
                     dBtn.style.background = '#112211';
-                    dBtn.style.borderColor = '#224422';
+                    dBtn.style.borderColor = '#22c55e';
                     dBtn.style.color = '#4ade80';
                 } else {
-                    dBtn.textContent = 'ВЫКЛ';
+                    dBtn.textContent = 'ОТКЛЮЧЕНО';
                     dBtn.style.background = '#221111';
-                    dBtn.style.borderColor = '#442222';
+                    dBtn.style.borderColor = '#ef4444';
                     dBtn.style.color = '#f87171';
                 }
             }
             const vBtn = document.getElementById('toggle-voting-btn');
             if (vBtn) {
                 if (featuresState.enable_voting) {
-                    vBtn.textContent = 'ВКЛ';
+                    vBtn.textContent = 'ВКЛЮЧЕНО';
                     vBtn.style.background = '#112211';
-                    vBtn.style.borderColor = '#224422';
+                    vBtn.style.borderColor = '#22c55e';
                     vBtn.style.color = '#4ade80';
                 } else {
-                    vBtn.textContent = 'ВЫКЛ';
+                    vBtn.textContent = 'ОТКЛЮЧЕНО';
                     vBtn.style.background = '#221111';
-                    vBtn.style.borderColor = '#442222';
+                    vBtn.style.borderColor = '#ef4444';
                     vBtn.style.color = '#f87171';
                 }
+            }
+            const mSess = document.getElementById('input-max-sess');
+            if (mSess && featuresState.max_sessions) {
+                mSess.value = featuresState.max_sessions;
+            }
+            const sSponsor = document.getElementById('input-sponsor-slots');
+            if (sSponsor && featuresState.dedicated_sponsor_slots !== undefined) {
+                sSponsor.value = featuresState.dedicated_sponsor_slots;
+            }
+            const fSlots = document.getElementById('input-free-slots');
+            if (fSlots && featuresState.free_slots_limit !== undefined) {
+                fSlots.value = featuresState.free_slots_limit;
             }
         }
 
         async function toggleFeature(name) {
             const nextVal = !featuresState[name];
-            const dBtn = document.getElementById('toggle-donate-btn');
-            const vBtn = document.getElementById('toggle-voting-btn');
-            const targetBtn = (name === 'enable_donate') ? dBtn : vBtn;
-            if (targetBtn) targetBtn.textContent = '...';
+            const payload = {};
+            payload[name] = nextVal;
+            await sendAdminUpdate(payload);
+        }
+
+        async function saveSetting(name, inputId) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+            const val = parseInt(input.value, 10);
+            if (isNaN(val) || val <= 0) return;
+            const payload = {};
+            payload[name] = val;
+            await sendAdminUpdate(payload);
+        }
+
+        async function sendAdminUpdate(payload) {
+            const statusMsg = document.getElementById('ctrl-status-msg');
+            if (statusMsg) statusMsg.textContent = 'Сохранение...';
 
             try {
-                let url = '/api/v1/admin/features';
+                let url = '/api/v1/admin/settings';
                 if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
-                const payload = {};
-                payload[name] = nextVal;
                 const res = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3766,14 +5364,27 @@ const dashboardHTML = `<!DOCTYPE html>
                 if (res.ok) {
                     const data = await res.json();
                     if (data && data.success) {
-                        featuresState.enable_donate = data.enable_donate;
-                        featuresState.enable_voting = data.enable_voting;
+                        featuresState = data;
+                        renderControlUI();
+                        if (statusMsg) {
+                            statusMsg.textContent = 'Успешно сохранено!';
+                            statusMsg.style.color = 'var(--green)';
+                            setTimeout(() => { if (statusMsg) statusMsg.textContent = ''; }, 3000);
+                        }
+                    }
+                } else {
+                    if (statusMsg) {
+                        statusMsg.textContent = 'Ошибка доступа (403)';
+                        statusMsg.style.color = '#ef4444';
                     }
                 }
             } catch (err) {
-                console.error('Failed to update feature:', err);
+                console.error('Failed to update setting:', err);
+                if (statusMsg) {
+                    statusMsg.textContent = 'Ошибка сети!';
+                    statusMsg.style.color = '#ef4444';
+                }
             }
-            renderFeatureButtons();
         }
 
         // Initial fetch and auto-refresh

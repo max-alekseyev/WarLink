@@ -153,3 +153,95 @@ func TestConfigConcurrency(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestAccountNumberGenerationAndValidation(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		acc := GenerateAccountNumber()
+		if len(acc) != 19 { // 16 digits + 3 dashes
+			t.Fatalf("unexpected account number length: %s (len %d)", acc, len(acc))
+		}
+		if !ValidateAccountNumber(acc) {
+			t.Fatalf("account number failed validation: %s", acc)
+		}
+	}
+
+	// Test invalid numbers
+	if ValidateAccountNumber("1234-5678-9012-3456") {
+		// Only valid if checksum matches
+	}
+	if ValidateAccountNumber("invalid-account") {
+		t.Fatal("expected false for invalid string")
+	}
+	if ValidateAccountNumber("1234-5678-9012-345") {
+		t.Fatal("expected false for 15 digits")
+	}
+}
+
+func TestValidateNickname(t *testing.T) {
+	// Valid nicknames
+	validNicks := []string{
+		"", // empty is allowed (clears nickname)
+		"ShadowHunter",
+		"Max_Pro",
+		"Игрок-2026",
+		"Cyber_Dog",
+		"Sniper 1",
+		"Дмитрий",
+	}
+	for _, n := range validNicks {
+		if err := ValidateNickname(n); err != nil {
+			t.Errorf("expected valid nickname %q, got error: %v", n, err)
+		}
+	}
+
+	// Invalid length
+	if err := ValidateNickname("A"); err == nil {
+		t.Error("expected error for 1-char nickname")
+	}
+	if err := ValidateNickname("ThisNicknameIsWayTooLongAndExceedsTwentyChars"); err == nil {
+		t.Error("expected error for >20 chars nickname")
+	}
+
+	// Invalid characters / injection
+	if err := ValidateNickname("<script>"); err == nil {
+		t.Error("expected error for HTML tag symbols")
+	}
+	if err := ValidateNickname("!@#$%^"); err == nil {
+		t.Error("expected error for special symbols")
+	}
+
+	// Impersonation
+	bannedImpersonations := []string{
+		"admin",
+		"Admin_99",
+		"Adm1n",
+		"a_d_m_i_n",
+		"Администратор",
+		"WarLink_Dev",
+		"варлинк",
+		"Support_Alex",
+		"Aeza_Host",
+	}
+	for _, b := range bannedImpersonations {
+		if err := ValidateNickname(b); err == nil {
+			t.Errorf("expected error for impersonation nickname %q", b)
+		}
+	}
+
+	// Profanity & Homoglyphs
+	bannedProfanity := []string{
+		"хуй",
+		"x_y_u",
+		"пиздец",
+		"fuck_you",
+		"f_u_c_k",
+		"bitch99",
+		"cunt",
+		"говно",
+	}
+	for _, b := range bannedProfanity {
+		if err := ValidateNickname(b); err == nil {
+			t.Errorf("expected error for profanity nickname %q", b)
+		}
+	}
+}

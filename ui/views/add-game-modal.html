@@ -1,0 +1,77 @@
+<!-- MODAL: Community Game Voting & Suggestions -->
+<div id="modal-add-game" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="modal-title">Голосование за новые игры</span>
+                <span id="user-votes-badge" class="votes-badge">Голоса: 0 из 3</span>
+                <span id="user-vote-power-badge" class="badge-vote-power">Сила: x1</span>
+            </div>
+            <button class="btn-icon" onclick="closeAddGameModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        <div class="modal-body" style="padding-bottom: 8px;">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label">Предложить игру (каталог Steam):</label>
+                <div class="vote-input-wrap">
+                    <input type="text" id="vote-search-input" class="form-input" placeholder="Введите название игры" oninput="onVoteSearchInput(this.value)" autocomplete="off">
+                    <div id="vote-autocomplete" class="vote-autocomplete" style="display: none;"></div>
+                </div>
+                <div id="vote-selected-preview" class="vote-selected-preview" style="display: none;">
+                    <div class="vote-selected-left">
+                        <img id="vote-selected-img" class="vote-selected-icon" src="" alt="">
+                        <span id="vote-selected-title" class="vote-selected-title"></span>
+                    </div>
+                    <button id="btn-submit-propose" class="btn btn-primary btn-sm" onclick="submitProposedGame()">Предложить (+1 голос)</button>
+                </div>
+            </div>
+            <div class="vote-section-divider"></div>
+            <div class="vote-list-header">
+                <span>Топ игр сообщества (цель: 50 голосов)</span>
+                <span id="vote-list-status" style="font-size: 10px; color: var(--text-muted);"></span>
+            </div>
+            <div id="vote-games-list" class="vote-games-list">
+                <div class="vote-game-card skeleton-card">
+                    <div class="vote-card-main">
+                        <div class="skeleton" style="width: 32px; height: 32px; border-radius: 2px; flex-shrink: 0;"></div>
+                        <div class="vote-card-info" style="gap: 6px;">
+                            <div class="vote-card-topline">
+                                <div class="skeleton" style="width: 120px; height: 12px;"></div>
+                                <div class="skeleton" style="width: 40px; height: 10px;"></div>
+                            </div>
+                            <div class="skeleton" style="width: 100%; height: 3px; border-radius: 1px;"></div>
+                        </div>
+                    </div>
+                    <div class="skeleton" style="width: 72px; height: 24px; border-radius: 2px; flex-shrink: 0;"></div>
+                </div>
+                <div class="vote-game-card skeleton-card">
+                    <div class="vote-card-main">
+                        <div class="skeleton" style="width: 32px; height: 32px; border-radius: 2px; flex-shrink: 0;"></div>
+                        <div class="vote-card-info" style="gap: 6px;">
+                            <div class="vote-card-topline">
+                                <div class="skeleton" style="width: 140px; height: 12px;"></div>
+                                <div class="skeleton" style="width: 40px; height: 10px;"></div>
+                            </div>
+                            <div class="skeleton" style="width: 100%; height: 3px; border-radius: 1px;"></div>
+                        </div>
+                    </div>
+                    <div class="skeleton" style="width: 72px; height: 24px; border-radius: 2px; flex-shrink: 0;"></div>
+                </div>
+                <div class="vote-game-card skeleton-card">
+                    <div class="vote-card-main">
+                        <div class="skeleton" style="width: 32px; height: 32px; border-radius: 2px; flex-shrink: 0;"></div>
+                        <div class="vote-card-info" style="gap: 6px;">
+                            <div class="vote-card-topline">
+                                <div class="skeleton" style="width: 100px; height: 12px;"></div>
+                                <div class="skeleton" style="width: 40px; height: 10px;"></div>
+                            </div>
+                            <div class="skeleton" style="width: 100%; height: 3px; border-radius: 1px;"></div>
+                        </div>
+                    </div>
+                    <div class="skeleton" style="width: 72px; height: 24px; border-radius: 2px; flex-shrink: 0;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

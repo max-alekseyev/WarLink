@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"image"
+	"image/color"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -337,5 +339,92 @@ func TestFetchAezaAccount(t *testing.T) {
 		t.Fatalf("expected 238 RUB bonus, got %d", state.metricAezaBonusRub)
 	}
 }
+
+func TestResizeImage(t *testing.T) {
+	// Create dummy 200x100 RGBA image
+	src := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	for y := 0; y < 100; y++ {
+		for x := 0; x < 200; x++ {
+			src.Set(x, y, color.RGBA{R: 255, G: 0, B: 0, A: 255})
+		}
+	}
+
+	scaled := resizeImage(src, 128, 128)
+	if scaled.Bounds().Dx() != 128 || scaled.Bounds().Dy() != 128 {
+		t.Fatalf("expected 128x128 bounds, got %dx%d", scaled.Bounds().Dx(), scaled.Bounds().Dy())
+	}
+	r, _, _, _ := scaled.At(64, 64).RGBA()
+	if r == 0 {
+		t.Fatalf("expected non-zero red component in scaled image")
+	}
+}
+
+func TestHandleStatusSponsorSlots(t *testing.T) {
+	state := &AppState{
+		cfg: ServerConfig{
+			MaxSessions:           61,
+			DedicatedSponsorSlots: 10,
+		},
+		sessions: make(map[string]*SessionInfo),
+	}
+
+	// Add 1 free session and 1 sponsor session
+	state.sessions["tok1"] = &SessionInfo{IsSponsor: false}
+	state.sessions["tok2"] = &SessionInfo{IsSponsor: true}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	w := httptest.NewRecorder()
+	state.handleStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	var res struct {
+		ActiveSessions        int `json:"active_sessions"`
+		MaxSessions           int `json:"max_sessions"`
+		ActiveFreeSessions    int `json:"active_free_sessions"`
+		FreeSlotsLimit        int `json:"free_slots_limit"`
+		ActiveSponsorSessions int `json:"active_sponsor_sessions"`
+		DedicatedSponsorSlots int `json:"dedicated_sponsor_slots"`
+		DedicatedAdminSlots   int `json:"dedicated_admin_slots"`
+	}
+
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode json: %v", err)
+	}
+
+	if res.ActiveSessions != 2 {
+		t.Errorf("expected active_sessions 2, got %d", res.ActiveSessions)
+	}
+	if res.MaxSessions != 61 {
+		t.Errorf("expected max_sessions 61, got %d", res.MaxSessions)
+	}
+	if res.ActiveFreeSessions != 1 {
+		t.Errorf("expected active_free_sessions 1, got %d", res.ActiveFreeSessions)
+	}
+	if res.FreeSlotsLimit != 50 {
+		t.Errorf("expected free_slots_limit 50, got %d", res.FreeSlotsLimit)
+	}
+	if res.ActiveSponsorSessions != 1 {
+		t.Errorf("expected active_sponsor_sessions 1, got %d", res.ActiveSponsorSessions)
+	}
+	if res.DedicatedSponsorSlots != 10 {
+		t.Errorf("expected dedicated_sponsor_slots 10, got %d", res.DedicatedSponsorSlots)
+	}
+	if res.DedicatedAdminSlots != 1 {
+		t.Errorf("expected dedicated_admin_slots 1, got %d", res.DedicatedAdminSlots)
+	}
+}
+
+func TestAdminSlotReservation(t *testing.T) {
+	if AdminAccountNumber != "5230-6527-2989-4096" {
+		t.Fatalf("unexpected admin account number: %s", AdminAccountNumber)
+	}
+	if MaxActiveSessions != 61 {
+		t.Fatalf("expected MaxActiveSessions 61, got %d", MaxActiveSessions)
+	}
+}
+
 
 

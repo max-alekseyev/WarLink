@@ -1,0 +1,11 @@
+<!-- MODAL: Sponsor Tactical Inspection Dossier Document -->
+<div id="modal-sponsor-dossier" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="dossier-modal-window" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <button class="modal-close-btn" onclick="closeSponsorDossier()" title="Закрыть досье">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+            </svg>
+        </button>
+        <div class="svg-dossier-wrapper" id="dossier-svg-container"></div>
+    </div>
+</div>

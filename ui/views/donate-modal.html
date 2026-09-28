@@ -1,0 +1,51 @@
+<!-- MODAL: Custom SBP Donation -->
+<div id="modal-donate-custom" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span class="modal-title">Поддержать сервер WarLink</span>
+            <button class="btn-icon" onclick="closeDonateModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        <div class="modal-body" style="padding-bottom: 14px;">
+            <div class="donate-perks-box">
+                <div class="donate-perk-item">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>100 ₽ = 30 дней активного статуса «Спонсор»</span>
+                </div>
+                <div class="donate-perk-item">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Выделенный слот шлюза без очередей</span>
+                </div>
+                <div class="donate-perk-item">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>Никнейм и аватарка на Доске почёта спонсоров</span>
+                </div>
+            </div>
+
+            <div class="form-group" style="margin-top: 12px; margin-bottom: 8px;">
+                <label class="form-label">Сумма пожертвования:</label>
+                <div class="donate-preset-row">
+                    <button type="button" class="preset-chip active" onclick="selectDonatePreset(100)">100 ₽</button>
+                    <button type="button" class="preset-chip" onclick="selectDonatePreset(200)">200 ₽</button>
+                    <button type="button" class="preset-chip" onclick="selectDonatePreset(500)">500 ₽</button>
+                    <button type="button" class="preset-chip" onclick="selectDonatePreset(1000)">1000 ₽</button>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+                    <input type="number" id="input-donate-custom" class="form-input" min="100" max="50000" step="50" value="100" oninput="onCustomDonateInput(this.value)">
+                    <span style="font-weight:600; color:var(--text-primary);">₽</span>
+                </div>
+            </div>
+
+            <div id="donate-calc-summary" class="donate-calc-summary">
+                Статус «Спонсор» на 30 дней
+            </div>
+
+            <div style="margin-top: 14px;">
+                <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 34px;" onclick="submitCustomDonation()">
+                    Перейти к оплате через СБП
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

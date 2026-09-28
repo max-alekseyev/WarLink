@@ -1,10 +1,12 @@
 package config
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +39,23 @@ type Config struct {
 	HMACSecret          string        `json:"hmac_secret,omitempty"`
 	ObfsPassword        string        `json:"obfs_password,omitempty"`
 	Games               []GameProfile `json:"games"`
+	AccountNumber       string        `json:"account_number,omitempty"`
+	Nickname            string        `json:"nickname,omitempty"`
+	AvatarURL           string        `json:"avatar_url,omitempty"`
+	AccountTier         string        `json:"account_tier,omitempty"` // "free" | "sponsor"
+	SponsorUntil        int64         `json:"sponsor_until,omitempty"`
+	SteamID             string        `json:"steam_id,omitempty"`
+	Motto               string        `json:"motto,omitempty"`
+	HideDonationAmount  bool          `json:"hide_donation_amount,omitempty"`
+	LastReadNotifID     int64         `json:"last_read_notif_id,omitempty"`
+	EnableSoundEffects  *bool         `json:"enable_sound_effects,omitempty"`
+}
+
+func (c *Config) IsSoundEffectsEnabled() bool {
+	if c.EnableSoundEffects == nil {
+		return true
+	}
+	return *c.EnableSoundEffects
 }
 
 func (c *Config) Lock()    { c.mu.Lock() }
@@ -151,7 +170,82 @@ func Load() *Config {
 		}
 	}
 
+	if cfg.AccountNumber == "" {
+		cfg.AccountNumber = GenerateAccountNumber()
+		_ = cfg.saveLocked()
+	}
+
 	return cfg
+}
+
+// GenerateAccountNumber generates an anonymous 16-digit account number formatted as XXXX-XXXX-XXXX-XXXX.
+// The 16th digit is a Luhn checksum digit for instant validation without network calls.
+func GenerateAccountNumber() string {
+	b := make([]byte, 15)
+	if _, err := rand.Read(b); err != nil {
+		nowNano := time.Now().UnixNano()
+		for i := range b {
+			b[i] = byte((nowNano >> (i * 4)) % 256)
+		}
+	}
+	digits := make([]int, 16)
+	for i := 0; i < 15; i++ {
+		digits[i] = int(b[i] % 10)
+	}
+	// Avoid leading zero for cleaner aesthetics
+	if digits[0] == 0 {
+		digits[0] = 7
+	}
+	// Calculate Luhn checksum for 16th digit
+	sum := 0
+	for i := 0; i < 15; i++ {
+		d := digits[i]
+		if i%2 == 0 {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	digits[15] = (10 - (sum % 10)) % 10
+
+	var sb strings.Builder
+	for i, d := range digits {
+		if i > 0 && i%4 == 0 {
+			sb.WriteString("-")
+		}
+		sb.WriteString(strconv.Itoa(d))
+	}
+	return sb.String()
+}
+
+// ValidateAccountNumber verifies whether a 16-digit account number is valid using Luhn algorithm.
+func ValidateAccountNumber(acc string) bool {
+	clean := strings.ReplaceAll(acc, "-", "")
+	clean = strings.ReplaceAll(clean, " ", "")
+	if len(clean) != 16 {
+		return false
+	}
+	digits := make([]int, 16)
+	for i, r := range clean {
+		if r < '0' || r > '9' {
+			return false
+		}
+		digits[i] = int(r - '0')
+	}
+	sum := 0
+	for i := 0; i < 16; i++ {
+		d := digits[i]
+		if i%2 == 0 {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	return sum%10 == 0
 }
 
 func (c *Config) Save() error {

@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.0.6</span>
+                <span class="brand-version">v2.1.6</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Free Internet -->
@@ -41,6 +41,31 @@
             </div>
 
             <div class="titlebar-right">
+                <button id="btn-account-toggle" class="win-btn win-icon-btn account-header-btn" onclick="toggleAccount(event)" title="Профиль и аккаунт">
+                    <div class="header-avatar-circle">
+                        <img id="header-avatar-img" class="header-avatar-img" src="" alt="" style="display: none;">
+                        <svg id="header-avatar-svg" class="header-avatar-svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
+                        </svg>
+                    </div>
+                </button>
+                <button id="btn-sponsors-toggle" class="win-btn win-icon-btn" onclick="toggleSponsors(event)" title="Доска почёта спонсоров">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/>
+                        <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+                        <path d="M4 22h16"/>
+                        <path d="M10 14.66V17c0 .55-.45 1-1 1H7v4h10v-4h-2c-.55 0-1-.45-1-1v-2.34"/>
+                        <path d="M6 4h12v7a6 6 0 0 1-12 0V4z"/>
+                    </svg>
+                </button>
+                <button id="btn-notif-toggle" class="win-btn win-icon-btn notif-btn-wrap" onclick="toggleNotifications(event)" title="Уведомления">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                    <span id="notif-badge" class="notif-badge" style="display: none;">0</span>
+                </button>
                 <button id="btn-settings-toggle" class="win-btn win-icon-btn" onclick="toggleDetails(event)" title="Параметры маршрутизации">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/>
@@ -62,104 +87,40 @@
             <div id="view-showcase" class="showcase-view">
                 <div class="showcase-header">
                     <span class="showcase-title">ВИТРИНА ИГР</span>
-                </div>
-
-                <div id="showcase-grid" class="shortcuts-grid">
-                    <!-- Clean game icons + titles injected via JS -->
-                </div>
-            </div>
-
-            <!-- VIEW 2: Settings Panel (Progressive Disclosure) -->
-            <div id="view-details" class="details-view" style="display: none;">
-                <div class="details-header">
-                    <span class="details-title">Параметры маршрутизации</span>
-                    <button class="details-close" onclick="toggleDetails(event)">Закрыть</button>
+                    <span class="showcase-hint font-mono" style="font-size: 10px; color: var(--text-muted); line-height: 1;">Клик — запуск • ПКМ — меню</span>
                 </div>
 
                 <div class="details-content">
-                    <div class="setting-group">
-                        <span class="setting-group-title">СВОБОДНЫЙ ИНТЕРНЕТ (DPI)</span>
-                        <div class="setting-info-row">
-                            <span class="info-label">Сетевой фильтр:</span>
-                            <span class="info-value">WinDivert (Zapret winws2)</span>
+                    <div id="showcase-grid" class="shortcuts-grid">
+                        <div class="game-shortcut is-selected" data-game-id="wardogs" onclick="onGameClick('wardogs')" oncontextmenu="showGameContextMenu(event, 'wardogs', true)">
+                            <div class="shortcut-icon-wrapper">
+                                <img class="shortcut-icon-img" src="wardogs_icon.png" alt="WARDOGS" draggable="false">
+                            </div>
+                            <span class="shortcut-title" title="WARDOGS">WARDOGS</span>
                         </div>
-                        <div class="setting-row" style="margin-top: 6px;">
-                            <span class="setting-label">Профиль десинхронизации (Discord / YouTube):</span>
-                            <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
-                                <option value="Автокалибровка (Circular Adaptive)">Автокалибровка (Circular Adaptive)</option>
-                            </select>
-                        </div>
-                        <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
-                            <button id="btn-run-benchmark" class="btn-link" style="font-size: 11px; padding: 2px 0; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--action);" onclick="runBenchmark()">
-                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/></svg>
-                                Подобрать лучший профиль (автотест)
-                            </button>
-                        </div>
-                        <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                            <span class="info-label">Авто-доменов в списке:</span>
-                            <span style="display: flex; gap: 8px; align-items: center;">
-                                <span id="auto-hosts-count" class="info-value">0</span>
-                                <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
-                            </span>
-                        </div>
-                        <div id="circular-strategy-row" class="setting-info-row" style="margin-top: 4px; font-size: 11px; display: none;">
-                            <span class="info-label">Оркестратор:</span>
-                            <span id="circular-strategy-val" class="info-value" style="color: var(--action);">Авторотация активна</span>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <span class="setting-group-title">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                        <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
-                            <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
-                            <span style="color: var(--text-muted); font-size: 11px;">•</span>
-                            <button class="btn-link" onclick="openSingboxLogFile()">сетевой singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                        <div class="game-shortcut add-shortcut" id="btn-add-game" onclick="openAddGameModal()" title="Предложить или проголосовать за новую игру">
+                            <div class="shortcut-icon-wrapper add-icon-wrap">
+                                <svg class="add-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                            </div>
+                            <span class="shortcut-title">Предложить</span>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- MODAL: Add Game -->
-            <!-- MODAL: Community Game Voting & Suggestions -->
-            <div id="modal-add-game" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
-                <div class="modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
-                    <div class="modal-header">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span class="modal-title">Голосование за новые игры</span>
-                            <span id="user-votes-badge" class="votes-badge">Голоса: 0 из 3</span>
-                        </div>
-                        <button class="btn-icon" onclick="closeAddGameModal()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                        </button>
-                    </div>
-                    <div class="modal-body" style="padding-bottom: 8px;">
-                        <div class="form-group" style="margin-bottom: 0;">
-                            <label class="form-label">Предложить игру (каталог Steam):</label>
-                            <div class="vote-input-wrap">
-                                <input type="text" id="vote-search-input" class="form-input" placeholder="Введите название игры" oninput="onVoteSearchInput(this.value)" autocomplete="off">
-                                <div id="vote-autocomplete" class="vote-autocomplete" style="display: none;"></div>
-                            </div>
-                            <div id="vote-selected-preview" class="vote-selected-preview" style="display: none;">
-                                <div class="vote-selected-left">
-                                    <img id="vote-selected-img" class="vote-selected-icon" src="" alt="">
-                                    <span id="vote-selected-title" class="vote-selected-title"></span>
-                                </div>
-                                <button class="btn btn-primary btn-sm" onclick="submitProposedGame()">Предложить (+1 голос)</button>
-                            </div>
-                        </div>
-                        <div class="vote-section-divider"></div>
-                        <div class="vote-list-header">
-                            <span>Топ игр сообщества (цель: 50 голосов)</span>
-                            <span id="vote-list-status" style="font-size: 10px; color: var(--text-muted);"></span>
-                        </div>
-                        <div id="vote-games-list" class="vote-games-list">
-                            <!-- Populated dynamically -->
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <!-- Mount points for decomposed views and modals -->
+            <div data-partial="views/settings-view.html"></div>
+            <div data-partial="views/notifications-view.html"></div>
+            <div data-partial="views/sponsors-view.html"></div>
+            <div data-partial="views/account-view.html"></div>
+            <div data-partial="views/add-game-modal.html"></div>
+            <div data-partial="views/donate-modal.html"></div>
+            <div data-partial="views/dossier-modal.html"></div>
 
-            <!-- VIEW 4: Blocking Auto-Updater Overlay -->
+            <!-- VIEW: Blocking Auto-Updater Overlay -->
             <div id="view-update-overlay" class="update-overlay" style="display: none;">
                 <div class="update-box">
                     <svg class="update-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -187,19 +148,20 @@
                 <span id="ui-toast-msg" class="toast-msg"></span>
             </div>
         </main>
+
         <!-- Persistent Stockholm Gateway & Community Timer Bar -->
         <footer class="gateway-footer">
             <div class="gateway-footer-left">
                 <span class="gateway-dot"></span>
                 <span class="gateway-title">Стокгольм</span>
                 <span class="gateway-sep">•</span>
-                <span id="gw-ping" class="gateway-meta">— мс</span>
+                <span id="gw-ping" class="gateway-meta"><span class="skeleton" style="width: 36px; height: 10px;"></span></span>
                 <span class="gateway-sep">•</span>
-                <span id="gw-slots" class="gateway-meta">—</span>
+                <span id="gw-slots" class="gateway-meta" title="Слоты шлюза"><span class="skeleton" style="width: 30px; height: 10px;"></span></span>
                 <span class="gateway-sep">•</span>
-                <span id="gw-days" class="gateway-meta">—</span>
+                <span id="gw-days" class="gateway-meta"><span class="skeleton" style="width: 38px; height: 10px;"></span></span>
             </div>
-            <button id="btn-donate-server" class="btn-donate-server" onclick="donateServer(event)" title="Поддержать сервер через СБП">
+            <button id="btn-donate-server" class="btn-donate-server" onclick="openDonateModal(event)" title="Поддержать сервер через СБП">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="2" y="5" width="20" height="14" rx="2"/>
                     <line x1="2" y1="10" x2="22" y2="10"/>
@@ -236,6 +198,13 @@
         </button>
     </div>
 
+    <!-- Modular Script Bundle -->
+    <script src="js/foley.js"></script>
+    <script src="js/audio.js"></script>
     <script src="app.js"></script>
+    <script src="js/voting.js"></script>
+    <script src="js/dossier.js"></script>
+    <script src="js/sponsors.js"></script>
+    <script src="js/account.js"></script>
 </body>
 </html>

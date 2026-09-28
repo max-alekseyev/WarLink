@@ -362,18 +362,25 @@ type SessionResult struct {
 }
 
 type GatewayStatus struct {
-	Status          string `json:"status"`
-	Location        string `json:"location"`
-	PingHintMs      int    `json:"ping_hint_ms"`
-	ActiveSessions  int    `json:"active_sessions"`
-	MaxSessions     int    `json:"max_sessions"`
-	ServerIP        string `json:"server_ip"`
-	ServerPorts     string `json:"server_ports"`
-	DueDate         string `json:"due_date"`
-	DaysLeft        int    `json:"days_left"`
-	DonateAmountRub int    `json:"donate_amount_rub"`
-	EnableDonate    *bool  `json:"enable_donate,omitempty"`
-	EnableVoting    *bool  `json:"enable_voting,omitempty"`
+	Status                string `json:"status"`
+	Location              string `json:"location"`
+	PingHintMs            int    `json:"ping_hint_ms"`
+	ActiveSessions        int    `json:"active_sessions"`
+	MaxSessions           int    `json:"max_sessions"`
+	ActiveFreeSessions    int    `json:"active_free_sessions"`
+	FreeSlotsLimit        int    `json:"free_slots_limit"`
+	ActiveSponsorSessions int    `json:"active_sponsor_sessions"`
+	DedicatedSponsorSlots int    `json:"dedicated_sponsor_slots"`
+	DedicatedAdminSlots   int    `json:"dedicated_admin_slots,omitempty"`
+	ServerIP              string `json:"server_ip"`
+	ServerPorts           string `json:"server_ports"`
+	DueDate               string `json:"due_date"`
+	DaysLeft              int    `json:"days_left"`
+	DonateAmountRub       int    `json:"donate_amount_rub"`
+	EnableDonate          *bool  `json:"enable_donate,omitempty"`
+	EnableVoting          *bool  `json:"enable_voting,omitempty"`
+	EnableCommunityGoal   *bool  `json:"enable_community_goal,omitempty"`
+	OctoberPoolRub        int    `json:"october_pool_rub,omitempty"`
 }
 
 var (
@@ -438,6 +445,12 @@ func AcquireSession(game ...string) (string, error) {
 
 	client := &http.Client{Timeout: 7 * time.Second}
 
+	cfg := config.Load()
+	accountNumber := ""
+	if cfg != nil {
+		accountNumber = cfg.AccountNumber
+	}
+
 	attemptAuth := func() (*http.Response, error) {
 		ts := time.Now().Unix() + atomic.LoadInt64(&serverTimeOffset)
 		nonceBytes := make([]byte, 8)
@@ -445,10 +458,11 @@ func AcquireSession(game ...string) (string, error) {
 		nonce := hex.EncodeToString(nonceBytes)
 
 		reqBody, _ := json.Marshal(map[string]interface{}{
-			"device_id": deviceID,
-			"timestamp": ts,
-			"nonce":     nonce,
-			"game":      targetGame,
+			"device_id":      deviceID,
+			"account_number": accountNumber,
+			"timestamp":      ts,
+			"nonce":          nonce,
+			"game":           targetGame,
 		})
 
 		req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
@@ -493,7 +507,15 @@ func AcquireSession(game ...string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", fmt.Errorf("Все 100 слотов шлюза заняты. Пожалуйста, подождите освобождения места.")
+		body, _ := io.ReadAll(resp.Body)
+		var errData struct {
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(body, &errData) == nil && errData.Message != "" {
+			return "", fmt.Errorf("%s", errData.Message)
+		}
+		return "", fmt.Errorf("все слоты шлюза заняты. Пожалуйста, подождите освобождения места")
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -568,6 +590,7 @@ type VotesResponse struct {
 	TargetVotes   int                  `json:"target_votes"`
 	MaxUserVotes  int                  `json:"max_user_votes"`
 	UserVotesUsed int                  `json:"user_votes_used"`
+	UserVotePower int                  `json:"user_vote_power"`
 	Games         []GameSuggestionItem `json:"games"`
 	Error         string               `json:"error,omitempty"`
 }

@@ -1,0 +1,143 @@
+<!-- VIEW: Dedicated Account Settings Page -->
+<div id="view-account" class="details-view" style="display: none;">
+    <div class="details-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="details-title">Настройки аккаунта</span>
+            <div class="profile-tier-badge" id="profile-tier-badge"><span class="skeleton" style="width: 130px; height: 12px;"></span></div>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; text-decoration: none;" onclick="openMyDossier()" title="Посмотреть боевое досье оператора">Моё досье</button>
+            <button class="details-close" onclick="toggleAccount(event)">Закрыть</button>
+        </div>
+    </div>
+    <div class="details-content">
+        <div class="setting-group">
+            <span class="setting-group-title">ПРОФИЛЬ И НИКНЕЙМ</span>
+            <div class="profile-card">
+                <div class="profile-avatar-row">
+                    <div class="profile-avatar-wrap" onclick="triggerAvatarUpload()" title="Нажмите, чтобы загрузить аватарку">
+                        <img id="profile-avatar-img" src="" alt="" class="profile-avatar" style="display:none;">
+                        <div id="profile-avatar-placeholder" class="profile-avatar-placeholder">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                        </div>
+                        <input type="file" id="input-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="handleAvatarFileSelected(event)">
+                    </div>
+                    <div class="profile-meta-wrap">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <input type="text" id="input-nickname" class="form-input form-input-sm" placeholder="Никнейм игрока" maxlength="20">
+                            <button id="btn-save-nickname" class="btn btn-secondary btn-sm" onclick="saveNickname()">Сохранить</button>
+                        </div>
+                        <div class="profile-acc-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                            Отображается на Доске почёта спонсоров и в игровом сообществе
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-info-row" style="margin-top: 10px;">
+                <span class="info-label">Номер аккаунта:</span>
+                <span style="display:flex; align-items:center; gap:8px;">
+                    <span id="val-account-number" class="info-value font-mono" style="letter-spacing: 0.5px;"><span class="skeleton" style="width: 140px; height: 11px;"></span></span>
+                    <button class="btn-link" style="font-size: 11px; cursor: pointer;" onclick="copyAccountNumber()" title="Скопировать номер">копировать</button>
+                </span>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">НАСТРОЙКА ДОСЬЕ</span>
+                <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openMyDossier()" title="Открыть предварительный просмотр боевого досье">Открыть досье</button>
+            </div>
+            <div class="setting-row">
+                <span class="setting-label">Профиль Steam (ссылка или ID):</span>
+                <div style="margin-top:4px;">
+                    <input type="text" id="input-dossier-steam" class="form-input form-input-sm font-mono" placeholder="https://steamcommunity.com/id/... или SteamID64" maxlength="120">
+                </div>
+                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                    Отображается в вашем тактическом досье спонсора со статусом верификации.
+                </div>
+            </div>
+            <div class="setting-row" style="margin-top: 8px;">
+                <span class="setting-label">Описание:</span>
+                <div style="margin-top:4px;">
+                    <input type="text" id="input-dossier-motto" class="form-input form-input-sm" placeholder="Ваш статус или описание в досье" maxlength="100">
+                </div>
+                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                    Впечатывается в блок описания бланка досье на частоте отряда.
+                </div>
+            </div>
+            <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+                <button id="btn-save-dossier" class="btn btn-secondary btn-sm" onclick="saveDossierSettings()">Сохранить описание</button>
+            </div>
+            <div class="setting-row" style="margin-top: 10px; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="checkbox" id="check-dossier-hide-amount" onchange="toggleHideDonationAmount(this.checked)" style="accent-color: var(--action); cursor:pointer;">
+                    <span style="font-size: 11px; color: var(--text);">Скрыть сумму поддержки в досье (засекретить гриф)</span>
+                </label>
+                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                    При активации сумма взноса маскируется перманентным тактическим маркером цензуры.
+                </div>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <span class="setting-group-title">ДАННЫЕ АККАУНТА И УСТРОЙСТВА</span>
+            <div class="setting-info-row">
+                <span class="info-label">Дата регистрации:</span>
+                <span id="val-account-created" class="info-value font-mono"><span class="skeleton" style="width: 80px; height: 11px;"></span></span>
+            </div>
+            <div class="setting-info-row" style="margin-top: 6px;">
+                <span class="info-label">Привязанные устройства:</span>
+                <span style="display:flex; align-items:center; gap:8px;">
+                    <span id="val-account-devices" class="info-value font-mono"><span class="skeleton" style="width: 35px; height: 11px;"></span></span>
+                    <button id="btn-reset-devices" class="btn-link" style="font-size: 11px; cursor: pointer; color: var(--text-muted); display:none;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие</button>
+                </span>
+            </div>
+            <div class="setting-info-row" style="margin-top: 6px;">
+                <span class="info-label">Срок действия спонсорства:</span>
+                <span id="val-account-sponsor-until" class="info-value"><span class="skeleton" style="width: 90px; height: 11px;"></span></span>
+            </div>
+            <div class="setting-info-row" style="margin-top: 6px;">
+                <span class="info-label">Всего поддержано:</span>
+                <span id="val-account-total-donated" class="info-value font-mono" style="color: var(--action); font-weight: 600;"><span class="skeleton" style="width: 45px; height: 11px;"></span></span>
+            </div>
+
+            <div class="setting-row" style="margin-top: 10px;">
+                <span class="setting-label">Связать с другим ПК (перенос аккаунта):</span>
+                <div style="display:flex; gap:6px; margin-top:4px;">
+                    <input type="text" id="input-link-account" class="form-input form-input-sm font-mono" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19">
+                    <button class="btn btn-secondary btn-sm" onclick="linkAccountNumber()">Привязать</button>
+                </div>
+                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                    Введите 16-значный номер вашего основного ПК для переноса статуса спонсора.
+                </div>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span class="setting-group-title" style="margin-bottom: 0;">ИСТОРИЯ ПОДДЕРЖКИ ШЛЮЗА</span>
+                <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openDonateModal(event)">Поддержать сервер</button>
+            </div>
+            <div id="account-donations-list" class="account-donations-list" style="margin-top: 8px;">
+                <div class="donation-row skeleton-card">
+                    <div class="donation-left" style="gap: 8px;">
+                        <div class="skeleton" style="width: 70px; height: 11px;"></div>
+                        <div class="skeleton" style="width: 45px; height: 11px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 62px; height: 16px; border-radius: 2px;"></div>
+                </div>
+                <div class="donation-row skeleton-card">
+                    <div class="donation-left" style="gap: 8px;">
+                        <div class="skeleton" style="width: 70px; height: 11px;"></div>
+                        <div class="skeleton" style="width: 45px; height: 11px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 62px; height: 16px; border-radius: 2px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

@@ -36,7 +36,13 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.0.6"
+var AppVersion = "v2.1.6"
+
+const (
+	AppWindowWidth     int32  = 690
+	AppWindowHeight    int32  = 460
+	AdminAccountNumber string = "5230-6527-2989-4096"
+)
 
 //go:embed ui/*
 var uiFS embed.FS
@@ -278,8 +284,8 @@ func revealMainWindow(hwnd uintptr) {
 	// Calculate center screen coordinates
 	sw, _, _ := procGetSystemMetrics.Call(uintptr(SM_CXSCREEN))
 	sh, _, _ := procGetSystemMetrics.Call(uintptr(SM_CYSCREEN))
-	var winW int32 = 520
-	var winH int32 = 370
+	var winW int32 = AppWindowWidth
+	var winH int32 = AppWindowHeight
 	posX := (int32(sw) - winW) / 2
 	posY := (int32(sh) - winH) / 2
 
@@ -668,9 +674,9 @@ func forceForegroundWindow(hwnd uintptr) {
 	if rect.Left < -1000 || rect.Top < -1000 {
 		sw, _, _ := procGetSystemMetrics.Call(uintptr(SM_CXSCREEN))
 		sh, _, _ := procGetSystemMetrics.Call(uintptr(SM_CYSCREEN))
-		posX := (int32(sw) - 520) / 2
-		posY := (int32(sh) - 370) / 2
-		procSetWindowPos.Call(hwnd, 0, uintptr(posX), uintptr(posY), 520, 370, SWP_SHOWWINDOW)
+		posX := (int32(sw) - AppWindowWidth) / 2
+		posY := (int32(sh) - AppWindowHeight) / 2
+		procSetWindowPos.Call(hwnd, 0, uintptr(posX), uintptr(posY), uintptr(AppWindowWidth), uintptr(AppWindowHeight), SWP_SHOWWINDOW)
 	}
 
 	// 2. Restore window from minimized or hidden state
@@ -743,8 +749,8 @@ func hookWindowClose(hwnd uintptr, onInterceptClose func() bool) {
 				var rect struct {
 					Left, Top, Right, Bottom int32
 				}
-				rect.Right = 520
-				rect.Bottom = 370
+				rect.Right = AppWindowWidth
+				rect.Bottom = AppWindowHeight
 				procFillRect.Call(wParam, uintptr(unsafe.Pointer(&rect)), darkBrush)
 				return 1 // Erased with dark brush!
 			}
@@ -1123,19 +1129,51 @@ func main() {
 		}
 
 		gwSlots := "—"
+		gwSlotsTooltip := ""
 		gwDays := 0
 		gwLocation := "Стокгольм, Швеция"
-		gwDonateAmount := 98
+		gwDonateAmount := 100
+		isAdmin := state.cfg.AccountNumber == "5230-6527-2989-4096" || state.cfg.AccountTier == "admin"
+		if isAdmin {
+			state.cfg.AccountTier = "admin"
+		}
+		isSponsor := state.cfg.AccountTier == "sponsor" || isAdmin
 		if state.gatewayStatus != nil {
-			gwSlots = fmt.Sprintf("%d/%d", state.gatewayStatus.ActiveSessions, state.gatewayStatus.MaxSessions)
 			gwDays = state.gatewayStatus.DaysLeft
 			gwLocation = state.gatewayStatus.Location
 			if state.gatewayStatus.DonateAmountRub > 0 {
 				gwDonateAmount = state.gatewayStatus.DonateAmountRub
 			}
+			freeLimit := state.gatewayStatus.FreeSlotsLimit
+			if freeLimit <= 0 {
+				freeLimit = 50
+			}
+			activeFree := state.gatewayStatus.ActiveFreeSessions
+			activeSponsor := state.gatewayStatus.ActiveSponsorSessions
+			dedicatedSponsor := state.gatewayStatus.DedicatedSponsorSlots
+			if dedicatedSponsor <= 0 {
+				dedicatedSponsor = 10
+			}
+
+			if isAdmin {
+				gwSlots = fmt.Sprintf("%d/%d", state.gatewayStatus.ActiveSessions, state.gatewayStatus.MaxSessions)
+				gwSlotsTooltip = fmt.Sprintf("Администратор WarLink • Выделенный админ-слот (всего %d из %d слотов занято)", state.gatewayStatus.ActiveSessions, state.gatewayStatus.MaxSessions)
+			} else if isSponsor {
+				gwSlots = fmt.Sprintf("%d/%d", state.gatewayStatus.ActiveSessions, state.gatewayStatus.MaxSessions)
+				gwSlotsTooltip = fmt.Sprintf("Спонсорский доступ (всего %d из %d слотов занято)", state.gatewayStatus.ActiveSessions, state.gatewayStatus.MaxSessions)
+			} else {
+				if activeFree >= freeLimit {
+					gwSlots = fmt.Sprintf("%d/%d", freeLimit, freeLimit)
+					gwSlotsTooltip = fmt.Sprintf("Все %d бесплатных слотов заняты. Свободно %d зарезервированных мест для Спонсоров", freeLimit, dedicatedSponsor-activeSponsor)
+				} else {
+					gwSlots = fmt.Sprintf("%d/%d", activeFree, freeLimit)
+					gwSlotsTooltip = fmt.Sprintf("Бесплатные слоты: %d/%d • Спонсорские: %d/%d", activeFree, freeLimit, activeSponsor, dedicatedSponsor)
+				}
+			}
 		}
 		enableDonate := true
 		enableVoting := true
+		enableCommunityGoal := true
 		if state.gatewayStatus != nil {
 			if state.gatewayStatus.EnableDonate != nil {
 				enableDonate = *state.gatewayStatus.EnableDonate
@@ -1143,46 +1181,65 @@ func main() {
 			if state.gatewayStatus.EnableVoting != nil {
 				enableVoting = *state.gatewayStatus.EnableVoting
 			}
+			if state.gatewayStatus.EnableCommunityGoal != nil {
+				enableCommunityGoal = *state.gatewayStatus.EnableCommunityGoal
+			}
+		}
+
+		octoberPoolRub := 0
+		if state.gatewayStatus != nil && state.gatewayStatus.OctoberPoolRub > 0 {
+			octoberPoolRub = state.gatewayStatus.OctoberPoolRub
 		}
 
 		resp := map[string]interface{}{
-			"version":             AppVersion,
-			"is_connected":        state.eng.IsConnected(),
-			"ping_ms":             totalPing,
-			"gateway_ping":        gwPing,
-			"game_ping":           gamePing,
-			"total_ping":          totalPing,
-			"ping_label":          pingLabel,
-			"match_server":        matchServer,
-			"game_active":         gameActive,
-			"packet_loss":         lossPct,
-			"is_busy":             state.isBusy,
-			"is_downloading_deps": state.isDownloadingDeps,
-			"deps_msg":            state.depsMsg,
-			"is_initializing":     state.isInitializing,
-			"init_pct":            state.initPct,
-			"init_title":          state.initTitle,
-			"init_msg":            state.initMsg,
-			"profile":             state.eng.GetBestAlt(),
-			"available_profiles":  state.eng.FindAvailableAlts(),
-			"auto_hosts_count":    state.eng.GetAutoDiscoveredCount(),
-			"circular_active":     strings.Contains(state.eng.GetBestAlt(), "Circular"),
-			"autolaunch_game":     state.cfg.AutolaunchGame,
-			"free_internet":       state.eng.IsFreeInternetActive(),
-			"games":               state.cfg.Games,
-			"selected_game_id":    state.cfg.SelectedGameID,
-			"selected_game":       state.cfg.GetSelectedGame(),
-			"is_updating":         state.isUpdating,
-			"update_pct":          state.updatePct,
-			"update_msg":          state.updateMsg,
-			"progress":            pipelineProg,
-			"gateway_slots":       gwSlots,
-			"gateway_days":        gwDays,
-			"gateway_location":    gwLocation,
-			"donate_amount_rub":   gwDonateAmount,
-			"enable_donate":       enableDonate,
-			"enable_voting":       enableVoting,
-			"last_error":          state.lastConnectError,
+			"version":               AppVersion,
+			"is_connected":          state.eng.IsConnected(),
+			"ping_ms":               totalPing,
+			"gateway_ping":          gwPing,
+			"game_ping":             gamePing,
+			"total_ping":            totalPing,
+			"ping_label":            pingLabel,
+			"match_server":          matchServer,
+			"game_active":           gameActive,
+			"packet_loss":           lossPct,
+			"is_busy":               state.isBusy,
+			"is_downloading_deps":   state.isDownloadingDeps,
+			"deps_msg":              state.depsMsg,
+			"is_initializing":       state.isInitializing,
+			"init_pct":              state.initPct,
+			"init_title":            state.initTitle,
+			"init_msg":              state.initMsg,
+			"profile":               state.eng.GetBestAlt(),
+			"available_profiles":    state.eng.FindAvailableAlts(),
+			"auto_hosts_count":      state.eng.GetAutoDiscoveredCount(),
+			"circular_active":       strings.Contains(state.eng.GetBestAlt(), "Circular"),
+			"autolaunch_game":       state.cfg.AutolaunchGame,
+			"enable_sound_effects":  state.cfg.IsSoundEffectsEnabled(),
+			"free_internet":         state.eng.IsFreeInternetActive(),
+			"games":                 state.cfg.Games,
+			"selected_game_id":      state.cfg.SelectedGameID,
+			"selected_game":         state.cfg.GetSelectedGame(),
+			"is_updating":           state.isUpdating,
+			"update_pct":            state.updatePct,
+			"update_msg":            state.updateMsg,
+			"progress":              pipelineProg,
+			"gateway_slots":         gwSlots,
+			"gateway_slots_tooltip": gwSlotsTooltip,
+			"gateway_days":          gwDays,
+			"gateway_location":      gwLocation,
+			"donate_amount_rub":     gwDonateAmount,
+			"october_pool_rub":      octoberPoolRub,
+			"enable_donate":         enableDonate,
+			"enable_voting":         enableVoting,
+			"enable_community_goal": enableCommunityGoal,
+			"last_error":            state.lastConnectError,
+			"account_number":        state.cfg.AccountNumber,
+			"nickname":              state.cfg.Nickname,
+			"avatar_url":            state.cfg.AvatarURL,
+			"account_tier":          state.cfg.AccountTier,
+			"is_sponsor":            isSponsor,
+			"is_admin":              isAdmin,
+			"sponsor_until":         state.cfg.SponsorUntil,
 		}
 		state.mu.Unlock()
 
@@ -1213,19 +1270,396 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"opened": true})
 	})
 
+	mux.HandleFunc("/api/open-external-url", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
+			http.Error(w, "Invalid body", http.StatusBadRequest)
+			return
+		}
+		u := strings.TrimSpace(body.URL)
+		if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+			go func(target string) {
+				pURL, _ := syscall.UTF16PtrFromString(target)
+				pOpen, _ := syscall.UTF16PtrFromString("open")
+				procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pURL)), 0, 0, uintptr(SW_SHOWNORMAL))
+			}(u)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]bool{"opened": true})
+			return
+		}
+		http.Error(w, "Forbidden scheme", http.StatusBadRequest)
+	})
+
 	mux.HandleFunc("/api/server-donate", func(w http.ResponseWriter, r *http.Request) {
-		go func() {
-			payURL, err := singbox.RequestServerDonate()
-			if err != nil || payURL == "" {
-				payURL = "https://my.aeza.net/"
+		amount := 100
+		if r.Method == http.MethodPost {
+			var body struct {
+				AmountRub int `json:"amount_rub"`
 			}
-			appendLog(fmt.Sprintf("[DONATE] Открытие официальной страницы пополнения сервера (Aeza): %s", payURL))
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.AmountRub >= 100 {
+				amount = body.AmountRub
+			}
+		} else if qAmount := r.URL.Query().Get("amount"); qAmount != "" {
+			if a, err := strconv.Atoi(qAmount); err == nil && a >= 100 {
+				amount = a
+			}
+		}
+
+		go func(amt int) {
+			state.mu.Lock()
+			acc := state.cfg.AccountNumber
+			state.mu.Unlock()
+
+			payURL, err := singbox.CreateCustomDonation(acc, singbox.GetMachineGUID(), amt)
+			if err != nil || payURL == "" {
+				payURL, err = singbox.RequestServerDonate()
+				if err != nil || payURL == "" {
+					payURL = "https://my.aeza.net/"
+				}
+			}
+			appendLog(fmt.Sprintf("[DONATE] Открытие страницы пожертвования СБП (%d руб, аккаунт %s): %s", amt, acc, payURL))
 			pURL, _ := syscall.UTF16PtrFromString(payURL)
 			pOpen, _ := syscall.UTF16PtrFromString("open")
 			procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pURL)), 0, 0, uintptr(SW_SHOWNORMAL))
-		}()
+		}(amount)
+
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]bool{"opened": true})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"opened": true, "amount_rub": amount})
+	})
+
+	mux.HandleFunc("/api/notifications", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		notifs, err := singbox.GetNotifications(acc, singbox.GetMachineGUID())
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"notifications": []interface{}{}, "unread_count": 0})
+			return
+		}
+		unread := 0
+		for _, n := range notifs {
+			if !n.IsRead {
+				unread++
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"notifications": notifs,
+			"unread_count":  unread,
+		})
+	})
+
+	mux.HandleFunc("/api/notifications/read", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var body struct {
+			NotificationID int64 `json:"notification_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.NotificationID > 0 {
+			_ = singbox.MarkNotificationRead(singbox.GetMachineGUID(), body.NotificationID)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	})
+
+	mux.HandleFunc("/api/sponsors", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		sponsors, err := singbox.GetSponsorsList()
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"sponsors": []interface{}{}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"sponsors": sponsors})
+	})
+
+	avatarsDir := filepath.Join("warlink_core", "avatars")
+	_ = os.MkdirAll(avatarsDir, 0755)
+
+	mux.HandleFunc("/avatars/", func(w http.ResponseWriter, r *http.Request) {
+		filename := filepath.Base(r.URL.Path)
+		if filename == "." || filename == "/" || filename == "" {
+			http.NotFound(w, r)
+			return
+		}
+		localPath := filepath.Join(avatarsDir, filename)
+		if _, err := os.Stat(localPath); err == nil {
+			http.ServeFile(w, r, localPath)
+			return
+		}
+		// Proxy from gateway server and cache locally
+		serverAPI := singbox.GetServerAPI()
+		if serverAPI != "" {
+			resp, err := http.Get(fmt.Sprintf("%s/avatars/%s", serverAPI, filename))
+			if err == nil && resp.StatusCode == http.StatusOK {
+				defer resp.Body.Close()
+				data, err := io.ReadAll(resp.Body)
+				if err == nil && len(data) > 0 {
+					_ = os.WriteFile(localPath, data, 0644)
+					ct := resp.Header.Get("Content-Type")
+					if ct == "" {
+						ct = "image/jpeg"
+					}
+					w.Header().Set("Content-Type", ct)
+					w.Header().Set("Cache-Control", "public, max-age=86400")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write(data)
+					return
+				}
+			}
+		}
+		http.NotFound(w, r)
+	})
+
+	mux.HandleFunc("/api/user-profile", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			var body struct {
+				Nickname           *string `json:"nickname"`
+				SteamID            *string `json:"steam_id"`
+				Motto              *string `json:"motto"`
+				HideDonationAmount *bool   `json:"hide_donation_amount"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				state.mu.Lock()
+				acc := state.cfg.AccountNumber
+				cleanNick := state.cfg.Nickname
+				steamID := state.cfg.SteamID
+				motto := state.cfg.Motto
+				hideAmount := state.cfg.HideDonationAmount
+				state.mu.Unlock()
+
+				if body.HideDonationAmount != nil {
+					hideAmount = *body.HideDonationAmount
+				}
+
+				if body.Nickname != nil {
+					cn := strings.TrimSpace(*body.Nickname)
+					if cn != "" {
+						if err := config.ValidateNickname(cn); err != nil {
+							w.WriteHeader(http.StatusBadRequest)
+							_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+							return
+						}
+						if len(cn) > 20 {
+							cn = cn[:20]
+						}
+						cleanNick = cn
+					}
+				}
+				if body.SteamID != nil {
+					steamID = strings.TrimSpace(*body.SteamID)
+					if len(steamID) > 120 {
+						steamID = steamID[:120]
+					}
+				}
+				if body.Motto != nil {
+					motto = strings.TrimSpace(*body.Motto)
+					if len(motto) > 120 {
+						motto = motto[:120]
+					}
+				}
+
+				// Synchronously validate and update profile on server
+				if _, err := singbox.UpdateProfile(acc, singbox.GetMachineGUID(), cleanNick, steamID, motto); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+					return
+				}
+
+				state.mu.Lock()
+				state.cfg.Nickname = cleanNick
+				state.cfg.SteamID = steamID
+				state.cfg.Motto = motto
+				state.cfg.HideDonationAmount = hideAmount
+				_ = state.cfg.Save()
+				state.mu.Unlock()
+
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success":              true,
+					"nickname":             cleanNick,
+					"steam_id":             steamID,
+					"motto":                motto,
+					"hide_donation_amount": hideAmount,
+				})
+				return
+			}
+		}
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		nick := state.cfg.Nickname
+		avatar := state.cfg.AvatarURL
+		steamID := state.cfg.SteamID
+		motto := state.cfg.Motto
+		hideAmount := state.cfg.HideDonationAmount
+		tier := state.cfg.AccountTier
+		sponsorUntil := state.cfg.SponsorUntil
+		isAdmin := (acc == AdminAccountNumber)
+		state.mu.Unlock()
+
+		respData := map[string]interface{}{
+			"account_number":       acc,
+			"nickname":             nick,
+			"avatar_url":           avatar,
+			"steam_id":             steamID,
+			"motto":                motto,
+			"hide_donation_amount": hideAmount,
+			"account_tier":         tier,
+			"is_sponsor":           (tier == "sponsor" || tier == "admin" || (sponsorUntil > time.Now().Unix())),
+			"is_admin":             isAdmin,
+			"sponsor_until":     sponsorUntil,
+			"days_remaining":    0,
+			"created_at":        "—",
+			"total_donated_rub": 0,
+			"device_count":      1,
+			"donations":         []singbox.DonationHistoryItem{},
+		}
+
+		if remoteProfile, err := singbox.FetchProfile(acc, singbox.GetMachineGUID()); err == nil && remoteProfile != nil {
+			state.mu.Lock()
+			if remoteProfile.Nickname != "" {
+				state.cfg.Nickname = remoteProfile.Nickname
+				nick = remoteProfile.Nickname
+			}
+			if remoteProfile.AvatarURL != "" {
+				state.cfg.AvatarURL = remoteProfile.AvatarURL
+				avatar = remoteProfile.AvatarURL
+			}
+			if remoteProfile.Tier != "" {
+				state.cfg.AccountTier = remoteProfile.Tier
+				tier = remoteProfile.Tier
+			}
+			if remoteProfile.SteamID != "" {
+				state.cfg.SteamID = remoteProfile.SteamID
+				steamID = remoteProfile.SteamID
+			}
+			if remoteProfile.Motto != "" {
+				state.cfg.Motto = remoteProfile.Motto
+				motto = remoteProfile.Motto
+			}
+			state.cfg.SponsorUntil = remoteProfile.SponsorUntil
+			sponsorUntil = remoteProfile.SponsorUntil
+			_ = state.cfg.Save()
+			state.mu.Unlock()
+
+			respData["account_number"] = remoteProfile.AccountNumber
+			respData["nickname"] = nick
+			respData["avatar_url"] = avatar
+			respData["steam_id"] = steamID
+			respData["motto"] = motto
+			respData["account_tier"] = tier
+			respData["is_sponsor"] = (tier == "sponsor" || tier == "admin" || (sponsorUntil > time.Now().Unix()))
+			respData["is_admin"] = isAdmin || (tier == "admin")
+			respData["sponsor_until"] = sponsorUntil
+			respData["days_remaining"] = remoteProfile.DaysRemaining
+			respData["created_at"] = remoteProfile.CreatedAt
+			respData["total_donated_rub"] = remoteProfile.TotalDonatedRub
+			respData["device_count"] = remoteProfile.DeviceCount
+			if remoteProfile.Donations != nil {
+				respData["donations"] = remoteProfile.Donations
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(respData)
+	})
+
+	mux.HandleFunc("/api/user-profile/reset-devices", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		if err := singbox.ResetOtherDevices(acc, singbox.GetMachineGUID()); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "device_count": 1})
+	})
+
+	mux.HandleFunc("/api/user-profile/link", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var body struct {
+			AccountNumber string `json:"account_number"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректный запрос"})
+			return
+		}
+		cleanAcc := strings.TrimSpace(body.AccountNumber)
+		if !config.ValidateAccountNumber(cleanAcc) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Неверный формат 16-значного номера аккаунта"})
+			return
+		}
+		state.mu.Lock()
+		state.cfg.AccountNumber = cleanAcc
+		_ = state.cfg.Save()
+		nick := state.cfg.Nickname
+		steamID := state.cfg.SteamID
+		motto := state.cfg.Motto
+		state.mu.Unlock()
+
+		go func() {
+			_, _ = singbox.UpdateProfile(cleanAcc, singbox.GetMachineGUID(), nick, steamID, motto)
+		}()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "account_number": cleanAcc})
+	})
+
+	mux.HandleFunc("/api/user-profile/avatar", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := r.ParseMultipartForm(5 << 20); err != nil { // 5 MB max upload
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Превышен размер файла (максимум 5 МБ)"})
+			return
+		}
+		file, header, err := r.FormFile("avatar")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Файл не передан"})
+			return
+		}
+		defer file.Close()
+
+		data, err := io.ReadAll(file)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Ошибка чтения файла"})
+			return
+		}
+
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		avatarURL, err := singbox.UploadAvatar(acc, data, header.Filename)
+		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+
+		if avatarURL != "" {
+			baseName := filepath.Base(avatarURL)
+			localFile := filepath.Join(avatarsDir, baseName)
+			_ = os.WriteFile(localFile, data, 0644)
+		}
+
+		state.mu.Lock()
+		state.cfg.AvatarURL = avatarURL
+		_ = state.cfg.Save()
+		state.mu.Unlock()
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "avatar_url": avatarURL})
 	})
 
 	var globalWV webview2.WebView
@@ -1328,14 +1762,35 @@ func main() {
 
 	mux.HandleFunc("/api/settings", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			AutolaunchGame bool `json:"autolaunch_game"`
+			AutolaunchGame     *bool `json:"autolaunch_game"`
+			EnableSoundEffects *bool `json:"enable_sound_effects"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			state.mu.Lock()
-			state.cfg.AutolaunchGame = body.AutolaunchGame
+			if body.AutolaunchGame != nil {
+				state.cfg.AutolaunchGame = *body.AutolaunchGame
+				appendLog(fmt.Sprintf("[INFO] Настройка автозапуска игры обновлена: %v", *body.AutolaunchGame))
+			}
+			if body.EnableSoundEffects != nil {
+				state.cfg.EnableSoundEffects = body.EnableSoundEffects
+				appendLog(fmt.Sprintf("[INFO] Настройка звуковых эффектов обновлена: %v", *body.EnableSoundEffects))
+			}
 			_ = state.cfg.Save()
 			state.mu.Unlock()
-			appendLog(fmt.Sprintf("[INFO] Настройка автозапуска игры обновлена: %v", body.AutolaunchGame))
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("/api/settings/sound", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			EnableSoundEffects *bool `json:"enable_sound_effects"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.EnableSoundEffects != nil {
+			state.mu.Lock()
+			state.cfg.EnableSoundEffects = body.EnableSoundEffects
+			_ = state.cfg.Save()
+			state.mu.Unlock()
+			appendLog(fmt.Sprintf("[INFO] Настройка звуковых эффектов обновлена: %v", *body.EnableSoundEffects))
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -1836,8 +2291,8 @@ func main() {
 				cbt.Lpcs.Style |= WS_BORDER
 				cbt.Lpcs.X = -32000
 				cbt.Lpcs.Y = -32000
-				cbt.Lpcs.Cx = 520
-				cbt.Lpcs.Cy = 370
+				cbt.Lpcs.Cx = AppWindowWidth
+				cbt.Lpcs.Cy = AppWindowHeight
 			}
 		}
 		r, _, _ := procCallNextHookEx.Call(hHook, uintptr(nCode), wParam, uintptr(lParam))
@@ -1853,8 +2308,8 @@ func main() {
 		AutoFocus: true,
 		WindowOptions: webview2.WindowOptions{
 			Title:  "WarLink",
-			Width:  520,
-			Height: 370,
+			Width:  uint(AppWindowWidth),
+			Height: uint(AppWindowHeight),
 			Center: false, // Positioned offscreen until revealed
 		},
 	})
@@ -1912,8 +2367,8 @@ func main() {
 	procSetWindowLongPtr.Call(hwnd, uintptr(uint32(nIndex)), style)
 	var offscreenVal int32 = -32000
 	offscreenCoord := uintptr(uint32(offscreenVal))
-	procSetWindowPos.Call(hwnd, 0, offscreenCoord, offscreenCoord, 520, 370, 0x0004|0x0020|0x0080) // SWP_NOZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW
-	wv.SetSize(520, 370, webview2.HintFixed)
+	procSetWindowPos.Call(hwnd, 0, offscreenCoord, offscreenCoord, uintptr(AppWindowWidth), uintptr(AppWindowHeight), 0x0004|0x0020|0x0080) // SWP_NOZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW
+	wv.SetSize(int(AppWindowWidth), int(AppWindowHeight), webview2.HintFixed)
 	applyWindowIcons(hwnd)
 
 	// Hook window close [X] and WM_SHOWWINDOW early to intercept any premature show

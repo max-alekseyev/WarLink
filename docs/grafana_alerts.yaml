@@ -1,0 +1,192 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: warlink_core_alerts
+    folder: "WarLink GPN"
+    interval: 30s
+    rules:
+      - uid: warlink_gateway_down
+        title: "Игровой шлюз WarLink недоступен"
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: "P4169E866C3094E38"
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              editorMode: code
+              expr: "up{job=\"warlink-server\"}"
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              datasource:
+                type: "__expr__"
+                uid: "__expr__"
+              expression: "$A == 0"
+              refId: B
+              type: math
+        noDataState: Alerting
+        executionErrorState: Alerting
+        for: 1m
+        annotations:
+          summary: "Игровой шлюз WarLink недоступен"
+          description: "Служба warlink-api не отвечает на запросы VictoriaMetrics более 1 минуты."
+        labels:
+          severity: critical
+          service: warlink
+
+      - uid: warlink_capacity_saturation
+        title: "Исчерпан лимит слотов WarLink"
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: "P4169E866C3094E38"
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              expr: "increase(warlink_session_rejections_total{reason=\"capacity\"}[5m])"
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              datasource:
+                type: "__expr__"
+                uid: "__expr__"
+              expression: "$A > 0"
+              refId: B
+              type: math
+        noDataState: OK
+        executionErrorState: Alerting
+        for: 0s
+        annotations:
+          summary: "Исчерпан лимит игровых слотов на сервере"
+          description: "Игрокам отказывается в подключении из-за заполнения всех 100 игровых слотов."
+        labels:
+          severity: warning
+          service: warlink
+
+      - uid: warlink_hmac_replay_spike
+        title: "Всплеск невалидных HMAC подписей"
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: "P4169E866C3094E38"
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              editorMode: code
+              expr: "rate(warlink_session_rejections_total{reason=\"bad_signature\"}[2m])"
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              datasource:
+                type: "__expr__"
+                uid: "__expr__"
+              expression: "$A > 5"
+              refId: B
+              type: math
+        noDataState: OK
+        executionErrorState: Alerting
+        for: 1m
+        annotations:
+          summary: "Всплеск невалидных HMAC-подписей (атака или рассинхронизация часов)"
+          description: "Более 5 отклоненных сессий в секунду по причине bad_signature."
+        labels:
+          severity: warning
+          service: warlink
+
+      - uid: warlink_runway_depleted
+        title: "Критический остаток дней аренды сервера"
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: "P4169E866C3094E38"
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            model:
+              editorMode: code
+              expr: "warlink_server_runway_days"
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            model:
+              datasource:
+                type: "__expr__"
+                uid: "__expr__"
+              expression: "$A < 7"
+              refId: B
+              type: math
+        noDataState: OK
+        executionErrorState: Alerting
+        for: 1h
+        annotations:
+          summary: "Критический остаток дней аренды сервера (Runway < 7 дней)"
+          description: "Финансовый горизонт сервера составляет менее 7 дней. Требуется пополнение баланса Aeza."
+        labels:
+          severity: warning
+          service: warlink
+
+      - uid: warlink_cpu_overload
+        title: "Высокая утилизация CPU хоста"
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: "P4169E866C3094E38"
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              expr: "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)"
+              instant: true
+              range: false
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              datasource:
+                type: "__expr__"
+                uid: "__expr__"
+              expression: "$A > 90"
+              refId: B
+              type: math
+        noDataState: OK
+        executionErrorState: Alerting
+        for: 5m
+        annotations:
+          summary: "Высокая утилизация CPU на сервере (>90%)"
+          description: "Нагрузка на процессор хоста превышает 90% в течение 5 минут непрерывно."
+        labels:
+          severity: high
+          service: warlink

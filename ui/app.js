@@ -30,6 +30,44 @@ const GAME_ICON_FALLBACK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="cur
     <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
 </svg>`;
 
+// --- View Partials Loader ---
+async function loadPartials() {
+    const mounts = document.querySelectorAll('[data-partial]');
+    await Promise.all(Array.from(mounts).map(async (el) => {
+        const url = el.getAttribute('data-partial');
+        try {
+            const resp = await fetch(url);
+            if (resp.ok) {
+                const html = await resp.text();
+                el.outerHTML = html;
+            }
+        } catch (e) {
+            console.error('Failed loading partial:', url, e);
+        }
+    }));
+}
+
+// --- Skeletons & Shimmer Generators (Zero Layout Shift) ---
+function getNotificationsSkeletonHtml(count = 2) {
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        html += `
+            <div class="notification-card skeleton-card">
+                <div class="notif-header">
+                    <div class="notif-title-row">
+                        <div class="skeleton" style="width: 52px; height: 16px; border-radius: 2px;"></div>
+                        <div class="skeleton" style="width: ${130 + (i % 2) * 35}px; height: 12px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 48px; height: 10px;"></div>
+                </div>
+                <div class="skeleton" style="width: 90%; height: 11px; margin-top: 4px;"></div>
+                <div class="skeleton" style="width: ${60 + (i % 2) * 20}%; height: 11px; margin-top: 2px;"></div>
+            </div>
+        `;
+    }
+    return html;
+}
+
 // --- Window Dragging and Controls ---
 function handleTitlebarMouseDown(e) {
     if (e.target.closest('.win-btn') || e.target.closest('.free-net-toggle')) return;
@@ -52,13 +90,58 @@ function handleClose(e) {
     }
 }
 
+function switchView(targetViewId) {
+    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account'];
+    const showcase = document.getElementById('view-showcase');
+    const targetEl = targetViewId ? document.getElementById(targetViewId) : null;
+    const isAlreadyOpen = targetEl && targetEl.style.display === 'flex';
+
+    // Hide all sub-views atomically
+    for (const vId of allViews) {
+        const el = document.getElementById(vId);
+        if (el) el.style.display = 'none';
+    }
+
+    const nextActiveId = (!targetViewId || isAlreadyOpen) ? null : targetViewId;
+
+    if (!nextActiveId) {
+        // Return to showcase
+        if (showcase) showcase.style.display = 'flex';
+    } else {
+        if (showcase) showcase.style.display = 'none';
+        if (targetEl) targetEl.style.display = 'flex';
+
+        // Trigger cached/background data refreshes without wiping DOM
+        if (nextActiveId === 'view-sponsors') fetchSponsors();
+        if (nextActiveId === 'view-account') fetchAccountProfile();
+        if (nextActiveId === 'view-notifications') fetchNotifications();
+    }
+
+    updateTitlebarActiveState(nextActiveId);
+}
+
+function updateTitlebarActiveState(activeViewId) {
+    const btnMap = {
+        'view-account': 'btn-account-toggle',
+        'view-sponsors': 'btn-sponsors-toggle',
+        'view-notifications': 'btn-notif-toggle',
+        'view-details': 'btn-settings-toggle'
+    };
+    for (const [vId, btnId] of Object.entries(btnMap)) {
+        const btn = document.getElementById(btnId);
+        if (btn) {
+            btn.classList.toggle('is-active', vId === activeViewId);
+        }
+    }
+}
+
 function toggleDetails(e) {
     if (e) e.stopPropagation();
-    const detailsView = document.getElementById('view-details');
-    if (detailsView) {
-        const isHidden = detailsView.style.display === 'none' || detailsView.style.display === '';
-        detailsView.style.display = isHidden ? 'flex' : 'none';
-    }
+    switchView('view-details');
+}
+
+function closeDetails() {
+    switchView(null);
 }
 
 // --- Free Internet Toggle (Titlebar) ---
@@ -214,12 +297,22 @@ function renderShowcase(games, activeId) {
 }
 
 function escapeHtml(str) {
-    if (!str) return '';
+    if (!str && str !== 0) return '';
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Backward-compatibility aliases for static HTML markup
+function onGameCardClick(gameId) {
+    onGameClick(gameId);
+}
+
+function handleGameContextMenu(e, gameId) {
+    showGameContextMenu(e, gameId, gameId === 'wardogs');
 }
 
 // 1-Click Game Action (One action, one screen)
@@ -280,7 +373,8 @@ function showGameContextMenu(e, gameId, isDefault) {
     const btnConnect = document.getElementById('ctx-btn-connect');
     if (btnConnect) {
         const isGameActive = isConnected && (selectedGameId === gameId);
-        btnConnect.querySelector('span').textContent = isGameActive ? 'Отключиться' : 'Подключиться';
+        const span = btnConnect.querySelector('span');
+        if (span) span.textContent = isGameActive ? 'Отключиться' : 'Подключиться';
     }
 
     const btnAutolaunch = document.getElementById('ctx-btn-autolaunch');
@@ -378,29 +472,50 @@ document.addEventListener('contextmenu', (e) => {
 });
 
 // Modal backdrop click-to-close
-function onModalBackdropMouseDown(e) {
-    if (e.target === e.currentTarget || e.target.id === 'modal-add-game') {
+function handleModalBackdropDismiss(e) {
+    if (e.target !== e.currentTarget) return;
+    const id = e.target.id;
+    if (id === 'modal-sponsor-dossier' && typeof closeSponsorDossier === 'function') {
+        closeSponsorDossier();
+    } else if (id === 'modal-donate-custom' && typeof closeDonateModal === 'function') {
+        closeDonateModal();
+    } else if (id === 'modal-add-game' && typeof closeAddGameModal === 'function') {
         closeAddGameModal();
     }
 }
 
+function onModalBackdropMouseDown(e) {
+    handleModalBackdropDismiss(e);
+}
+
 function onModalBackdropClick(e) {
-    if (e.target === e.currentTarget || e.target.id === 'modal-add-game') {
-        closeAddGameModal();
-    }
+    handleModalBackdropDismiss(e);
 }
 
 // Global Keyboard Navigation (Escape to dismiss modals, sheets, and menus)
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+        const dossierModal = document.getElementById('modal-sponsor-dossier');
+        if (dossierModal && dossierModal.style.display !== 'none') {
+            closeSponsorDossier();
+            return;
+        }
         const modal = document.getElementById('modal-add-game');
         if (modal && modal.style.display !== 'none') {
             closeAddGameModal();
             return;
         }
-        const details = document.getElementById('view-details');
-        if (details && details.style.display !== 'none' && details.style.display !== '') {
-            toggleDetails();
+        const donateModal = document.getElementById('modal-donate-custom');
+        if (donateModal && donateModal.style.display !== 'none') {
+            closeDonateModal();
+            return;
+        }
+        const activeSubView = ['view-account', 'view-sponsors', 'view-notifications', 'view-details'].some(id => {
+            const el = document.getElementById(id);
+            return el && el.style.display === 'flex';
+        });
+        if (activeSubView) {
+            switchView(null);
             return;
         }
         hideGameContextMenu();
@@ -464,267 +579,6 @@ async function deleteGame(e, gameId) {
     }
 }
 
-// --- Community Game Voting Modal ---
-let selectedSteamGame = null;
-let voteSearchTimer = null;
-let voteAutoPollTimer = null;
-
-function openAddGameModal() {
-    if (!isVotingEnabled) return;
-    const modal = document.getElementById('modal-add-game');
-    if (modal) {
-        modal.style.display = 'flex';
-        const input = document.getElementById('vote-search-input');
-        if (input) {
-            input.value = '';
-            input.focus();
-        }
-        hideVoteAutocomplete();
-        hideVotePreview();
-        loadCommunityVotes();
-        if (voteAutoPollTimer) clearInterval(voteAutoPollTimer);
-        voteAutoPollTimer = setInterval(loadCommunityVotes, 5000);
-    }
-}
-
-function closeAddGameModal() {
-    const modal = document.getElementById('modal-add-game');
-    if (modal) modal.style.display = 'none';
-    hideVoteAutocomplete();
-    hideVotePreview();
-    if (voteAutoPollTimer) {
-        clearInterval(voteAutoPollTimer);
-        voteAutoPollTimer = null;
-    }
-}
-
-function hideVoteAutocomplete() {
-    const box = document.getElementById('vote-autocomplete');
-    if (box) box.style.display = 'none';
-}
-
-function hideVotePreview() {
-    selectedSteamGame = null;
-    const box = document.getElementById('vote-selected-preview');
-    if (box) box.style.display = 'none';
-}
-
-function onVoteSearchInput(query) {
-    query = (query || '').trim();
-    hideVoteAutocomplete();
-    hideVotePreview();
-    if (voteSearchTimer) clearTimeout(voteSearchTimer);
-    if (!query || query.length < 2) return;
-
-    voteSearchTimer = setTimeout(async () => {
-        try {
-            const res = await fetch(`/api/search-steam?term=${encodeURIComponent(query)}`);
-            const data = await res.json();
-            const items = (data && data.items) ? data.items : [];
-            renderVoteAutocomplete(items);
-        } catch (e) {}
-    }, 250);
-}
-
-function renderVoteAutocomplete(items) {
-    const box = document.getElementById('vote-autocomplete');
-    if (!box) return;
-    if (!items || items.length === 0) {
-        box.style.display = 'none';
-        return;
-    }
-    box.innerHTML = '';
-
-    // Exclude already supported games (WARDOGS)
-    const validItems = items.filter(it => it && parseInt(it.id) !== 1867240 && (!it.name || !it.name.toLowerCase().includes('wardogs')));
-
-    if (validItems.length === 0) {
-        box.style.display = 'none';
-        return;
-    }
-
-    validItems.slice(0, 6).forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'vote-autocomplete-item';
-        div.dataset.appId = item.id;
-        const iconSrc = item.tiny_image || item.icon_url || item.icon || '';
-        div.innerHTML = `
-            <div class="vote-item-icon-box">
-                ${iconSrc ? `<img class="vote-item-icon" src="${escapeHtml(iconSrc)}" alt="" onerror="this.style.display='none'; if (this.nextElementSibling) this.nextElementSibling.style.display='flex';">` : ''}
-                <div class="vote-fallback-icon" style="${iconSrc ? 'display:none;' : 'display:flex;'}">
-                    ${GAME_ICON_FALLBACK_SVG}
-                </div>
-            </div>
-            <span class="vote-item-title">${escapeHtml(item.name || 'Игра')}</span>
-        `;
-        div.addEventListener('click', () => selectSteamGameForVote(item));
-        box.appendChild(div);
-    });
-    box.style.display = 'block';
-}
-
-function selectSteamGameForVote(item) {
-    hideVoteAutocomplete();
-    const iconSrc = item.tiny_image || item.icon_url || item.icon || '';
-    selectedSteamGame = { ...item, icon_url: iconSrc };
-    const input = document.getElementById('vote-search-input');
-    if (input) input.value = item.name;
-
-    const preview = document.getElementById('vote-selected-preview');
-    const img = document.getElementById('vote-selected-img');
-    const title = document.getElementById('vote-selected-title');
-    if (preview && img && title) {
-        img.src = iconSrc;
-        title.textContent = item.name;
-        preview.style.display = 'flex';
-    }
-}
-
-async function submitProposedGame() {
-    if (!selectedSteamGame || !selectedSteamGame.id) return;
-    const iconSrc = selectedSteamGame.icon_url || selectedSteamGame.tiny_image || selectedSteamGame.icon || '';
-
-    try {
-        const res = await fetch('/api/votes', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                steam_app_id: parseInt(selectedSteamGame.id),
-                title: selectedSteamGame.name,
-                icon_url: iconSrc
-            })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-            showToast(data.error || 'Ошибка при отправке голоса');
-            return;
-        }
-        hideVotePreview();
-        const input = document.getElementById('vote-search-input');
-        if (input) input.value = '';
-        await loadCommunityVotes();
-    } catch (e) {
-        showToast('Не удалось связаться с сервером голосования');
-    }
-}
-
-async function voteForGame(appId, title, iconUrl) {
-    try {
-        const res = await fetch('/api/votes', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                steam_app_id: appId,
-                title: title,
-                icon_url: iconUrl
-            })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-            showToast(data.error || 'Ошибка при голосовании');
-            return;
-        }
-        await loadCommunityVotes();
-    } catch (e) {
-        showToast('Ошибка связи с сервером');
-    }
-}
-
-async function retractGameVote(appId) {
-    try {
-        const res = await fetch('/api/votes', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ steam_app_id: appId })
-        });
-        await loadCommunityVotes();
-    } catch (e) {}
-}
-
-async function loadCommunityVotes() {
-    const listEl = document.getElementById('vote-games-list');
-    const badgeEl = document.getElementById('user-votes-badge');
-    if (!listEl) return;
-
-    try {
-        const res = await fetch('/api/votes');
-        if (!res.ok) {
-            listEl.innerHTML = '<div style="color: var(--text-muted); font-size: 11px; padding: 10px 0; text-align: center;">Голосование временно недоступно</div>';
-            return;
-        }
-        const data = await res.json();
-        if (badgeEl) {
-            badgeEl.textContent = `Голоса: ${data.user_votes_used || 0} из ${data.max_user_votes || 3}`;
-        }
-
-        const games = data.games || [];
-        if (games.length === 0) {
-            listEl.innerHTML = '<div style="color: var(--text-muted); font-size: 11px; padding: 14px 0; text-align: center;">Пока нет предложенных игр. Найдите игру выше и будьте первым!</div>';
-            return;
-        }
-
-        listEl.innerHTML = '';
-        games.forEach(g => {
-            const card = document.createElement('div');
-            card.className = 'vote-game-card';
-
-            const votesCount = g.votes_count || 0;
-            const targetVotes = data.target_votes || 50;
-            const pct = Math.min(100, Math.round((votesCount / targetVotes) * 100));
-            const isWinner = g.status === 'queue_integration' || votesCount >= targetVotes;
-
-            let actionEl;
-            if (isWinner) {
-                actionEl = document.createElement('span');
-                actionEl.className = 'badge-winner';
-                actionEl.textContent = 'В очереди на интеграцию';
-            } else if (g.user_voted) {
-                actionEl = document.createElement('button');
-                actionEl.className = 'btn-vote active';
-                actionEl.title = 'Нажмите, чтобы отозвать голос';
-                actionEl.textContent = 'Отдано';
-                actionEl.dataset.appId = g.steam_app_id;
-                actionEl.addEventListener('click', () => retractGameVote(g.steam_app_id));
-            } else {
-                actionEl = document.createElement('button');
-                actionEl.className = 'btn-vote';
-                actionEl.textContent = 'Голосовать';
-                actionEl.dataset.appId = g.steam_app_id;
-                actionEl.dataset.title = g.title || '';
-                actionEl.dataset.iconUrl = g.icon_url || '';
-                actionEl.addEventListener('click', () => voteForGame(g.steam_app_id, g.title, g.icon_url));
-            }
-
-            const iconSrc = g.icon_url || '';
-
-            card.innerHTML = `
-                <div class="vote-card-main">
-                    <div class="vote-card-icon-box">
-                        ${iconSrc ? `<img class="vote-card-icon" src="${escapeHtml(iconSrc)}" alt="" onerror="this.style.display='none'; if (this.nextElementSibling) this.nextElementSibling.style.display='flex';">` : ''}
-                        <div class="vote-fallback-icon" style="${iconSrc ? 'display:none;' : 'display:flex;'}">
-                            ${GAME_ICON_FALLBACK_SVG}
-                        </div>
-                    </div>
-                    <div class="vote-card-info">
-                        <div class="vote-card-topline">
-                            <span class="vote-card-name" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</span>
-                            <span class="vote-card-stats">${votesCount} / ${targetVotes}</span>
-                        </div>
-                        <div class="vote-progress-track">
-                            <div class="vote-progress-fill ${isWinner ? 'winner' : ''}" style="width: ${pct}%;"></div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            if (actionEl) {
-                card.appendChild(actionEl);
-            }
-            listEl.appendChild(card);
-        });
-    } catch (e) {
-        listEl.innerHTML = '<div style="color: var(--text-muted); font-size: 11px; padding: 10px 0; text-align: center;">Не удалось загрузить список</div>';
-    }
-}
 
 // --- API / State Sync ---
 let isFetchingStatus = false;
@@ -799,11 +653,41 @@ function updateUI(data) {
         renderShowcase(data.games, data.selected_game_id);
     }
 
+    // Dynamic Community Goal Visibility & October Pool
+    if (typeof data.october_pool_rub === 'number') {
+        window.octoberPoolRub = data.october_pool_rub;
+    }
+    if (data.enable_community_goal !== undefined) {
+        window.enableCommunityGoal = Boolean(data.enable_community_goal);
+        if (typeof updateCommunityGoalVisibility === 'function') {
+            updateCommunityGoalVisibility(window.enableCommunityGoal);
+        }
+    }
+
+    // Sound effects toggle sync
+    if (typeof data.enable_sound_effects === 'boolean') {
+        const sndChk = document.getElementById('check-sound-effects');
+        if (sndChk && document.activeElement !== sndChk) {
+            sndChk.checked = data.enable_sound_effects;
+        }
+        if (window.WarLinkAudio && typeof window.WarLinkAudio.setEnabled === 'function') {
+            // keep local memory in sync without re-triggering post
+            if (window.WarLinkAudio.isEnabled() !== data.enable_sound_effects) {
+                try {
+                    localStorage.setItem('wl_sound_effects', data.enable_sound_effects ? 'true' : 'false');
+                } catch(e) {}
+            }
+        }
+    }
+
     // Handle error notifications (e.g. 100/100 slots full or network failure)
     if (data.last_error) {
         if (data.last_error !== lastShownError) {
             lastShownError = data.last_error;
             showToast(data.last_error);
+            if (window.WarLinkAudio && typeof window.WarLinkAudio.playDenied === 'function') {
+                window.WarLinkAudio.playDenied();
+            }
         }
     } else {
         lastShownError = '';
@@ -845,14 +729,38 @@ function updateUI(data) {
     if (gwSlotsEl) {
         const slots = data.gateway_slots || '—';
         gwSlotsEl.textContent = slots;
-        const isFull = slots.startsWith('100/') || (data.gateway_full === true);
+        const isFull = slots.includes('50/50') || slots.includes('60/60') || (data.gateway_full === true);
         gwSlotsEl.classList.toggle('slots-full', isFull);
-        if (isFull) {
-            gwSlotsEl.title = 'Все слоты шлюза заняты (100/100). Новые подключения временно недоступны.';
-        } else {
-            gwSlotsEl.title = 'Активные слоты шлюза Стокгольм';
+        gwSlotsEl.title = data.gateway_slots_tooltip || 'Активные слоты шлюза Стокгольм';
+    }
+
+    // Sync Account and Profile UI
+    if (data.account_number) {
+        const accNumEl = document.getElementById('val-account-number');
+        if (accNumEl && accNumEl.textContent !== data.account_number) {
+            accNumEl.textContent = data.account_number;
         }
     }
+    const nickInput = document.getElementById('input-nickname');
+    if (nickInput && document.activeElement !== nickInput && data.nickname) {
+        nickInput.value = data.nickname;
+    }
+    const tierBadge = document.getElementById('profile-tier-badge');
+    if (tierBadge) {
+        if (data.account_tier === 'admin' || data.is_admin) {
+            tierBadge.textContent = 'Статус: Администратор (Админ-слот 61/61)';
+            tierBadge.classList.remove('tier-sponsor');
+            tierBadge.classList.add('tier-admin');
+        } else if (data.is_sponsor) {
+            tierBadge.textContent = 'Статус: Спонсор шлюза';
+            tierBadge.classList.remove('tier-admin');
+            tierBadge.classList.add('tier-sponsor');
+        } else {
+            tierBadge.textContent = 'Статус: Базовый доступ';
+            tierBadge.classList.remove('tier-sponsor', 'tier-admin');
+        }
+    }
+    updateAvatarDisplays(data.avatar_url);
     if (gwDaysEl) {
         if (data.gateway_days !== undefined && data.gateway_days > 0) {
             gwDaysEl.textContent = data.gateway_days + ' дн.';
@@ -866,17 +774,9 @@ function updateUI(data) {
     }
     const btnDonate = document.getElementById('btn-donate-server');
     if (btnDonateText) {
-        const amt = data.donate_amount_rub;
-        if (amt && amt > 0) {
-            btnDonateText.textContent = `Поддержать сервер (~${amt} ₽)`;
-            if (btnDonate) {
-                btnDonate.title = `Поддержать сервер через СБП (~${amt} ₽)`;
-            }
-        } else {
-            btnDonateText.textContent = 'Поддержать сервер';
-            if (btnDonate) {
-                btnDonate.title = 'Поддержать сервер через СБП';
-            }
+        btnDonateText.textContent = 'Поддержать сервер';
+        if (btnDonate) {
+            btnDonate.title = 'Поддержать сервер через СБП';
         }
     }
 
@@ -994,28 +894,235 @@ async function resetAutoHosts() {
 
 async function donateServer(e) {
     if (e) e.stopPropagation();
-    const btn = document.getElementById('btn-donate-server');
-    if (btn) {
-        btn.style.pointerEvents = 'none';
-        btn.style.opacity = '0.7';
+    openDonateModal(e);
+}
+
+// --- In-App Notifications Center ---
+let cachedNotifications = [];
+let seenNotifIds = new Set();
+let isFirstNotifFetch = true;
+
+function onToggleSoundEffects(enabled) {
+    if (window.WarLinkAudio && typeof window.WarLinkAudio.setEnabled === 'function') {
+        window.WarLinkAudio.setEnabled(enabled);
     }
+}
+
+function toggleNotifications(e) {
+    if (e) e.stopPropagation();
+    switchView('view-notifications');
+}
+
+function closeNotifications() {
+    switchView(null);
+}
+
+async function fetchNotifications() {
+    const listEl = document.getElementById('notifications-list');
+    if (cachedNotifications && cachedNotifications.length > 0) {
+        updateNotificationsUI(cachedNotifications);
+    } else if (listEl && (listEl.children.length === 0 || !listEl.querySelector('.notification-card'))) {
+        listEl.innerHTML = getNotificationsSkeletonHtml(2);
+    }
+
     try {
-        await fetch('/api/server-donate', { method: 'POST' });
-    } catch (err) {
-        console.error('Donate error:', err);
-    } finally {
-        if (btn) {
-            btn.style.pointerEvents = '';
-            btn.style.opacity = '';
+        const resp = await fetch('/api/notifications');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const incoming = data.notifications || [];
+
+        if (isFirstNotifFetch) {
+            incoming.forEach(n => seenNotifIds.add(n.id));
+            isFirstNotifFetch = false;
+        } else {
+            let maxSeverity = null;
+            let newestUnread = null;
+            for (const n of incoming) {
+                if (!seenNotifIds.has(n.id) && !n.is_read) {
+                    seenNotifIds.add(n.id);
+                    if (!newestUnread) newestUnread = n;
+                    if (n.severity === 'urgent' || (n.severity === 'warning' && maxSeverity !== 'urgent')) {
+                        maxSeverity = n.severity;
+                    } else if (!maxSeverity) {
+                        maxSeverity = n.severity || 'info';
+                    }
+                }
+            }
+            if (newestUnread) {
+                showToast(`${newestUnread.title}: ${newestUnread.message}`);
+                if (window.WarLinkAudio && typeof window.WarLinkAudio.playNotification === 'function') {
+                    window.WarLinkAudio.playNotification(maxSeverity || newestUnread.severity);
+                }
+            }
+        }
+
+        cachedNotifications = incoming;
+        updateNotificationsUI(cachedNotifications, data.unread_count || 0);
+    } catch (e) {
+        console.error('Fetch notifications error:', e);
+    }
+}
+
+function formatNotificationTime(isoStr) {
+    if (!isoStr) return '';
+    try {
+        const date = new Date(isoStr);
+        if (isNaN(date.getTime())) return isoStr;
+
+        const now = new Date();
+        const diffMs = now - date;
+        const diffSec = Math.floor(diffMs / 1000);
+
+        const hours = String(date.getHours()).padStart(2, '0');
+        const mins = String(date.getMinutes()).padStart(2, '0');
+        const timeStr = `${hours}:${mins}`;
+
+        const isToday = date.toDateString() === now.toDateString();
+        if (isToday) {
+            if (diffSec >= 0 && diffSec < 60) {
+                return 'Только что';
+            }
+            return `Сегодня, ${timeStr}`;
+        }
+
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (date.toDateString() === yesterday.toDateString()) {
+            return `Вчера, ${timeStr}`;
+        }
+
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${day}.${month}.${year}, ${timeStr}`;
+    } catch (e) {
+        return isoStr;
+    }
+}
+
+function formatNotificationTooltip(isoStr) {
+    if (!isoStr) return '';
+    try {
+        const date = new Date(isoStr);
+        if (isNaN(date.getTime())) return isoStr;
+        return date.toLocaleString('ru-RU');
+    } catch (e) {
+        return isoStr;
+    }
+}
+
+function updateNotificationsUI(notifs, unreadCount) {
+    const list = Array.isArray(notifs) ? notifs : [];
+    const count = (typeof unreadCount === 'number') ? unreadCount : list.filter(x => !x.is_read).length;
+
+    const badge = document.getElementById('notif-badge');
+    if (badge) {
+        if (count > 0) {
+            badge.textContent = count > 9 ? '9+' : count;
+            badge.style.display = 'block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+    const countTag = document.getElementById('notif-count-tag');
+    if (countTag) {
+        countTag.textContent = `${list.length}`;
+    }
+
+    const listEl = document.getElementById('notifications-list');
+    if (!listEl) return;
+
+    if (list.length === 0) {
+        listEl.innerHTML = `
+            <div style="text-align: center; color: var(--text-muted); padding: 40px 10px; font-size: 12px;">
+                Нет новых уведомлений
+            </div>
+        `;
+        return;
+    }
+
+    listEl.innerHTML = list.map(n => {
+        let pillClass = 'pill-info';
+        let pillText = 'Инфо';
+        if (n.severity === 'update') { pillClass = 'pill-update'; pillText = 'Обновление'; }
+        else if (n.severity === 'warning') { pillClass = 'pill-warning'; pillText = 'Важно'; }
+        else if (n.severity === 'urgent') { pillClass = 'pill-urgent'; pillText = 'Срочно'; }
+
+        const unreadClass = n.is_read ? '' : 'notif-unread';
+        const actionBtn = n.action_label && n.action_url ? `
+            <button class="notif-action-btn" onclick="openNotifAction('${encodeURIComponent(n.action_url)}')">${escapeHtml(n.action_label)}</button>
+        ` : '';
+
+        return `
+            <div class="notification-card ${unreadClass}" onclick="markNotifRead(${n.id})">
+                <div class="notif-header">
+                    <div class="notif-title-row">
+                        <span class="notif-pill ${pillClass}">${pillText}</span>
+                        <span class="notif-title">${escapeHtml(n.title)}</span>
+                    </div>
+                    <span class="notif-time" title="${escapeHtml(formatNotificationTooltip(n.created_at))}">${escapeHtml(formatNotificationTime(n.created_at))}</span>
+                </div>
+                <div class="notif-msg">${escapeHtml(n.message)}</div>
+                ${actionBtn}
+            </div>
+        `;
+    }).join('');
+}
+
+async function markNotifRead(id) {
+    try {
+        await fetch('/api/notifications/read', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notification_id: id })
+        });
+        if (Array.isArray(cachedNotifications)) {
+            const n = cachedNotifications.find(x => x.id === id);
+            if (n) n.is_read = true;
+            const unread = cachedNotifications.filter(x => !x.is_read).length;
+            updateNotificationsUI(cachedNotifications, unread);
+        }
+    } catch (e) {}
+}
+
+async function markAllNotificationsRead() {
+    if (!Array.isArray(cachedNotifications)) return;
+    for (const n of cachedNotifications) {
+        if (!n.is_read) {
+            markNotifRead(n.id);
         }
     }
 }
 
+async function openNotifAction(encodedURL) {
+    const rawURL = decodeURIComponent(encodedURL);
+    if (rawURL.startsWith('http://') || rawURL.startsWith('https://')) {
+        try {
+            await fetch('/api/open-external-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: rawURL })
+            });
+        } catch(e) {
+            window.open(rawURL, '_blank');
+        }
+    }
+}
+
+
 // Initial boot
-document.addEventListener('DOMContentLoaded', () => {
-    fetchStatus();
+document.addEventListener('DOMContentLoaded', async () => {
+    // Render default state immediately before revealing window to eliminate layout shifts
+    renderShowcase(cachedGames, selectedGameId);
+    await loadPartials();
     if (typeof window.revealWindow === 'function') {
         window.revealWindow();
     }
+    fetchStatus();
+    fetchNotifications();
+    if (typeof fetchAccountProfile === 'function') {
+        fetchAccountProfile();
+    }
     setInterval(fetchStatus, 1500);
+    setInterval(fetchNotifications, 10000);
 });

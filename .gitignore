@@ -67,6 +67,7 @@ build.bat
 cloudflare-DESIGN.md
 AGENTS.md
 STEAM_GUIDE.md
+guides/
 CHANGELOG.md
 check_tunnel.ps1
 
@@ -79,6 +80,10 @@ check_tunnel.ps1
 *.swo
 *~
 *.code-workspace
+
+# Node.js
+node_modules/
+package-lock.json
 
 # Operating System Metadata
 desktop.ini
