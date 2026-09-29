@@ -1,13 +1,16 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -86,6 +89,17 @@ type SessionInfo struct {
 	CreatedAt     time.Time `json:"created_at"`
 	LastSeen      time.Time `json:"last_seen"`
 	ExpiresAt     time.Time `json:"expires_at"`
+	ClientVersion string    `json:"client_version,omitempty"`
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
 }
 
 type IPRateLimiter struct {
@@ -175,6 +189,9 @@ type LoadSnapshot struct {
 	GatewayPingP99 float64   `json:"gateway_ping_p99,omitempty"`
 	GatewayJitter  float64   `json:"gateway_jitter_ms,omitempty"`
 	PacketLossPct  float64   `json:"packet_loss_percent,omitempty"`
+	DiskUsedGB     float64   `json:"disk_used_gb"`
+	DiskTotalGB    float64   `json:"disk_total_gb"`
+	DiskPercent    float64   `json:"disk_percent"`
 }
 
 type UserTrafficStats struct {
@@ -237,6 +254,9 @@ type AppState struct {
 	metricAezaBonusRub        uint64
 	metricAezaBalanceEurCents uint64
 	metricAezaBonusEurCents   uint64
+	metricHTTP2xx             uint64
+	metricHTTP4xx             uint64
+	metricHTTP5xx             uint64
 	cachedPrice               int
 	prevHyTraffic             map[string]UserTrafficStats
 	nicknameCache             sync.Map
@@ -598,6 +618,8 @@ func main() {
 	publicMux.HandleFunc("/api/v1/donate", state.handleDonate)
 	publicMux.HandleFunc("/api/v1/votes", state.handleVotes)
 	publicMux.HandleFunc("/api/v1/analytics", state.handleAnalytics)
+	publicMux.HandleFunc("/api/v1/analytics/geo-history", state.handleGeoHistory)
+	publicMux.HandleFunc("/api/v1/analytics/progression", state.handleProgressionAnalytics)
 	publicMux.HandleFunc("/api/v1/releases", state.handleReleases)
 	publicMux.HandleFunc("/api/v1/notifications", state.handleNotifications)
 	publicMux.HandleFunc("/api/v1/notifications/read", state.handleNotificationRead)
@@ -625,7 +647,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
 	publicMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.7"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.9"})
 	})
 	publicMux.HandleFunc("/metrics", state.handleMetrics)
 	publicMux.HandleFunc("/dashboard", state.handleDashboard)
@@ -634,9 +656,26 @@ func main() {
 	publicMux.HandleFunc("/admin/", state.handleDashboard)
 	publicMux.HandleFunc("/control", state.handleDashboard)
 	publicMux.HandleFunc("/control/", state.handleDashboard)
+	publicMux.HandleFunc("/api/v1/tickets", state.handleClientTicketSubmit)
+	publicMux.HandleFunc("/api/v1/admin/tickets", state.handleAdminTicketsList)
+	publicMux.HandleFunc("/api/v1/admin/tickets/", state.handleAdminTicketRouter)
+	publicMux.HandleFunc("/admin/tickets", state.handleAdminTicketWeb)
+	publicMux.HandleFunc("/admin/tickets/", state.handleAdminTicketWeb)
+
+	loggingHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		publicMux.ServeHTTP(rec, r)
+		if rec.statusCode >= 200 && rec.statusCode < 300 {
+			atomic.AddUint64(&state.metricHTTP2xx, 1)
+		} else if rec.statusCode >= 400 && rec.statusCode < 500 {
+			atomic.AddUint64(&state.metricHTTP4xx, 1)
+		} else if rec.statusCode >= 500 {
+			atomic.AddUint64(&state.metricHTTP5xx, 1)
+		}
+	})
 
 	log.Printf("[PUBLIC] Starting WarLink API on %s", state.cfg.ListenPublic)
-	if err := http.ListenAndServe(state.cfg.ListenPublic, publicMux); err != nil {
+	if err := http.ListenAndServe(state.cfg.ListenPublic, loggingHandler); err != nil {
 		log.Fatalf("[PUBLIC] Failed to start public API listener: %v", err)
 	}
 }
@@ -1189,6 +1228,7 @@ type SessionRequest struct {
 	Timestamp     int64  `json:"timestamp"`
 	Nonce         string `json:"nonce"`
 	Game          string `json:"game,omitempty"`
+	AppVersion    string `json:"app_version,omitempty"`
 }
 
 func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1237,6 +1277,17 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 		targetGame = "wardogs"
 	}
 
+	clientVer := strings.TrimSpace(req.AppVersion)
+	if clientVer == "" {
+		ua := r.Header.Get("User-Agent")
+		if strings.HasPrefix(ua, "WarLink-Client/") {
+			clientVer = strings.TrimPrefix(ua, "WarLink-Client/")
+		}
+	}
+	if clientVer == "" {
+		clientVer = "unknown"
+	}
+
 	// 1. Validate Timestamp (within +- 60 seconds)
 	now := time.Now().Unix()
 	if req.Timestamp < now-60 || req.Timestamp > now+60 {
@@ -1271,8 +1322,6 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
-	s.recordDeviceActivityAsync(req.DeviceID, clientIP)
 
 	// Resolve account, sponsor and admin status
 	isSponsor := false
@@ -1313,6 +1362,9 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Record persistent connection history with resolved account, device, and client version
+	s.recordConnectionHistoryAsync(accountNumber, req.DeviceID, clientIP, clientVer)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1351,6 +1403,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 			sess.AccountNumber = accountNumber
 			sess.IsSponsor = isSponsor
 			sess.ExpiresAt = time.Now().Add(SessionTTL)
+			sess.ClientVersion = clientVer
 			s.saveSessionAsync(sess)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1437,6 +1490,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:     time.Now(),
 		LastSeen:      time.Now(),
 		ExpiresAt:     time.Now().Add(SessionTTL),
+		ClientVersion: clientVer,
 	}
 	s.sessions[newToken] = sess
 	s.deviceTokens[req.DeviceID] = newToken
@@ -2562,6 +2616,9 @@ func (s *AppState) initDatabase() {
 		gateway_ping_ms INT NOT NULL DEFAULT 27
 	);
 	CREATE INDEX IF NOT EXISTS idx_server_load_recorded_at ON server_load_history(recorded_at DESC);
+	ALTER TABLE server_load_history ADD COLUMN IF NOT EXISTS disk_used_gb DOUBLE PRECISION DEFAULT 0;
+	ALTER TABLE server_load_history ADD COLUMN IF NOT EXISTS disk_total_gb DOUBLE PRECISION DEFAULT 0;
+	ALTER TABLE server_load_history ADD COLUMN IF NOT EXISTS disk_percent DOUBLE PRECISION DEFAULT 0;
 
 	CREATE TABLE IF NOT EXISTS game_suggestions (
 		steam_app_id INT PRIMARY KEY,
@@ -2658,6 +2715,23 @@ func (s *AppState) initDatabase() {
 	);
 	CREATE INDEX IF NOT EXISTS idx_notifications_target ON in_app_notifications(target_type, target_id);
 
+	CREATE TABLE IF NOT EXISTS user_connection_history (
+		id BIGSERIAL PRIMARY KEY,
+		account_number TEXT,
+		device_id TEXT NOT NULL,
+		client_ip TEXT NOT NULL,
+		country TEXT NOT NULL DEFAULT 'Unknown',
+		country_code TEXT NOT NULL DEFAULT 'XX',
+		city TEXT NOT NULL DEFAULT 'Unknown',
+		lat DOUBLE PRECISION NOT NULL DEFAULT 0,
+		lon DOUBLE PRECISION NOT NULL DEFAULT 0,
+		connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_uch_time ON user_connection_history(connected_at);
+	CREATE INDEX IF NOT EXISTS idx_uch_acc ON user_connection_history(account_number);
+	CREATE INDEX IF NOT EXISTS idx_uch_dev ON user_connection_history(device_id);
+	CREATE INDEX IF NOT EXISTS idx_uch_city ON user_connection_history(city, country);
+
 	CREATE TABLE IF NOT EXISTS notification_reads (
 		notification_id BIGINT NOT NULL,
 		reader_id TEXT NOT NULL,
@@ -2674,6 +2748,27 @@ func (s *AppState) initDatabase() {
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS support_tickets (
+		id BIGSERIAL PRIMARY KEY,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		account_number TEXT NOT NULL DEFAULT '',
+		device_id TEXT NOT NULL DEFAULT '',
+		app_version TEXT NOT NULL DEFAULT '',
+		category TEXT NOT NULL DEFAULT 'other',
+		user_comment TEXT NOT NULL DEFAULT '',
+		system_info JSONB,
+		logs_archive BYTEA,
+		logs_archive_size INT NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT 'new',
+		admin_reply TEXT NOT NULL DEFAULT '',
+		resolved_at TIMESTAMPTZ
+	);
+	CREATE INDEX IF NOT EXISTS idx_tickets_created ON support_tickets(created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_tickets_status ON support_tickets(status);
+	CREATE INDEX IF NOT EXISTS idx_tickets_acc ON support_tickets(account_number);
+	CREATE INDEX IF NOT EXISTS idx_tickets_dev ON support_tickets(device_id);
+
 	DROP TABLE IF EXISTS active_sessions CASCADE;
 	`
 	if _, err := s.db.Exec(schema); err != nil {
@@ -2681,6 +2776,11 @@ func (s *AppState) initDatabase() {
 	} else {
 		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, active sessions in RAM)")
 	}
+
+	_, _ = s.db.Exec(`
+		ALTER TABLE daily_active_devices ADD COLUMN IF NOT EXISTS app_version TEXT;
+		ALTER TABLE user_connection_history ADD COLUMN IF NOT EXISTS app_version TEXT;
+	`)
 }
 
 func (s *AppState) resolveIPGeo(ip string) GeoInfo {
@@ -2759,14 +2859,34 @@ func (s *AppState) recordCounterAsync(name string) {
 	}()
 }
 
-func (s *AppState) recordDeviceActivityAsync(deviceID, clientIP string) {
-	if s.db == nil || deviceID == "" {
+func (s *AppState) recordConnectionHistoryAsync(accountNumber, deviceID, clientIP, appVersion string) {
+	if s.db == nil || (deviceID == "" && accountNumber == "") {
 		return
 	}
 	maskedIP := maskIP(clientIP)
 	go func() {
-		_, _ = s.db.Exec(`INSERT INTO daily_active_devices (device_id, seen_date, client_ip, last_seen) VALUES ($1, CURRENT_DATE, $2, NOW()) ON CONFLICT (device_id, seen_date) DO UPDATE SET last_seen = NOW(), client_ip = $2`, deviceID, maskedIP)
+		// 1. Maintain daily_active_devices
+		if deviceID != "" {
+			_, _ = s.db.Exec(`INSERT INTO daily_active_devices (device_id, seen_date, client_ip, last_seen, app_version) VALUES ($1, CURRENT_DATE, $2, NOW(), $3) ON CONFLICT (device_id, seen_date) DO UPDATE SET last_seen = NOW(), client_ip = $2, app_version = COALESCE(NULLIF($3, ''), daily_active_devices.app_version)`, deviceID, maskedIP, appVersion)
+		}
+
+		// 2. Resolve GeoInfo (from cache or ip-api)
+		geo := s.resolveIPGeo(maskedIP)
+		if geo.City == "Unknown" || geo.Lat == 0 {
+			geo = s.resolveIPGeo(clientIP)
+		}
+
+		// 3. Insert into user_connection_history
+		_, _ = s.db.Exec(`
+			INSERT INTO user_connection_history (
+				account_number, device_id, client_ip, country, country_code, city, lat, lon, connected_at, app_version
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9)
+		`, accountNumber, deviceID, maskedIP, geo.Country, geo.CountryCode, geo.City, geo.Lat, geo.Lon, appVersion)
 	}()
+}
+
+func (s *AppState) recordDeviceActivityAsync(deviceID, clientIP string) {
+	s.recordConnectionHistoryAsync("", deviceID, clientIP, "")
 }
 
 func (s *AppState) initRedis(addr string) {
@@ -2957,15 +3077,10 @@ type AdminFeaturesPayload struct {
 }
 
 func (s *AppState) checkAdminAuth(r *http.Request) bool {
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-	isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" || clientIP == ""
-	if isLocal {
-		return true
-	}
-
 	if s.cfg.DashboardKey == "" {
 		return false
 	}
+
 	key := r.URL.Query().Get("key")
 	if key == "" {
 		key = r.Header.Get("X-Dashboard-Key")
@@ -2976,7 +3091,26 @@ func (s *AppState) checkAdminAuth(r *http.Request) bool {
 			key = strings.TrimPrefix(auth, "Bearer ")
 		}
 	}
-	return key != "" && key == s.cfg.DashboardKey
+	if key == "" {
+		if c, err := r.Cookie("admin_key"); err == nil && c != nil {
+			key = c.Value
+		}
+	}
+	if key != "" && key == s.cfg.DashboardKey {
+		return true
+	}
+
+	// Strictly allow unauthenticated access ONLY from true local CLI process on the machine itself:
+	// If X-Real-IP or X-Forwarded-For is present, it is a PROXIED request from the outside and MUST NOT be trusted as local!
+	hasProxyHeader := r.Header.Get("X-Real-IP") != "" || r.Header.Get("X-Forwarded-For") != ""
+	if !hasProxyHeader {
+		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
@@ -3445,6 +3579,11 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"free_internet":    0,
 	}
 	geoCounts := make(map[GeoInfo]int)
+	clientVersions := make(map[string]int)
+	now := time.Now()
+	var totalDurationSec float64
+	var maxDurationSec float64
+
 	for _, sess := range s.sessions {
 		g := sess.Game
 		if g == "" {
@@ -3453,7 +3592,30 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		sessionsByGame[g]++
 		geo := s.resolveIPGeo(sess.ClientIP)
 		geoCounts[geo]++
+
+		durSec := now.Sub(sess.CreatedAt).Seconds()
+		if durSec < 0 {
+			durSec = 0
+		}
+		totalDurationSec += durSec
+		if durSec > maxDurationSec {
+			maxDurationSec = durSec
+		}
+
+		ver := sess.ClientVersion
+		if ver == "" {
+			ver = "unknown"
+		}
+		clientVersions[ver]++
 	}
+
+	avgDurationMin := 0.0
+	maxDurationMin := 0.0
+	if len(s.sessions) > 0 {
+		avgDurationMin = math.Round((totalDurationSec/float64(len(s.sessions))/60.0)*10) / 10
+		maxDurationMin = math.Round((maxDurationSec/60.0)*10) / 10
+	}
+
 	srvPrice := 1450
 	if s.cachedPrice > 0 {
 		srvPrice = s.cachedPrice
@@ -3581,6 +3743,21 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_server_runway_days gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_runway_days %.1f\n\n", totalRunwayDays))
 
+	nodeBurnDaily := stockholmDailyPrice
+	if nodeBurnDaily <= 0 {
+		nodeBurnDaily = 8.67
+	}
+	financialRunwayDays := totalAvailableRub / nodeBurnDaily
+	financialRunwayTimestamp := time.Now().Add(time.Duration(financialRunwayDays*24) * time.Hour).Unix()
+
+	sb.WriteString("# HELP warlink_financial_runway_days Total runway days of current node on available Aeza balance\n")
+	sb.WriteString("# TYPE warlink_financial_runway_days gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_financial_runway_days %.1f\n\n", financialRunwayDays))
+
+	sb.WriteString("# HELP warlink_financial_runway_timestamp Unix timestamp when current Aeza balance runs out\n")
+	sb.WriteString("# TYPE warlink_financial_runway_timestamp gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_financial_runway_timestamp %d\n\n", financialRunwayTimestamp))
+
 	sb.WriteString("# HELP warlink_server_coverage_percent Financial runway coverage percentage\n")
 	sb.WriteString("# TYPE warlink_server_coverage_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_coverage_percent %.1f\n\n", clusterCoveragePercent))
@@ -3637,6 +3814,25 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for g, cnt := range sessionsByGame {
 			sb.WriteString(fmt.Sprintf("warlink_sessions_by_game{game=\"%s\"} %d\n", g, cnt))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("# HELP warlink_session_duration_avg_minutes Average active session duration in minutes\n")
+	sb.WriteString("# TYPE warlink_session_duration_avg_minutes gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_session_duration_avg_minutes %.1f\n\n", avgDurationMin))
+
+	sb.WriteString("# HELP warlink_session_duration_max_minutes Maximum active session duration in minutes\n")
+	sb.WriteString("# TYPE warlink_session_duration_max_minutes gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_session_duration_max_minutes %.1f\n\n", maxDurationMin))
+
+	sb.WriteString("# HELP warlink_client_version_online Connected active clients broken down by version\n")
+	sb.WriteString("# TYPE warlink_client_version_online gauge\n")
+	if len(clientVersions) == 0 {
+		sb.WriteString("warlink_client_version_online{version=\"v2.1.9\"} 0\n\n")
+	} else {
+		for v, cnt := range clientVersions {
+			sb.WriteString(fmt.Sprintf("warlink_client_version_online{version=\"%s\"} %d\n", v, cnt))
 		}
 		sb.WriteString("\n")
 	}
@@ -3701,6 +3897,18 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("# HELP warlink_ram_total_mb Server RAM total in MB\n")
 		sb.WriteString("# TYPE warlink_ram_total_mb gauge\n")
 		sb.WriteString(fmt.Sprintf("warlink_ram_total_mb %d\n\n", live.RAMTotalMB))
+
+		sb.WriteString("# HELP warlink_disk_percent Server disk usage percent\n")
+		sb.WriteString("# TYPE warlink_disk_percent gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_disk_percent %.2f\n\n", live.DiskPercent))
+
+		sb.WriteString("# HELP warlink_disk_used_gb Server disk used in GB\n")
+		sb.WriteString("# TYPE warlink_disk_used_gb gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_disk_used_gb %.2f\n\n", live.DiskUsedGB))
+
+		sb.WriteString("# HELP warlink_disk_total_gb Server disk total in GB\n")
+		sb.WriteString("# TYPE warlink_disk_total_gb gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_disk_total_gb %.2f\n\n", live.DiskTotalGB))
 
 		sb.WriteString("# HELP warlink_net_rx_rate_kbps Inbound network bitrate in kbps\n")
 		sb.WriteString("# TYPE warlink_net_rx_rate_kbps gauge\n")
@@ -3770,6 +3978,112 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP hysteria_traffic_rx_bytes_total Total bytes received through Hysteria\n")
 	sb.WriteString("# TYPE hysteria_traffic_rx_bytes_total counter\n")
 	sb.WriteString(fmt.Sprintf("hysteria_traffic_rx_bytes_total %d\n\n", hyRx))
+
+	// UDP kernel buffers
+	udpStats := getUDPBufferMetrics()
+	sb.WriteString("# HELP warlink_udp_rcvbuf_errors_total Linux kernel UDP receive buffer errors (socket overflow)\n")
+	sb.WriteString("# TYPE warlink_udp_rcvbuf_errors_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_udp_rcvbuf_errors_total %d\n\n", udpStats.RcvbufErrors))
+
+	sb.WriteString("# HELP warlink_udp_sndbuf_errors_total Linux kernel UDP send buffer errors\n")
+	sb.WriteString("# TYPE warlink_udp_sndbuf_errors_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_udp_sndbuf_errors_total %d\n\n", udpStats.SndbufErrors))
+
+	sb.WriteString("# HELP warlink_udp_in_errors_total Linux kernel UDP incoming packet errors\n")
+	sb.WriteString("# TYPE warlink_udp_in_errors_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_udp_in_errors_total %d\n\n", udpStats.InErrors))
+
+	sb.WriteString("# HELP warlink_udp_in_datagrams_total Linux kernel total UDP received datagrams\n")
+	sb.WriteString("# TYPE warlink_udp_in_datagrams_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_udp_in_datagrams_total %d\n\n", udpStats.InDatagrams))
+
+	sb.WriteString("# HELP warlink_udp_out_datagrams_total Linux kernel total UDP sent datagrams\n")
+	sb.WriteString("# TYPE warlink_udp_out_datagrams_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_udp_out_datagrams_total %d\n\n", udpStats.OutDatagrams))
+
+	// Storage components
+	storageSizes := getStorageComponentSizes()
+	sb.WriteString("# HELP warlink_storage_component_bytes Storage breakdown by component in bytes\n")
+	sb.WriteString("# TYPE warlink_storage_component_bytes gauge\n")
+	for comp, bSize := range storageSizes {
+		sb.WriteString(fmt.Sprintf("warlink_storage_component_bytes{component=\"%s\"} %d\n", comp, bSize))
+	}
+	sb.WriteString("\n")
+
+	// Service status
+	pgStatus := 0
+	if s.db != nil && s.db.Ping() == nil {
+		pgStatus = 1
+	}
+	redisStatus := 0
+	if s.rdb != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		if s.rdb.Ping(ctx).Err() == nil {
+			redisStatus = 1
+		}
+		cancel()
+	}
+
+	sb.WriteString("# HELP warlink_service_status Status of critical backend services (1=healthy, 0=down)\n")
+	sb.WriteString("# TYPE warlink_service_status gauge\n")
+	sb.WriteString("warlink_service_status{service=\"api\"} 1\n")
+	sb.WriteString("warlink_service_status{service=\"hysteria\"} 1\n")
+	sb.WriteString(fmt.Sprintf("warlink_service_status{service=\"postgres\"} %d\n", pgStatus))
+	sb.WriteString(fmt.Sprintf("warlink_service_status{service=\"redis\"} %d\n", redisStatus))
+	sb.WriteString("warlink_service_status{service=\"victoriametrics\"} 1\n")
+	sb.WriteString("warlink_service_status{service=\"nginx\"} 1\n\n")
+
+	// API HTTP requests
+	sb.WriteString("# HELP warlink_api_http_requests_total Total HTTP requests handled by API grouped by response class\n")
+	sb.WriteString("# TYPE warlink_api_http_requests_total counter\n")
+	sb.WriteString(fmt.Sprintf("warlink_api_http_requests_total{code=\"2xx\"} %d\n", atomic.LoadUint64(&s.metricHTTP2xx)))
+	sb.WriteString(fmt.Sprintf("warlink_api_http_requests_total{code=\"4xx\"} %d\n", atomic.LoadUint64(&s.metricHTTP4xx)))
+	sb.WriteString(fmt.Sprintf("warlink_api_http_requests_total{code=\"5xx\"} %d\n\n", atomic.LoadUint64(&s.metricHTTP5xx)))
+
+	// Progression overview
+	if s.db != nil {
+		var pCount, cMax int
+		var cAvg float64
+		_ = s.db.QueryRow(`
+			SELECT COUNT(*), COALESCE(AVG((progression->>'career_level')::int), 0), COALESCE(MAX((progression->>'career_level')::int), 0)
+			FROM accounts
+			WHERE progression IS NOT NULL AND progression::text != '{}' AND progression::text != 'null'
+		`).Scan(&pCount, &cAvg, &cMax)
+
+		sb.WriteString("# HELP warlink_progression_players_total Total players with saved progression\n")
+		sb.WriteString("# TYPE warlink_progression_players_total gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_progression_players_total %d\n\n", pCount))
+
+		sb.WriteString("# HELP warlink_progression_career_level_avg Average career level across players\n")
+		sb.WriteString("# TYPE warlink_progression_career_level_avg gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_progression_career_level_avg %.1f\n\n", cAvg))
+
+		sb.WriteString("# HELP warlink_progression_career_level_max Maximum career level reached\n")
+		sb.WriteString("# TYPE warlink_progression_career_level_max gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_progression_career_level_max %d\n\n", cMax))
+
+		var sumAssault, sumMedic, sumRecon, sumSupport, sumDriver, sumPilot int
+		_ = s.db.QueryRow(`
+			SELECT 
+				COALESCE(SUM((progression->'roles'->>'assault')::int), 0),
+				COALESCE(SUM((progression->'roles'->>'medic')::int), 0),
+				COALESCE(SUM((progression->'roles'->>'recon')::int), 0),
+				COALESCE(SUM((progression->'roles'->>'support')::int), 0),
+				COALESCE(SUM((progression->'roles'->>'driver')::int), 0),
+				COALESCE(SUM((progression->'roles'->>'pilot')::int), 0)
+			FROM accounts
+			WHERE progression IS NOT NULL AND progression::text != '{}' AND progression::text != 'null'
+		`).Scan(&sumAssault, &sumMedic, &sumRecon, &sumSupport, &sumDriver, &sumPilot)
+
+		sb.WriteString("# HELP warlink_progression_role_level_sum Total accumulated levels across all players for this role\n")
+		sb.WriteString("# TYPE warlink_progression_role_level_sum gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_progression_role_level_sum{role=\"assault\",role_name=\"Штурмовик\"} %d\n", sumAssault))
+		sb.WriteString(fmt.Sprintf("warlink_progression_role_level_sum{role=\"medic\",role_name=\"Медик\"} %d\n", sumMedic))
+		sb.WriteString(fmt.Sprintf("warlink_progression_role_level_sum{role=\"recon\",role_name=\"Разведчик\"} %d\n", sumRecon))
+		sb.WriteString(fmt.Sprintf("warlink_progression_role_level_sum{role=\"support\",role_name=\"Поддержка\"} %d\n", sumSupport))
+		sb.WriteString(fmt.Sprintf("warlink_progression_role_level_sum{role=\"driver\",role_name=\"Водитель\"} %d\n", sumDriver))
+		sb.WriteString(fmt.Sprintf("warlink_progression_role_level_sum{role=\"pilot\",role_name=\"Пилот\"} %d\n\n", sumPilot))
+	}
 
 	w.Write([]byte(sb.String()))
 }
@@ -3899,6 +4213,8 @@ func (s *AppState) sampleLoad() *LoadSnapshot {
 		latMetrics = LatencyMetrics{P50: 25.0, P95: 28.0, P99: 32.0, Jitter: 0.8}
 	}
 
+	diskUsedGB, diskTotalGB, diskPercent := getDiskUsage()
+
 	snap := &LoadSnapshot{
 		RecordedAt:     now,
 		ActiveSessions: activeSess,
@@ -3906,6 +4222,9 @@ func (s *AppState) sampleLoad() *LoadSnapshot {
 		CPUPercent:     cpuPercent,
 		RAMUsedMB:      ramUsedMB,
 		RAMTotalMB:     ramTotalMB,
+		DiskUsedGB:     math.Round(diskUsedGB*100) / 100,
+		DiskTotalGB:    math.Round(diskTotalGB*100) / 100,
+		DiskPercent:    math.Round(diskPercent*10) / 10,
 		NetBytesRecv:   rxBytes,
 		NetBytesSent:   txBytes,
 		NetRxRateKbps:  rxRateKbps,
@@ -3936,11 +4255,13 @@ func (s *AppState) startAnalyticsCollector() {
 			INSERT INTO server_load_history (
 				recorded_at, active_sessions, max_sessions, cpu_percent,
 				ram_used_mb, ram_total_mb, net_bytes_recv, net_bytes_sent,
-				net_rx_rate_kbps, net_tx_rate_kbps, gateway_ping_ms
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+				net_rx_rate_kbps, net_tx_rate_kbps, gateway_ping_ms,
+				disk_used_gb, disk_total_gb, disk_percent
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		`, snap.RecordedAt, snap.ActiveSessions, snap.MaxSessions, snap.CPUPercent,
 			snap.RAMUsedMB, snap.RAMTotalMB, snap.NetBytesRecv, snap.NetBytesSent,
-			snap.NetRxRateKbps, snap.NetTxRateKbps, int(math.Round(snap.GatewayPingMs)))
+			snap.NetRxRateKbps, snap.NetTxRateKbps, int(math.Round(snap.GatewayPingMs)),
+			snap.DiskUsedGB, snap.DiskTotalGB, snap.DiskPercent)
 	}
 
 	ticker := time.NewTicker(1 * time.Minute)
@@ -3955,11 +4276,13 @@ func (s *AppState) startAnalyticsCollector() {
 					INSERT INTO server_load_history (
 						recorded_at, active_sessions, max_sessions, cpu_percent,
 						ram_used_mb, ram_total_mb, net_bytes_recv, net_bytes_sent,
-						net_rx_rate_kbps, net_tx_rate_kbps, gateway_ping_ms
-					) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+						net_rx_rate_kbps, net_tx_rate_kbps, gateway_ping_ms,
+						disk_used_gb, disk_total_gb, disk_percent
+					) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 				`, snap.RecordedAt, snap.ActiveSessions, snap.MaxSessions, snap.CPUPercent,
 					snap.RAMUsedMB, snap.RAMTotalMB, snap.NetBytesRecv, snap.NetBytesSent,
-					snap.NetRxRateKbps, snap.NetTxRateKbps, int(math.Round(snap.GatewayPingMs)))
+					snap.NetRxRateKbps, snap.NetTxRateKbps, int(math.Round(snap.GatewayPingMs)),
+					snap.DiskUsedGB, snap.DiskTotalGB, snap.DiskPercent)
 				if err != nil {
 					log.Printf("[ANALYTICS] Error saving load snapshot: %v", err)
 				}
@@ -4104,7 +4427,8 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.db.Query(`
 			SELECT id, recorded_at, active_sessions, max_sessions, cpu_percent,
 			       ram_used_mb, ram_total_mb, net_bytes_recv, net_bytes_sent,
-			       net_rx_rate_kbps, net_tx_rate_kbps, gateway_ping_ms
+			       net_rx_rate_kbps, net_tx_rate_kbps, gateway_ping_ms,
+			       COALESCE(disk_used_gb, 0), COALESCE(disk_total_gb, 0), COALESCE(disk_percent, 0)
 			FROM server_load_history
 			ORDER BY recorded_at DESC
 			LIMIT $1
@@ -4119,6 +4443,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 					&item.CPUPercent, &item.RAMUsedMB, &item.RAMTotalMB,
 					&item.NetBytesRecv, &item.NetBytesSent,
 					&item.NetRxRateKbps, &item.NetTxRateKbps, &pingInt,
+					&item.DiskUsedGB, &item.DiskTotalGB, &item.DiskPercent,
 				); err == nil {
 					item.GatewayPingMs = float64(pingInt)
 					history = append(history, item)
@@ -4275,6 +4600,170 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		"active_players": activePlayers,
 		"geo_points":     geoPoints,
 		"donors":         donorsList,
+	})
+}
+
+func classifyMacroRegion(city, country string, lat, lon float64) string {
+	cLow := strings.ToLower(country)
+	if strings.Contains(cLow, "kazakhstan") || strings.Contains(cLow, "казахстан") ||
+		strings.Contains(cLow, "uzbekistan") || strings.Contains(cLow, "узбекистан") ||
+		strings.Contains(cLow, "kyrgyzstan") || strings.Contains(cLow, "киргизия") {
+		return "Центральная Азия / Казахстан"
+	}
+	if strings.Contains(cLow, "belarus") || strings.Contains(cLow, "беларусь") {
+		return "Беларусь / СНГ"
+	}
+	if !strings.Contains(cLow, "russia") && !strings.Contains(cLow, "россия") && cLow != "local" {
+		return "Европа / Другие страны"
+	}
+	// Russia by coordinates & known hubs
+	if lon >= 80 {
+		return "Сибирь и Дальний Восток"
+	}
+	if lon >= 55 && lon < 80 {
+		return "Уральский регион"
+	}
+	if lat >= 58.5 {
+		return "Северо-Западный регион"
+	}
+	if lat < 48.5 {
+		return "Южный регион и Кавказ"
+	}
+	if lon >= 43 && lon < 55 {
+		return "Поволжский регион"
+	}
+	return "Центральный регион (Москва)"
+}
+
+func (s *AppState) handleGeoHistory(w http.ResponseWriter, r *http.Request) {
+	atomic.AddUint64(&s.metricRequestsTotal, 1)
+	w.Header().Set("Content-Type", "application/json")
+
+	days := 30
+	if dStr := r.URL.Query().Get("days"); dStr != "" {
+		if d, err := strconv.Atoi(dStr); err == nil && d > 0 && d <= 365 {
+			days = d
+		}
+	}
+
+	minConn := 3
+	if mStr := r.URL.Query().Get("min_connections"); mStr != "" {
+		if m, err := strconv.Atoi(mStr); err == nil && m > 0 && m <= 1000 {
+			minConn = m
+		}
+	}
+
+	type GeoHistoryPoint struct {
+		City             string  `json:"city"`
+		Country          string  `json:"country"`
+		CountryCode      string  `json:"country_code"`
+		Lat              float64 `json:"lat"`
+		Lon              float64 `json:"lon"`
+		UsersCount       int     `json:"users_count"`
+		TotalConnections int     `json:"total_connections"`
+		SharePct         float64 `json:"share_pct"`
+	}
+
+	type RegionSummary struct {
+		Region     string  `json:"region"`
+		UsersCount int     `json:"users_count"`
+		SharePct   float64 `json:"share_pct"`
+	}
+
+	points := make([]GeoHistoryPoint, 0)
+	totalRetained := 0
+
+	if s.db != nil {
+		query := `
+			WITH user_cohort AS (
+			    SELECT 
+			        COALESCE(NULLIF(account_number, ''), device_id) AS user_key,
+			        COUNT(*) AS total_user_connections
+			    FROM user_connection_history
+			    WHERE connected_at >= NOW() - ($1 || ' days')::INTERVAL
+			    GROUP BY COALESCE(NULLIF(account_number, ''), device_id)
+			    HAVING COUNT(*) >= $2
+			),
+			user_primary_location AS (
+			    SELECT DISTINCT ON (c.user_key)
+			        c.user_key,
+			        c.total_user_connections,
+			        h.city,
+			        h.country,
+			        h.country_code,
+			        h.lat,
+			        h.lon,
+			        COUNT(*) OVER (PARTITION BY c.user_key, h.city) AS city_sessions
+			    FROM user_cohort c
+			    JOIN user_connection_history h 
+			      ON c.user_key = COALESCE(NULLIF(h.account_number, ''), h.device_id)
+			    WHERE h.connected_at >= NOW() - ($1 || ' days')::INTERVAL
+			      AND h.city != 'Unknown' AND h.lat != 0 AND h.lon != 0
+			    ORDER BY c.user_key, city_sessions DESC, h.connected_at DESC
+			)
+			SELECT 
+			    city,
+			    country,
+			    country_code,
+			    lat,
+			    lon,
+			    COUNT(DISTINCT user_key) AS users_count,
+			    SUM(city_sessions) AS total_connections
+			FROM user_primary_location
+			GROUP BY city, country, country_code, lat, lon
+			ORDER BY users_count DESC, total_connections DESC;
+		`
+		rows, err := s.db.Query(query, days, minConn)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var pt GeoHistoryPoint
+				if err := rows.Scan(&pt.City, &pt.Country, &pt.CountryCode, &pt.Lat, &pt.Lon, &pt.UsersCount, &pt.TotalConnections); err == nil {
+					totalRetained += pt.UsersCount
+					points = append(points, pt)
+				}
+			}
+		}
+	}
+
+	// Calculate percentage share for each point
+	for i := range points {
+		if totalRetained > 0 {
+			points[i].SharePct = math.Round((float64(points[i].UsersCount)/float64(totalRetained))*1000) / 10
+		}
+	}
+
+	// Group into macro-regions
+	regMap := make(map[string]int)
+	for _, pt := range points {
+		reg := classifyMacroRegion(pt.City, pt.Country, pt.Lat, pt.Lon)
+		regMap[reg] += pt.UsersCount
+	}
+
+	regions := make([]RegionSummary, 0)
+	for regName, cnt := range regMap {
+		share := 0.0
+		if totalRetained > 0 {
+			share = math.Round((float64(cnt)/float64(totalRetained))*1000) / 10
+		}
+		regions = append(regions, RegionSummary{
+			Region:     regName,
+			UsersCount: cnt,
+			SharePct:   share,
+		})
+	}
+	sort.Slice(regions, func(i, j int) bool {
+		return regions[i].UsersCount > regions[j].UsersCount
+	})
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":              true,
+		"timeframe_days":       days,
+		"min_connections":      minConn,
+		"total_retained_users": totalRetained,
+		"total_points":         len(points),
+		"points":               points,
+		"regions":              regions,
 	})
 }
 
@@ -4582,6 +5071,282 @@ func (s *AppState) handleProgressionDatabase(w http.ResponseWriter, r *http.Requ
 	}
 
 	_, _ = w.Write(data)
+}
+
+type ProgressionItemMeta struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	NameRu     string `json:"name_ru"`
+	CategoryRu string `json:"category_ru"`
+	Role       string `json:"role"`
+	Level      int    `json:"level"`
+	Price      int    `json:"price"`
+	Icon       string `json:"icon"`
+}
+
+var (
+	progressionItemsMap  map[string]ProgressionItemMeta
+	progressionItemsOnce sync.Once
+)
+
+func loadProgressionItemsMap() map[string]ProgressionItemMeta {
+	progressionItemsOnce.Do(func() {
+		progressionItemsMap = make(map[string]ProgressionItemMeta)
+		dbPath := "/opt/warlink-server/progression_db.json"
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			dbPath = "internal/progression/progression_db.json"
+		}
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			dbPath = "progression/progression_db.json"
+		}
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			dbPath = "progression_db.json"
+		}
+		data, err := os.ReadFile(dbPath)
+		if err != nil {
+			return
+		}
+		var parsed struct {
+			Unlocks []struct {
+				UnlockID   string `json:"unlock_id"`
+				Name       string `json:"name"`
+				NameRu     string `json:"name_ru"`
+				CategoryRu string `json:"category_ru"`
+				Role       string `json:"role"`
+				Level      int    `json:"level"`
+				Price      int    `json:"price"`
+				Icon       string `json:"icon"`
+			} `json:"unlocks"`
+			Catalog []struct {
+				ID         string `json:"id"`
+				Name       string `json:"name"`
+				NameRu     string `json:"name_ru"`
+				CategoryRu string `json:"category_ru"`
+				Role       string `json:"role"`
+				Price      int    `json:"price"`
+				Icon       string `json:"icon"`
+			} `json:"catalog"`
+		}
+		if err := json.Unmarshal(data, &parsed); err == nil {
+			for _, u := range parsed.Unlocks {
+				catRu := u.CategoryRu
+				if catRu == "" {
+					catRu = "Разблокировка"
+				}
+				progressionItemsMap[u.UnlockID] = ProgressionItemMeta{
+					ID:         u.UnlockID,
+					Name:       u.Name,
+					NameRu:     u.NameRu,
+					CategoryRu: catRu,
+					Role:       u.Role,
+					Level:      u.Level,
+					Price:      u.Price,
+					Icon:       u.Icon,
+				}
+			}
+			for _, c := range parsed.Catalog {
+				if _, exists := progressionItemsMap[c.ID]; !exists {
+					catRu := c.CategoryRu
+					if catRu == "" {
+						catRu = "Снаряжение"
+					}
+					progressionItemsMap[c.ID] = ProgressionItemMeta{
+						ID:         c.ID,
+						Name:       c.Name,
+						NameRu:     c.NameRu,
+						CategoryRu: catRu,
+						Role:       c.Role,
+						Price:      c.Price,
+						Icon:       c.Icon,
+					}
+				}
+			}
+		}
+	})
+	return progressionItemsMap
+}
+
+func (s *AppState) handleProgressionAnalytics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if s.db == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":             true,
+			"total_players":       0,
+			"career_level_avg":    0,
+			"career_level_max":    0,
+			"roles_distribution":  []interface{}{},
+			"top_wishlist":        []interface{}{},
+		})
+		return
+	}
+
+	rows, err := s.db.Query(`
+		SELECT COALESCE(progression::text, '') 
+		FROM accounts 
+		WHERE progression IS NOT NULL AND progression::text != '{}' AND progression::text != 'null'
+	`)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type RoleAgg struct {
+		Role       string  `json:"role"`
+		Name       string  `json:"name"`
+		SumLevels  int     `json:"sum_levels"`
+		AvgLevel   float64 `json:"avg_level"`
+		Percentage float64 `json:"percentage"`
+	}
+
+	type WishlistItemInfo struct {
+		ItemID     string `json:"item_id"`
+		Name       string `json:"name"`
+		NameRu     string `json:"name_ru"`
+		CategoryRu string `json:"category_ru"`
+		Role       string `json:"role,omitempty"`
+		Level      int    `json:"level,omitempty"`
+		Icon       string `json:"icon,omitempty"`
+		Count      int    `json:"count"`
+	}
+
+	roleNames := map[string]string{
+		"assault": "Штурмовик",
+		"medic":   "Медик",
+		"recon":   "Разведчик",
+		"support": "Поддержка",
+		"driver":  "Водитель",
+		"pilot":   "Пилот",
+	}
+
+	rolesSum := map[string]int{
+		"assault": 0, "medic": 0, "recon": 0, "support": 0, "driver": 0, "pilot": 0,
+	}
+	wishlistCounts := make(map[string]int)
+
+	totalPlayers := 0
+	sumCareer := 0
+	maxCareer := 0
+
+	for rows.Next() {
+		var progStr string
+		if err := rows.Scan(&progStr); err != nil || progStr == "" {
+			continue
+		}
+		var parsed struct {
+			CareerLevel int            `json:"career_level"`
+			WishlistID  string         `json:"wishlist_id"`
+			Roles       map[string]int `json:"roles"`
+		}
+		if err := json.Unmarshal([]byte(progStr), &parsed); err != nil {
+			continue
+		}
+		totalPlayers++
+		sumCareer += parsed.CareerLevel
+		if parsed.CareerLevel > maxCareer {
+			maxCareer = parsed.CareerLevel
+		}
+		for rK, rLvl := range parsed.Roles {
+			normK := strings.ToLower(rK)
+			rolesSum[normK] += rLvl
+		}
+		wID := strings.TrimSpace(parsed.WishlistID)
+		if wID != "" {
+			wishlistCounts[wID]++
+		}
+	}
+
+	careerAvg := 0.0
+	if totalPlayers > 0 {
+		careerAvg = math.Round((float64(sumCareer)/float64(totalPlayers))*10) / 10
+	}
+
+	rolesAvg := make(map[string]float64)
+	totalRoleLevels := 0
+	for rK, sVal := range rolesSum {
+		totalRoleLevels += sVal
+		if totalPlayers > 0 {
+			rolesAvg[rK] = math.Round((float64(sVal)/float64(totalPlayers))*10) / 10
+		} else {
+			rolesAvg[rK] = 0
+		}
+	}
+
+	dist := make([]RoleAgg, 0)
+	order := []string{"assault", "medic", "recon", "support", "driver", "pilot"}
+	for _, rK := range order {
+		sVal := rolesSum[rK]
+		pct := 0.0
+		if totalRoleLevels > 0 {
+			pct = math.Round((float64(sVal)/float64(totalRoleLevels))*1000) / 10
+		}
+		dist = append(dist, RoleAgg{
+			Role:       rK,
+			Name:       roleNames[rK],
+			SumLevels:  sVal,
+			AvgLevel:   rolesAvg[rK],
+			Percentage: pct,
+		})
+	}
+
+	itemsMeta := loadProgressionItemsMap()
+	type countPair struct {
+		id    string
+		count int
+	}
+	var pairs []countPair
+	for id, cnt := range wishlistCounts {
+		pairs = append(pairs, countPair{id: id, count: cnt})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].count > pairs[j].count
+	})
+
+	topWishlist := make([]WishlistItemInfo, 0)
+	for i, p := range pairs {
+		if i >= 10 {
+			break
+		}
+		meta, found := itemsMeta[p.id]
+		name := p.id
+		nameRu := p.id
+		catRu := "Желаемое"
+		icon := ""
+		role := ""
+		lvl := 0
+		if found {
+			name = meta.Name
+			nameRu = meta.NameRu
+			catRu = meta.CategoryRu
+			icon = meta.Icon
+			role = meta.Role
+			lvl = meta.Level
+		}
+		topWishlist = append(topWishlist, WishlistItemInfo{
+			ItemID:     p.id,
+			Name:       name,
+			NameRu:     nameRu,
+			CategoryRu: catRu,
+			Role:       role,
+			Level:      lvl,
+			Icon:       icon,
+			Count:      p.count,
+		})
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":             true,
+		"total_players":       totalPlayers,
+		"career_level_avg":    careerAvg,
+		"career_level_max":    maxCareer,
+		"roles_sum":           rolesSum,
+		"roles_avg":           rolesAvg,
+		"roles_distribution":  dist,
+		"top_wishlist":        topWishlist,
+	})
 }
 
 type DonationItem struct {
@@ -5489,6 +6254,16 @@ const dashboardHTML = `<!DOCTYPE html>
 
             <div class="kpi-card">
                 <div class="kpi-header">
+                    <span>Диск NVMe</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>
+                </div>
+                <div class="kpi-value" id="kpi-disk">0 / 0 ГБ</div>
+                <div class="kpi-sub" id="kpi-disk-sub">0% занято</div>
+                <div class="progress-bar-bg"><div class="progress-bar-fill" id="kpi-disk-bar" style="width: 0%; background: var(--green);"></div></div>
+            </div>
+
+            <div class="kpi-card">
+                <div class="kpi-header">
                     <span>Задержка шлюза</span>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </div>
@@ -5653,6 +6428,21 @@ const dashboardHTML = `<!DOCTYPE html>
             const ramPct = live.ram_total_mb > 0 ? Math.round((live.ram_used_mb / live.ram_total_mb) * 100) : 0;
             if (ramSubEl) ramSubEl.textContent = ramPct + '% памяти занято';
             if (ramBar) ramBar.style.width = ramPct + '%';
+
+            const diskEl = document.getElementById('kpi-disk');
+            const diskSubEl = document.getElementById('kpi-disk-sub');
+            const diskBar = document.getElementById('kpi-disk-bar');
+            if (diskEl && live.disk_total_gb > 0) {
+                diskEl.textContent = (live.disk_used_gb || 0).toFixed(1) + ' / ' + (live.disk_total_gb || 0).toFixed(1) + ' ГБ';
+                const diskPct = Math.round(live.disk_percent || ((live.disk_used_gb / live.disk_total_gb) * 100));
+                if (diskSubEl) diskSubEl.textContent = diskPct + '% занято хранилища';
+                if (diskBar) {
+                    diskBar.style.width = Math.min(100, Math.max(2, diskPct)) + '%';
+                    if (diskPct >= 85) diskBar.style.background = 'var(--red)';
+                    else if (diskPct >= 70) diskBar.style.background = 'var(--yellow)';
+                    else diskBar.style.background = 'var(--green)';
+                }
+            }
 
             const pingEl = document.getElementById('kpi-ping');
             if (pingEl && live.gateway_ping_ms) pingEl.textContent = (typeof live.gateway_ping_ms === 'number' ? live.gateway_ping_ms.toFixed(1) : live.gateway_ping_ms) + ' мс';
@@ -6005,4 +6795,1851 @@ const dashboardHTML = `<!DOCTYPE html>
 </body>
 </html>
 `
+
+// -----------------------------------------------------------------------------
+// Ticket & Support Diagnostic System
+// -----------------------------------------------------------------------------
+
+var ticketCooldowns sync.Map // map[string]time.Time
+
+type ClientTicketSubmission struct {
+	AccountNumber string                 `json:"account_number"`
+	DeviceID      string                 `json:"device_id"`
+	AppVersion    string                 `json:"app_version"`
+	Category      string                 `json:"category"`
+	UserComment   string                 `json:"user_comment"`
+	SystemInfo    map[string]interface{} `json:"system_info"`
+	LogsGzip      string                 `json:"logs_gzip"` // Base64-encoded .tar.gz
+}
+
+func (s *AppState) handleClientTicketSubmit(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Limit body size to 25 MB
+	r.Body = http.MaxBytesReader(w, r.Body, 25*1024*1024)
+
+	var req ClientTicketSubmission
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_payload"})
+		return
+	}
+
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.AccountNumber = strings.TrimSpace(req.AccountNumber)
+	req.UserComment = strings.TrimSpace(req.UserComment)
+	req.Category = strings.TrimSpace(req.Category)
+	if req.Category == "" {
+		req.Category = "other"
+	}
+
+	if req.DeviceID == "" && req.AccountNumber == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "identity_required"})
+		return
+	}
+
+	// Cooldown enforcement: 3 minutes per device or IP
+	clientIP := s.getClientIP(r)
+	cooldownKey := req.DeviceID
+	if cooldownKey == "" {
+		cooldownKey = clientIP
+	}
+	if last, ok := ticketCooldowns.Load(cooldownKey); ok {
+		if time.Since(last.(time.Time)) < 3*time.Minute {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "rate_limited",
+				"message": "Слишком много обращений. Пожалуйста, подождите 3 минуты перед повторной отправкой.",
+			})
+			return
+		}
+	}
+	ticketCooldowns.Store(cooldownKey, time.Now())
+
+	// Resolve account number from device mapping if missing
+	if req.AccountNumber == "" && req.DeviceID != "" && s.db != nil {
+		_ = s.db.QueryRow(`
+			SELECT account_number FROM account_devices
+			WHERE device_id = $1
+			ORDER BY created_at DESC LIMIT 1
+		`, req.DeviceID).Scan(&req.AccountNumber)
+	}
+
+	// Decode archive bytes
+	var archiveBytes []byte
+	if req.LogsGzip != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(req.LogsGzip); err == nil {
+			archiveBytes = decoded
+		}
+	}
+
+	sysJSON, _ := json.Marshal(req.SystemInfo)
+
+	var ticketID int64
+	if s.db != nil {
+		err := s.db.QueryRow(`
+			INSERT INTO support_tickets (
+				account_number, device_id, app_version, category, user_comment, system_info, logs_archive, logs_archive_size, status
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'new')
+			RETURNING id
+		`, req.AccountNumber, req.DeviceID, req.AppVersion, req.Category, req.UserComment, string(sysJSON), archiveBytes, len(archiveBytes)).Scan(&ticketID)
+		if err != nil {
+			log.Printf("[TICKETS] Database error saving ticket: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "db_error"})
+			return
+		}
+	} else {
+		ticketID = time.Now().Unix()
+	}
+
+	log.Printf("[TICKETS] Saved new support ticket #%d from acc=%s, dev=%s, cat=%s (logs archive: %d bytes)",
+		ticketID, req.AccountNumber, req.DeviceID, req.Category, len(archiveBytes))
+
+	ticketCode := fmt.Sprintf("TK-%04d", ticketID)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":     true,
+		"ticket_id":   ticketID,
+		"ticket_code": ticketCode,
+		"message":     "Отчет успешно доставлен администратору. Я изучу диагностику и направлю ответ в ваш Центр уведомлений.",
+	})
+}
+
+type AdminTicketSummary struct {
+	ID              int64           `json:"id"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
+	AccountNumber   string          `json:"account_number"`
+	DeviceID        string          `json:"device_id"`
+	AppVersion      string          `json:"app_version"`
+	Category        string          `json:"category"`
+	UserComment     string          `json:"user_comment"`
+	LogsArchiveSize int             `json:"logs_archive_size"`
+	Status          string          `json:"status"`
+	AdminReply      string          `json:"admin_reply"`
+	ResolvedAt      *string         `json:"resolved_at"`
+	SystemInfo      json.RawMessage `json:"system_info,omitempty"`
+}
+
+func (s *AppState) handleAdminTicketsList(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dashboard-Key, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
+		return
+	}
+
+	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+	searchQuery := strings.TrimSpace(r.URL.Query().Get("q"))
+	limitStr := r.URL.Query().Get("limit")
+	limit := 50
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+		limit = l
+	}
+
+	tickets := make([]AdminTicketSummary, 0)
+	counts := map[string]int{
+		"new":         0,
+		"in_progress": 0,
+		"resolved":    0,
+		"closed":      0,
+		"total":       0,
+	}
+
+	if s.db != nil {
+		// Calculate status counts
+		cntRows, err := s.db.Query(`SELECT status, COUNT(*) FROM support_tickets GROUP BY status`)
+		if err == nil {
+			defer cntRows.Close()
+			for cntRows.Next() {
+				var st string
+				var c int
+				if cntRows.Scan(&st, &c) == nil {
+					counts[st] = c
+					counts["total"] += c
+				}
+			}
+		}
+
+		// Build query
+		query := `
+			SELECT id, TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       TO_CHAR(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       account_number, device_id, app_version, category, user_comment,
+			       logs_archive_size, status, admin_reply,
+			       TO_CHAR(resolved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       COALESCE(system_info::TEXT, '{}')
+			FROM support_tickets
+			WHERE 1=1
+		`
+		var args []interface{}
+		argIdx := 1
+
+		if statusFilter != "" && statusFilter != "all" {
+			query += fmt.Sprintf(" AND status = $%d", argIdx)
+			args = append(args, statusFilter)
+			argIdx++
+		}
+
+		if searchQuery != "" {
+			query += fmt.Sprintf(" AND (account_number ILIKE $%d OR device_id ILIKE $%d OR user_comment ILIKE $%d OR id::TEXT = $%d)", argIdx, argIdx, argIdx, argIdx)
+			args = append(args, "%"+searchQuery+"%")
+			argIdx++
+		}
+
+		query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", argIdx)
+		args = append(args, limit)
+
+		rows, err := s.db.Query(query, args...)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var t AdminTicketSummary
+				var resAt sql.NullString
+				var sysRaw string
+				if err := rows.Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.AccountNumber, &t.DeviceID, &t.AppVersion, &t.Category, &t.UserComment, &t.LogsArchiveSize, &t.Status, &t.AdminReply, &resAt, &sysRaw); err == nil {
+					if resAt.Valid {
+						val := resAt.String
+						t.ResolvedAt = &val
+					}
+					t.SystemInfo = json.RawMessage(sysRaw)
+					tickets = append(tickets, t)
+				}
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"tickets": tickets,
+		"counts":  counts,
+	})
+}
+
+func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dashboard-Key, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
+		return
+	}
+
+	rawPath := strings.TrimPrefix(r.URL.Path, "/api/v1/admin/tickets/")
+	parts := strings.Split(strings.Trim(rawPath, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		s.handleAdminTicketsList(w, r)
+		return
+	}
+
+	ticketID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "invalid_ticket_id"})
+		return
+	}
+
+	subAction := ""
+	if len(parts) > 1 {
+		subAction = parts[1]
+	}
+
+	switch subAction {
+	case "file":
+		// GET /api/v1/admin/tickets/:id/file?name=warlink.log
+		fileName := r.URL.Query().Get("name")
+		if fileName == "" {
+			fileName = "warlink.log"
+		}
+		var archiveBytes []byte
+		if s.db != nil {
+			_ = s.db.QueryRow(`SELECT logs_archive FROM support_tickets WHERE id = $1`, ticketID).Scan(&archiveBytes)
+		}
+		if len(archiveBytes) == 0 {
+			w.WriteHeader(http.StatusNotFound)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "no_logs_archive"})
+			return
+		}
+		content, err := extractFileFromTarGz(archiveBytes, fileName)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"name":    fileName,
+			"content": content,
+		})
+
+	case "archive":
+		// GET /api/v1/admin/tickets/:id/archive
+		var archiveBytes []byte
+		if s.db != nil {
+			_ = s.db.QueryRow(`SELECT logs_archive FROM support_tickets WHERE id = $1`, ticketID).Scan(&archiveBytes)
+		}
+		if len(archiveBytes) == 0 {
+			http.Error(w, "Archive not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="ticket_%d_logs.tar.gz"`, ticketID))
+		w.Header().Set("Content-Length", strconv.Itoa(len(archiveBytes)))
+		_, _ = w.Write(archiveBytes)
+
+	case "reply":
+		// POST /api/v1/admin/tickets/:id/reply
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var replyReq struct {
+			Title       string `json:"title"`
+			Message     string `json:"message"`
+			Severity    string `json:"severity"` // update | urgent | info | warning
+			ActionLabel string `json:"action_label"`
+			ActionURL   string `json:"action_url"`
+			Status      string `json:"status"` // resolved | in_progress | closed
+		}
+		if err := json.NewDecoder(r.Body).Decode(&replyReq); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "invalid_payload"})
+			return
+		}
+		replyReq.Title = strings.TrimSpace(replyReq.Title)
+		replyReq.Message = strings.TrimSpace(replyReq.Message)
+		if replyReq.Title == "" || replyReq.Message == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "title_and_message_required"})
+			return
+		}
+		sev := strings.ToLower(strings.TrimSpace(replyReq.Severity))
+		if sev != "info" && sev != "update" && sev != "warning" && sev != "urgent" {
+			sev = "update"
+		}
+		newStatus := strings.ToLower(strings.TrimSpace(replyReq.Status))
+		if newStatus == "" {
+			newStatus = "resolved"
+		}
+
+		var ticketAcc, ticketDev string
+		if s.db != nil {
+			_ = s.db.QueryRow(`SELECT account_number, device_id FROM support_tickets WHERE id = $1`, ticketID).Scan(&ticketAcc, &ticketDev)
+
+			targetType := "account"
+			targetID := ticketAcc
+			if targetID == "" {
+				targetType = "device"
+				targetID = ticketDev
+			}
+
+			// 1. Dispatch Notification (Rule 7)
+			if targetID != "" {
+				_, notifErr := s.db.Exec(`
+					INSERT INTO in_app_notifications (target_type, target_id, title, message, severity, action_label, action_url, created_at)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+				`, targetType, targetID, replyReq.Title, replyReq.Message, sev, replyReq.ActionLabel, replyReq.ActionURL)
+				if notifErr != nil {
+					log.Printf("[TICKETS] Warning inserting reply notification: %v", notifErr)
+				} else {
+					log.Printf("[TICKETS] Dispatched in-app notification reply to %s:%s for ticket #%d", targetType, targetID, ticketID)
+				}
+			}
+
+			// 2. Update Ticket
+			_, _ = s.db.Exec(`
+				UPDATE support_tickets
+				SET admin_reply = $1, status = $2,
+				    resolved_at = CASE WHEN $2 = 'resolved' THEN NOW() ELSE resolved_at END,
+				    updated_at = NOW()
+				WHERE id = $3
+			`, replyReq.Message, newStatus, ticketID)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"status":  newStatus,
+			"message": "Депеша успешно направлена пользователю",
+		})
+
+	case "status":
+		// PATCH or POST /api/v1/admin/tickets/:id/status
+		var stReq struct {
+			Status string `json:"status"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&stReq)
+		stReq.Status = strings.ToLower(strings.TrimSpace(stReq.Status))
+		if stReq.Status == "" {
+			stReq.Status = "in_progress"
+		}
+		if s.db != nil {
+			_, _ = s.db.Exec(`
+				UPDATE support_tickets
+				SET status = $1,
+				    resolved_at = CASE WHEN $1 = 'resolved' THEN NOW() ELSE resolved_at END,
+				    updated_at = NOW()
+				WHERE id = $2
+			`, stReq.Status, ticketID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": stReq.Status})
+
+	default:
+		// GET /api/v1/admin/tickets/:id - Full details + file manifest
+		var t AdminTicketSummary
+		var resAt sql.NullString
+		var sysRaw string
+		var archiveBytes []byte
+		if s.db != nil {
+			err := s.db.QueryRow(`
+				SELECT id, TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+				       TO_CHAR(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+				       account_number, device_id, app_version, category, user_comment,
+				       logs_archive_size, status, admin_reply,
+				       TO_CHAR(resolved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+				       COALESCE(system_info::TEXT, '{}'),
+				       logs_archive
+				FROM support_tickets
+				WHERE id = $1
+			`, ticketID).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.AccountNumber, &t.DeviceID, &t.AppVersion, &t.Category, &t.UserComment, &t.LogsArchiveSize, &t.Status, &t.AdminReply, &resAt, &sysRaw, &archiveBytes)
+			if err != nil {
+				w.WriteHeader(http.StatusNotFound)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "ticket_not_found"})
+				return
+			}
+			if resAt.Valid {
+				val := resAt.String
+				t.ResolvedAt = &val
+			}
+			t.SystemInfo = json.RawMessage(sysRaw)
+		}
+
+		filesManifest := listFilesInTarGz(archiveBytes)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"ticket":  t,
+			"files":   filesManifest,
+		})
+	}
+}
+
+func listFilesInTarGz(archive []byte) []map[string]interface{} {
+	files := make([]map[string]interface{}, 0)
+	if len(archive) == 0 {
+		return files
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return files
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF || err != nil {
+			break
+		}
+		if hdr.Typeflag == tar.TypeReg || hdr.Typeflag == 0 {
+			files = append(files, map[string]interface{}{
+				"name":     hdr.Name,
+				"size":     hdr.Size,
+				"mod_time": hdr.ModTime.Format(time.RFC3339),
+			})
+		}
+	}
+	return files
+}
+
+func extractFileFromTarGz(archive []byte, targetName string) (string, error) {
+	if len(archive) == 0 {
+		return "", fmt.Errorf("empty archive")
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return "", err
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if filepath.Base(hdr.Name) == filepath.Base(targetName) || hdr.Name == targetName {
+			var buf bytes.Buffer
+			// Read up to 15MB
+			_, copyErr := io.CopyN(&buf, tr, 15*1024*1024)
+			if copyErr != nil && copyErr != io.EOF {
+				return "", copyErr
+			}
+			return buf.String(), nil
+		}
+	}
+	return "", fmt.Errorf("file %q not found in archive", targetName)
+}
+
+func (s *AppState) handleAdminTicketWeb(w http.ResponseWriter, r *http.Request) {
+	// If query key is passed, persist cookie
+	qKey := r.URL.Query().Get("key")
+	if qKey != "" && s.cfg.DashboardKey != "" && qKey == s.cfg.DashboardKey {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "admin_key",
+			Value:    qKey,
+			Path:     "/",
+			MaxAge:   30 * 86400,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>WarLink Support // Доступ ограничен</title>
+    <style>
+        body { background: #0c0d10; color: #e6e8ee; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .box { background: #14161b; border: 1px solid #262a34; padding: 32px; border-radius: 2px; width: 340px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+        h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 16px 0; color: #FF5E1F; }
+        p { font-size: 13px; color: #8b92a5; margin-bottom: 20px; line-height: 1.4; }
+        input { width: 100%; box-sizing: border-box; background: #0a0b0d; border: 1px solid #262a34; color: #fff; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; border-radius: 2px; outline: none; }
+        input:focus { border-color: #FF5E1F; }
+        button { width: 100%; background: #FF5E1F; color: #fff; border: none; padding: 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; border-radius: 2px; }
+        button:hover { background: #e04e14; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>WARLINK SUPPORT</h2>
+        <p>Для доступа к операционному центру тикетов введите ключ администратора.</p>
+        <form method="GET" action="/admin/tickets">
+            <input type="password" name="key" placeholder="Ключ авторизации" autofocus required>
+            <button type="submit">Войти в систему</button>
+        </form>
+    </div>
+</body>
+</html>`)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(adminTicketCenterHTML))
+}
+
+const adminTicketCenterHTML = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WarLink Support // Операционный центр тикетов</title>
+    <style>
+        :root {
+            --bg: #0c0d10;
+            --card-bg: #14161b;
+            --surface: #1a1d24;
+            --surface-hover: #222630;
+            --border: #262a34;
+            --border-focus: #3b4252;
+            --text: #e6e8ee;
+            --text-muted: #8b92a5;
+            --text-dim: #5c6375;
+            --accent: #FF5E1F;
+            --accent-hover: #e04e14;
+            --red: #ef4444;
+            --red-bg: rgba(239, 68, 68, 0.12);
+            --amber: #f59e0b;
+            --amber-bg: rgba(245, 158, 11, 0.12);
+            --green: #10b981;
+            --green-bg: rgba(16, 185, 129, 0.12);
+            --blue: #3b82f6;
+            --blue-bg: rgba(59, 130, 246, 0.12);
+            --radius: 2px;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Consolas', 'Fira Code', monospace;
+        }
+
+        html, body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            line-height: 1.5;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: #333946 transparent;
+        }
+
+        /* Top Header */
+        header {
+            height: 52px;
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            flex-shrink: 0;
+            gap: 16px;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-logo {
+            width: 24px;
+            height: 24px;
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .brand-title {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text);
+        }
+
+        .brand-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            background: rgba(255, 94, 31, 0.15);
+            color: var(--accent);
+            border: 1px solid rgba(255, 94, 31, 0.3);
+            border-radius: var(--radius);
+            letter-spacing: 0.05em;
+        }
+
+        .header-stats {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-pill {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: var(--radius);
+            cursor: pointer;
+            border: 1px solid transparent;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            transition: all 0.15s;
+        }
+
+        .stat-pill.pill-new { background: var(--red-bg); color: var(--red); border-color: rgba(239, 68, 68, 0.3); }
+        .stat-pill.pill-progress { background: var(--amber-bg); color: var(--amber); border-color: rgba(245, 158, 11, 0.3); }
+        .stat-pill.pill-resolved { background: var(--green-bg); color: var(--green); border-color: rgba(16, 185, 129, 0.3); }
+        .stat-pill.active { outline: 1px solid currentColor; }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--surface);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            padding: 6px 10px;
+            border-radius: var(--radius);
+            font-size: 11px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-link:hover { color: var(--text); background: var(--surface-hover); border-color: var(--border-focus); }
+
+        /* Workspace Grid */
+        .workspace {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        /* Left Sidebar: Tickets List */
+        .sidebar {
+            width: 380px;
+            background: var(--bg);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .sidebar-search-bar {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            background: var(--card-bg);
+            display: flex;
+            gap: 8px;
+        }
+
+        .search-input {
+            flex: 1;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 7px 10px;
+            font-size: 12px;
+            border-radius: var(--radius);
+            outline: none;
+        }
+        .search-input:focus { border-color: var(--accent); }
+
+        .sidebar-tabs {
+            display: flex;
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 4px 8px;
+            gap: 4px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 0;
+            cursor: pointer;
+            text-align: center;
+            border-radius: var(--radius);
+            transition: all 0.15s;
+        }
+        .tab-btn:hover { color: var(--text); background: var(--surface); }
+        .tab-btn.active { color: #fff; background: var(--surface-hover); border: 1px solid var(--border); }
+
+        .ticket-list {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ticket-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+            position: relative;
+        }
+        .ticket-card:hover { border-color: var(--border-focus); background: var(--surface); }
+        .ticket-card.selected { border-color: var(--accent); background: var(--surface); }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .ticket-id {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+        }
+
+        .badge-status {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 2px 5px;
+            border-radius: var(--radius);
+            letter-spacing: 0.05em;
+        }
+        .badge-status.new { background: var(--red-bg); color: var(--red); }
+        .badge-status.in_progress { background: var(--amber-bg); color: var(--amber); }
+        .badge-status.resolved { background: var(--green-bg); color: var(--green); }
+        .badge-status.closed { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
+
+        .card-account {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+
+        .card-category {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 5px;
+            background: var(--surface);
+            color: var(--text-muted);
+            border-radius: var(--radius);
+            margin-bottom: 6px;
+        }
+
+        .card-snippet {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.4;
+            margin-bottom: 6px;
+        }
+
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+
+        /* Right Detail Pane */
+        .detail-pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .empty-placeholder {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-dim);
+            gap: 12px;
+            padding: 40px;
+            text-align: center;
+        }
+        .empty-placeholder svg { width: 48px; height: 48px; stroke: var(--text-dim); }
+
+        .detail-content {
+            padding: 20px 20px 80px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Detail Action Bar */
+        .detail-action-bar {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            padding: 14px 16px;
+            border-radius: var(--radius);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .detail-title-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .detail-title {
+            font-size: 16px;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            color: var(--text);
+        }
+
+        .status-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-status {
+            padding: 6px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-status:hover { background: var(--surface-hover); color: #fff; }
+        .btn-status.btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .btn-status.btn-accent:hover { background: var(--accent-hover); }
+
+        /* Diagnostic Info Grid */
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .info-box {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px;
+        }
+
+        .info-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        .info-val {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text);
+            font-family: var(--font-mono);
+            word-break: break-all;
+        }
+
+        /* User Comment Box */
+        .comment-section {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+
+        .section-header {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .comment-body {
+            background: #090a0d;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px;
+            font-size: 13px;
+            color: var(--text);
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+
+        /* Log Explorer */
+        .log-section {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .log-nav-bar {
+            background: #111317;
+            border-bottom: 1px solid var(--border);
+            padding: 6px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .log-tabs {
+            display: flex;
+            gap: 4px;
+            overflow-x: auto;
+        }
+
+        .log-tab-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: var(--radius);
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .log-tab-btn:hover { color: var(--text); background: var(--surface); }
+        .log-tab-btn.active { color: #fff; background: var(--surface); border-color: var(--border-focus); }
+
+        .log-tools {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .log-search-input {
+            background: #090a0d;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 4px 8px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            border-radius: var(--radius);
+            outline: none;
+            width: 160px;
+        }
+        .log-search-input:focus { border-color: var(--accent); }
+
+        .log-terminal {
+            background: #08090b;
+            color: #d1d5db;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            line-height: 1.45;
+            padding: 12px;
+            max-height: 480px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Syntax highlight tokens */
+        .tok-error { color: #f87171; font-weight: 700; background: rgba(239, 68, 68, 0.15); padding: 0 2px; }
+        .tok-warn  { color: #fbbf24; font-weight: 700; }
+        .tok-info  { color: #60a5fa; }
+        .tok-match { background: #ca8a04; color: #000; font-weight: 700; }
+
+        /* Reply & Notification Dispatcher */
+        .reply-section {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .preset-templates {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+
+        .btn-preset {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-preset:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-focus); }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+        }
+
+        .form-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+        }
+
+        .form-input, .form-select, .form-textarea {
+            background: #090a0d;
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 10px;
+            font-size: 12px;
+            border-radius: var(--radius);
+            outline: none;
+            font-family: var(--font-sans);
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent); }
+
+        .form-textarea {
+            min-height: 90px;
+            resize: vertical;
+            line-height: 1.45;
+        }
+
+        .reply-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 4px;
+        }
+
+        .check-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .btn-send-reply {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: background 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-send-reply:hover { background: var(--accent-hover); }
+
+        .reply-history-box {
+            background: rgba(16, 185, 129, 0.06);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            border-radius: var(--radius);
+            padding: 12px;
+            margin-top: 8px;
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar { width: 7px; height: 7px; }
+        ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
+        ::-webkit-scrollbar-thumb { background: #3b4252; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #FF5E1F; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-brand">
+            <svg class="header-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            <div class="brand-title">WarLink Support Desk</div>
+            <div class="brand-badge">OPERATIONS</div>
+        </div>
+
+        <div class="header-stats">
+            <div class="stat-pill pill-new" id="pill-new" onclick="filterByStatus('new')">● <span id="count-new">0</span> Новых</div>
+            <div class="stat-pill pill-progress" id="pill-progress" onclick="filterByStatus('in_progress')">● <span id="count-progress">0</span> В работе</div>
+            <div class="stat-pill pill-resolved" id="pill-resolved" onclick="filterByStatus('resolved')">● <span id="count-resolved">0</span> Решено</div>
+        </div>
+
+        <div class="header-actions">
+            <a href="/dashboard" class="btn-link" target="_blank">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                Телеметрия
+            </a>
+            <button class="btn-link" onclick="loadTickets()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                Обновить
+            </button>
+        </div>
+    </header>
+
+    <div class="workspace">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-search-bar">
+                <input type="text" class="search-input" id="search-input" placeholder="Поиск по аккаунту, ID или тексту..." oninput="handleSearch(this.value)">
+            </div>
+            <div class="sidebar-tabs">
+                <button class="tab-btn active" id="tab-all" onclick="filterByStatus('all')">Все (<span id="count-total">0</span>)</button>
+                <button class="tab-btn" id="tab-new" onclick="filterByStatus('new')">Новые</button>
+                <button class="tab-btn" id="tab-in_progress" onclick="filterByStatus('in_progress')">В работе</button>
+                <button class="tab-btn" id="tab-resolved" onclick="filterByStatus('resolved')">Решенные</button>
+            </div>
+            <div class="ticket-list" id="ticket-list">
+                <div style="padding:20px; text-align:center; color:var(--text-dim);">Загрузка обращений...</div>
+            </div>
+        </aside>
+
+        <!-- Main Detail Pane -->
+        <main class="detail-pane" id="detail-pane">
+            <div class="empty-placeholder" id="empty-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M22 12h-6l-2 3h-4l-2-3H2"/>
+                    <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+                </svg>
+                <div>
+                    <div style="font-size:14px; font-weight:600; color:var(--text-muted); margin-bottom:4px;">Выберите тикет из списка слева</div>
+                    <div style="font-size:12px;">Здесь отобразится системная диагностика, полный лог и форма отправки ответа.</div>
+                </div>
+            </div>
+
+            <div class="detail-content" id="detail-content" style="display:none;">
+                <!-- Action Bar -->
+                <div class="detail-action-bar">
+                    <div class="detail-title-group">
+                        <div class="detail-title" id="d-ticket-id">#TK-0000</div>
+                        <span class="badge-status new" id="d-status-badge">Новый</span>
+                    </div>
+                    <div class="status-actions">
+                        <button class="btn-status" onclick="setTicketStatus('in_progress')">В работу</button>
+                        <button class="btn-status" onclick="setTicketStatus('resolved')">Решено</button>
+                        <button class="btn-status" onclick="setTicketStatus('closed')">Закрыть</button>
+                        <button class="btn-status btn-accent" id="btn-download-archive" onclick="downloadLogsArchive()">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Скачать архив логов (.tar.gz)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Info Grid -->
+                <div class="info-grid">
+                    <div class="info-box">
+                        <div class="info-label">Аккаунт пользователя</div>
+                        <div class="info-val" id="d-account" style="color:var(--accent);">5230-0000-0000-0000</div>
+                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-device">dev: ...</div>
+                    </div>
+                    <div class="info-box">
+                        <div class="info-label">Версия клиента & ОС</div>
+                        <div class="info-val" id="d-app-ver">v2.1.7</div>
+                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-os-ver">Windows 10.0</div>
+                    </div>
+                    <div class="info-box">
+                        <div class="info-label">Сетевой режим & Службы</div>
+                        <div class="info-val" id="d-network-mode">Комплексный режим</div>
+                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-services-status">sing-box: OK, winws2: OK</div>
+                    </div>
+                    <div class="info-box">
+                        <div class="info-label">Поступление & Размер</div>
+                        <div class="info-val" id="d-time-created">12:34:56 UTC</div>
+                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-archive-size">145 KB</div>
+                    </div>
+                </div>
+
+                <!-- User Comment -->
+                <div class="comment-section">
+                    <div class="section-header">
+                        <span>Описание проблемы пользователем</span>
+                        <span class="card-category" id="d-category-badge">Вылет из матча</span>
+                    </div>
+                    <div class="comment-body" id="d-user-comment">Текст обращения отсутствует.</div>
+                </div>
+
+                <!-- Full Log Viewer -->
+                <div class="log-section">
+                    <div class="log-nav-bar">
+                        <div class="log-tabs" id="log-tabs">
+                            <!-- Dynamic log buttons -->
+                        </div>
+                        <div class="log-tools">
+                            <input type="text" class="log-search-input" id="log-search" placeholder="Поиск в логе (Ctrl+F)" oninput="filterLog(this.value)">
+                            <button class="btn-status" onclick="copyCurrentLog()">Копировать</button>
+                        </div>
+                    </div>
+                    <div class="log-terminal" id="log-terminal">Загрузка файла лога...</div>
+                </div>
+
+                <!-- Reply & Notification Dispatcher -->
+                <div class="reply-section">
+                    <div class="section-header">
+                        <span>Ответ пользователю через внутриигровое уведомление (Правило 7)</span>
+                        <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">Депеша поступит на аккаунт пользователя в приложении WarLink</span>
+                    </div>
+
+                    <div class="preset-templates">
+                        <span style="font-size:10px; color:var(--text-dim); align-self:center; margin-right:4px;">Шаблоны быстрых ответов:</span>
+                        <button class="btn-preset" onclick="applyTemplate('error_114745308')">Ошибка 114745308 (Рассинхрон IP/UDP)</button>
+                        <button class="btn-preset" onclick="applyTemplate('zapret_crash')">Конфликт WinDivert / Запрет</button>
+                        <button class="btn-preset" onclick="applyTemplate('match_drop')">Вылет из матча (Таймаут шлюза)</button>
+                        <button class="btn-preset" onclick="applyTemplate('resolved')">Успешное решение</button>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col" style="flex:2;">
+                            <label class="form-label">Заголовок депеши</label>
+                            <input type="text" class="form-input" id="reply-title" placeholder="Например: Решение по вашему обращению">
+                        </div>
+                        <div class="form-col" style="flex:1;">
+                            <label class="form-label">Важность (Цвет баннера)</label>
+                            <select class="form-select" id="reply-severity">
+                                <option value="update" selected>Update (Оранжевый)</option>
+                                <option value="urgent">Urgent (Красный)</option>
+                                <option value="warning">Warning (Желтый)</option>
+                                <option value="info">Info (Синий)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-col">
+                        <label class="form-label">Текст сообщения</label>
+                        <textarea class="form-textarea" id="reply-message" placeholder="Введите рекомендации для пользователя..."></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col">
+                            <label class="form-label">Текст кнопки действия (опционально)</label>
+                            <input type="text" class="form-input" id="reply-action-label" placeholder="Например: Проверить статус или Уровень WARDOGS">
+                        </div>
+                        <div class="form-col">
+                            <label class="form-label">Роут перехода (опционально)</label>
+                            <input type="text" class="form-input" id="reply-action-url" placeholder="Например: #view-details или #view-progression">
+                        </div>
+                    </div>
+
+                    <div class="reply-actions">
+                        <label class="check-group">
+                            <input type="checkbox" id="reply-mark-resolved" checked>
+                            <span>Отметить тикет как решенный (resolved)</span>
+                        </label>
+                        <button class="btn-send-reply" id="btn-send-reply" onclick="sendReply()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                            Отправить депешу пользователю
+                        </button>
+                    </div>
+
+                    <div class="reply-history-box" id="reply-history" style="display:none;">
+                        <div style="font-size:10px; font-weight:700; color:var(--green); text-transform:uppercase; margin-bottom:4px;">Ранее отправленный ответ:</div>
+                        <div style="font-size:12px; color:var(--text);" id="reply-history-text"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let currentTickets = [];
+        let selectedTicket = null;
+        let selectedTicketFiles = [];
+        let currentActiveLogFile = '';
+        let currentRawLogText = '';
+        let currentStatusFilter = 'all';
+        let currentSearchQuery = '';
+
+        const categoryNames = {
+            'wardogs_crash': 'Вылет / Ошибка 114745308',
+            'discord_fail': 'Discord / Сеть',
+            'gateway_connect': 'Подключение к шлюзу',
+            'packet_loss': 'Пинг / Потери пакетов',
+            'other': 'Общий вопрос'
+        };
+
+        const replyTemplates = {
+            'error_114745308': {
+                title: 'Решение по ошибке 114745308',
+                severity: 'update',
+                message: 'Мы проанализировали ваши логи: код 114745308 (0x06D6DFDC) в WARDOGS вызван рассинхронизацией авторизации HTTPS и игровых UDP-портов AWS GameLift.\n\nРекомендация:\n1. В настройках WarLink переключитесь в «Комплексный режим».\n2. Перезапустите игру WARDOGS.\n3. Если игра запущена через сквад, убедитесь, что соединение установлено до начала поиска матча.',
+                action_label: 'Открыть настройки',
+                action_url: '#view-details'
+            },
+            'zapret_crash': {
+                title: 'Рекомендации по стабильности WinDivert',
+                severity: 'warning',
+                message: 'Анализ логов выявил сбой службы winws2 (WinDivert). Чаще всего это вызвано конфликтом с другим программным обеспечением (сторонние антивирусы, античит или параллельные DPI-клиенты).\n\nРекомендация:\n1. Добавьте папку WarLink в исключения Защитника Windows.\n2. Закройте другие программы фильтрации трафика.\n3. Запустите WarLink от имени администратора.',
+                action_label: 'Проверить статус',
+                action_url: '#view-details'
+            },
+            'match_drop': {
+                title: 'Анализ дисконнекта во время матча',
+                severity: 'info',
+                message: 'Мы зафиксировали кратковременный сброс сессии шлюза. Ваш Discord продолжал работать, так как использует отдельный маршрут.\n\nНа сервере проведена оптимизация тайм-аутов QUIC. Дополнительных действий не требуется, стабильность восстановлена.',
+                action_label: 'Телеметрия',
+                action_url: '#view-details'
+            },
+            'resolved': {
+                title: 'Ваше обращение успешно обработано',
+                severity: 'update',
+                message: 'Техническая команда WarLink проверила полученную диагностику. Все необходимые корректировки применены на шлюзе. Приятной игры!',
+                action_label: 'Уровень WARDOGS',
+                action_url: '#view-progression'
+            }
+        };
+
+        async function loadTickets() {
+            try {
+                let url = '/api/v1/admin/tickets?status=' + encodeURIComponent(currentStatusFilter);
+                if (currentSearchQuery) url += '&q=' + encodeURIComponent(currentSearchQuery);
+
+                const res = await fetch(url);
+                if (!res.ok) {
+                    if (res.status === 403 || res.status === 401) {
+                        window.location.reload();
+                    }
+                    return;
+                }
+                const data = await res.json();
+                if (data && data.success) {
+                    currentTickets = data.tickets || [];
+                    updateCounts(data.counts || {});
+                    renderTicketList();
+                    if (selectedTicket) {
+                        const updated = currentTickets.find(t => t.id === selectedTicket.id);
+                        if (updated) {
+                            selectedTicket = updated;
+                            updateDetailHeaderOnly();
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load tickets:', err);
+            }
+        }
+
+        function updateCounts(counts) {
+            document.getElementById('count-new').textContent = counts.new || 0;
+            document.getElementById('count-progress').textContent = counts.in_progress || 0;
+            document.getElementById('count-resolved').textContent = counts.resolved || 0;
+            document.getElementById('count-total').textContent = counts.total || 0;
+        }
+
+        function filterByStatus(st) {
+            currentStatusFilter = st;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.stat-pill').forEach(pill => pill.classList.remove('active'));
+
+            const tab = document.getElementById('tab-' + st);
+            if (tab) tab.classList.add('active');
+            if (st === 'new') document.getElementById('pill-new').classList.add('active');
+            if (st === 'in_progress') document.getElementById('pill-progress').classList.add('active');
+            if (st === 'resolved') document.getElementById('pill-resolved').classList.add('active');
+
+            loadTickets();
+        }
+
+        let searchDebounceTimer = null;
+        function handleSearch(val) {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                currentSearchQuery = val.trim();
+                loadTickets();
+            }, 250);
+        }
+
+        function renderTicketList() {
+            const listEl = document.getElementById('ticket-list');
+            if (!currentTickets || currentTickets.length === 0) {
+                listEl.innerHTML = '<div style="padding:40px 20px; text-align:center; color:var(--text-dim); font-size:12px;">Обращений не найдено</div>';
+                return;
+            }
+
+            let html = '';
+            for (const t of currentTickets) {
+                const isSel = selectedTicket && selectedTicket.id === t.id;
+                const catName = categoryNames[t.category] || t.category || 'Общий';
+                const timeAgo = formatTimeAgo(t.created_at);
+                const kb = Math.round((t.logs_archive_size || 0) / 1024);
+                const statusClass = t.status || 'new';
+
+                html += '<div class="ticket-card ' + (isSel ? 'selected' : '') + '" onclick="selectTicket(' + t.id + ')">' +
+                    '<div class="card-header">' +
+                        '<span class="ticket-id">#TK-' + String(t.id).padStart(4, '0') + '</span>' +
+                        '<span class="badge-status ' + statusClass + '">' + formatStatusName(t.status) + '</span>' +
+                    '</div>' +
+                    '<div class="card-account">' + escapeHtml(t.account_number || t.device_id || 'Аноним') + '</div>' +
+                    '<div><span class="card-category">' + escapeHtml(catName) + '</span></div>' +
+                    '<div class="card-snippet">' + escapeHtml(t.user_comment || 'Без комментария') + '</div>' +
+                    '<div class="card-footer">' +
+                        '<span>' + timeAgo + '</span>' +
+                        '<span>' + kb + ' KB архива</span>' +
+                    '</div>' +
+                '</div>';
+            }
+            listEl.innerHTML = html;
+        }
+
+        async function selectTicket(id) {
+            try {
+                const res = await fetch('/api/v1/admin/tickets/' + id);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data && data.success) {
+                    selectedTicket = data.ticket;
+                    selectedTicketFiles = data.files || [];
+                    renderTicketDetail();
+                    renderTicketList();
+                }
+            } catch (err) {
+                console.error('Failed to select ticket:', err);
+            }
+        }
+
+        function renderTicketDetail() {
+            if (!selectedTicket) return;
+
+            document.getElementById('empty-placeholder').style.display = 'none';
+            document.getElementById('detail-content').style.display = 'flex';
+
+            document.getElementById('d-ticket-id').textContent = '#TK-' + String(selectedTicket.id).padStart(4, '0');
+            const badge = document.getElementById('d-status-badge');
+            badge.className = 'badge-status ' + (selectedTicket.status || 'new');
+            badge.textContent = formatStatusName(selectedTicket.status);
+
+            document.getElementById('d-account').textContent = selectedTicket.account_number || 'Не привязан';
+            document.getElementById('d-device').textContent = 'dev: ' + (selectedTicket.device_id ? selectedTicket.device_id.substring(0, 16) + '...' : 'none');
+            document.getElementById('d-app-ver').textContent = selectedTicket.app_version || 'v2.1.7';
+
+            // Parse system_info
+            const sys = selectedTicket.system_info || {};
+            document.getElementById('d-os-ver').textContent = sys.os || 'Windows';
+            document.getElementById('d-network-mode').textContent = sys.mode === 'complex' ? 'Комплексный режим' : 'Игровой режим (Direct)';
+            const singboxOk = sys.singbox_running ? 'sing-box: OK' : 'sing-box: OFF';
+            const winws2Ok = sys.winws2_running ? 'winws2: OK' : 'winws2: OFF';
+            const pingStr = sys.gateway_ping ? ', ping: ' + sys.gateway_ping + 'ms' : '';
+            document.getElementById('d-services-status').textContent = singboxOk + ', ' + winws2Ok + pingStr;
+
+            document.getElementById('d-time-created').textContent = selectedTicket.created_at ? selectedTicket.created_at.replace('T', ' ').replace('Z', ' UTC') : '';
+            document.getElementById('d-archive-size').textContent = Math.round((selectedTicket.logs_archive_size || 0) / 1024) + ' KB логов';
+
+            document.getElementById('d-category-badge').textContent = categoryNames[selectedTicket.category] || selectedTicket.category;
+            document.getElementById('d-user-comment').textContent = selectedTicket.user_comment || 'Без комментария';
+
+            // Previous reply
+            const historyBox = document.getElementById('reply-history');
+            if (selectedTicket.admin_reply) {
+                historyBox.style.display = 'block';
+                document.getElementById('reply-history-text').textContent = selectedTicket.admin_reply;
+            } else {
+                historyBox.style.display = 'none';
+            }
+
+            // Fill default reply title
+            document.getElementById('reply-title').value = 'Решение по обращению #TK-' + String(selectedTicket.id).padStart(4, '0');
+
+            // Render log tabs
+            renderLogTabs();
+        }
+
+        function updateDetailHeaderOnly() {
+            if (!selectedTicket) return;
+            const badge = document.getElementById('d-status-badge');
+            badge.className = 'badge-status ' + (selectedTicket.status || 'new');
+            badge.textContent = formatStatusName(selectedTicket.status);
+        }
+
+        function renderLogTabs() {
+            const tabsEl = document.getElementById('log-tabs');
+            if (!selectedTicketFiles || selectedTicketFiles.length === 0) {
+                tabsEl.innerHTML = '<span style="font-size:11px; color:var(--text-dim); padding:4px;">В архиве нет файлов логов</span>';
+                document.getElementById('log-terminal').textContent = 'Логи отсутствуют';
+                return;
+            }
+
+            let html = '';
+            // Prefer warlink.log first, or the first file
+            if (!currentActiveLogFile || !selectedTicketFiles.some(f => f.name === currentActiveLogFile)) {
+                const warlinkFile = selectedTicketFiles.find(f => f.name.includes('warlink.log'));
+                currentActiveLogFile = warlinkFile ? warlinkFile.name : selectedTicketFiles[0].name;
+            }
+
+            for (const f of selectedTicketFiles) {
+                const isActive = f.name === currentActiveLogFile;
+                const kb = Math.round(f.size / 1024);
+                html += '<button class="log-tab-btn ' + (isActive ? 'active' : '') + '" onclick="switchLogFile(\'' + escapeHtml(f.name) + '\')">' + escapeHtml(f.name) + ' (' + kb + 'KB)</button>';
+            }
+            tabsEl.innerHTML = html;
+            fetchLogFile(currentActiveLogFile);
+        }
+
+        async function switchLogFile(name) {
+            currentActiveLogFile = name;
+            document.querySelectorAll('.log-tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.textContent.startsWith(name));
+            });
+            await fetchLogFile(name);
+        }
+
+        async function fetchLogFile(fileName) {
+            if (!selectedTicket) return;
+            const term = document.getElementById('log-terminal');
+            term.textContent = 'Чтение ' + fileName + '...';
+
+            try {
+                const res = await fetch('/api/v1/admin/tickets/' + selectedTicket.id + '/file?name=' + encodeURIComponent(fileName));
+                if (!res.ok) {
+                    term.textContent = 'Ошибка загрузки файла ' + fileName;
+                    return;
+                }
+                const data = await res.json();
+                if (data && data.success) {
+                    currentRawLogText = data.content || '';
+                    renderLogTerminal(currentRawLogText);
+                }
+            } catch (err) {
+                term.textContent = 'Ошибка сети при получении лога: ' + err;
+            }
+        }
+
+        function renderLogTerminal(raw) {
+            const term = document.getElementById('log-terminal');
+            if (!raw) {
+                term.textContent = 'Файл пуст';
+                return;
+            }
+
+            // Syntax highlighting
+            const lines = raw.split('\n');
+            let out = [];
+            for (let line of lines) {
+                let esc = escapeHtml(line);
+                if (esc.includes('[ERROR]') || esc.includes('FATAL') || esc.includes('panic') || esc.includes('114745308')) {
+                    esc = '<span class="tok-error">' + esc + '</span>';
+                } else if (esc.includes('[WARN]')) {
+                    esc = '<span class="tok-warn">' + esc + '</span>';
+                } else if (esc.includes('[INFO]') || esc.includes('[NET]')) {
+                    esc = '<span class="tok-info">' + esc + '</span>';
+                }
+                out.push(esc);
+            }
+            term.innerHTML = out.join('\n');
+            term.scrollTop = term.scrollHeight; // Scroll to end
+        }
+
+        function filterLog(query) {
+            if (!query) {
+                renderLogTerminal(currentRawLogText);
+                return;
+            }
+            const q = query.toLowerCase();
+            const lines = currentRawLogText.split('\n');
+            let out = [];
+            for (let line of lines) {
+                if (line.toLowerCase().includes(q)) {
+                    let esc = escapeHtml(line);
+                    const regex = new RegExp('(' + escapeRegex(query) + ')', 'gi');
+                    esc = esc.replace(regex, '<span class="tok-match">$1</span>');
+                    out.push(esc);
+                }
+            }
+            const term = document.getElementById('log-terminal');
+            term.innerHTML = out.length > 0 ? out.join('\n') : '<span style="color:var(--text-dim);">Совпадений не найдено</span>';
+        }
+
+        function copyCurrentLog() {
+            if (!currentRawLogText) return;
+            navigator.clipboard.writeText(currentRawLogText).then(() => {
+                alert('Лог скопирован в буфер обмена');
+            });
+        }
+
+        function downloadLogsArchive() {
+            if (!selectedTicket) return;
+            window.open('/api/v1/admin/tickets/' + selectedTicket.id + '/archive', '_blank');
+        }
+
+        async function setTicketStatus(status) {
+            if (!selectedTicket) return;
+            try {
+                const res = await fetch('/api/v1/admin/tickets/' + selectedTicket.id + '/status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status })
+                });
+                if (res.ok) {
+                    selectedTicket.status = status;
+                    updateDetailHeaderOnly();
+                    loadTickets();
+                }
+            } catch (err) {
+                console.error('Failed to set ticket status:', err);
+            }
+        }
+
+        function applyTemplate(key) {
+            const tmpl = replyTemplates[key];
+            if (!tmpl) return;
+            document.getElementById('reply-title').value = tmpl.title;
+            document.getElementById('reply-severity').value = tmpl.severity;
+            document.getElementById('reply-message').value = tmpl.message;
+            document.getElementById('reply-action-label').value = tmpl.action_label || '';
+            document.getElementById('reply-action-url').value = tmpl.action_url || '';
+        }
+
+        async function sendReply() {
+            if (!selectedTicket) return;
+
+            const title = document.getElementById('reply-title').value.trim();
+            const message = document.getElementById('reply-message').value.trim();
+            const severity = document.getElementById('reply-severity').value;
+            const actionLabel = document.getElementById('reply-action-label').value.trim();
+            const actionUrl = document.getElementById('reply-action-url').value.trim();
+            const markResolved = document.getElementById('reply-mark-resolved').checked;
+
+            if (!title || !message) {
+                alert('Заполните заголовок и текст сообщения');
+                return;
+            }
+
+            const sendBtn = document.getElementById('btn-send-reply');
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Отправка депеши...';
+
+            try {
+                const payload = {
+                    title,
+                    message,
+                    severity,
+                    action_label: actionLabel,
+                    action_url: actionUrl,
+                    status: markResolved ? 'resolved' : 'in_progress'
+                };
+
+                const res = await fetch('/api/v1/admin/tickets/' + selectedTicket.id + '/reply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    selectedTicket.admin_reply = message;
+                    selectedTicket.status = data.status || (markResolved ? 'resolved' : 'in_progress');
+                    updateDetailHeaderOnly();
+
+                    const historyBox = document.getElementById('reply-history');
+                    historyBox.style.display = 'block';
+                    document.getElementById('reply-history-text').textContent = message;
+
+                    alert('Депеша успешно отправлена на аккаунт пользователя!');
+                    loadTickets();
+                } else {
+                    alert('Ошибка при отправке депеши');
+                }
+            } catch (err) {
+                alert('Сетевая ошибка: ' + err);
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Отправить депешу пользователю';
+            }
+        }
+
+        function formatStatusName(st) {
+            switch(st) {
+                case 'new': return 'Новый';
+                case 'in_progress': return 'В работе';
+                case 'resolved': return 'Решен';
+                case 'closed': return 'Закрыт';
+                default: return st || 'Новый';
+            }
+        }
+
+        function formatTimeAgo(dateStr) {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            const now = new Date();
+            const diffSec = Math.floor((now - d) / 1000);
+            if (diffSec < 60) return 'только что';
+            if (diffSec < 3600) return Math.floor(diffSec / 60) + ' мин назад';
+            if (diffSec < 86400) return Math.floor(diffSec / 3600) + ' ч назад';
+            return Math.floor(diffSec / 86400) + ' дн назад';
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function escapeRegex(str) {
+            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // Initialize
+        loadTickets();
+        setInterval(loadTickets, 15000); // 15-second background auto-refresh
+    </script>
+</body>
+</html>
+`
+
 

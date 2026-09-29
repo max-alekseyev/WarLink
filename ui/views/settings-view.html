@@ -59,11 +59,23 @@
         </div>
 
         <div class="setting-group">
-            <span class="setting-group-title">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
+                <button id="btn-open-bug-report" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openBugReportModal()">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    Сообщить о проблеме
+                </button>
+            </div>
             <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
                 <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
                 <span style="color: var(--text-muted); font-size: 11px;">•</span>
-                <button class="btn-link" onclick="openSingboxLogFile()">сетевой singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
             </div>
         </div>
     </div>

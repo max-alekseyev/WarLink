@@ -394,7 +394,7 @@
 
         if (imgEl) imgEl.src = normalizeItemIcon(targetItem.icon);
         if (nameEl) nameEl.textContent = targetItem.name_ru || targetItem.name;
-        if (catEl) catEl.textContent = SUBCAT_RU[targetItem.subcategory] || targetItem.subcategory || targetItem.tab || 'Предмет';
+        if (catEl) catEl.textContent = targetItem.category_ru || SUBCAT_RU[targetItem.subcategory] || targetItem.subcategory || targetItem.tab || 'Предмет';
         if (roleLblEl) roleLblEl.textContent = roleNameRu;
         if (reqLvlEl) reqLvlEl.textContent = 'Ур. ' + reqLvl;
         if (remEl) {
@@ -512,15 +512,35 @@
         'Muzzles': 'ДТК / Глушитель',
         'Assault Rifle': 'Штурм. винтовка',
         'SMG': 'Пистолет-пулемет',
+        'Submachine Gun': 'Пистолет-пулемет',
         'Shotgun': 'Дробовик',
         'Sniper Rifle': 'Снайп. винтовка',
         'DMR': 'Марксман. винтовка',
+        'Marksman Rifle': 'Марксман. винтовка',
         'LMG': 'Пулемет',
+        'Light Machine Gun': 'Ручной пулемет',
+        'Machine Gun': 'Пулемет',
         'Backpack': 'Рюкзак',
+        'Vest': 'Разгрузка',
         'Grip': 'Рукоятка',
+        'Foregrips': 'Рукоятка',
         'Ammunition': 'Боеприпасы',
         'Vehicle': 'Техника',
-        'Patch': 'Патч'
+        'Ground': 'Наземная техника',
+        'Air': 'Авиация',
+        'Patch': 'Патч',
+        'Medical': 'Медицина',
+        'Supplies': 'Припасы',
+        'Traversal': 'Снаряжение',
+        'Building': 'Строительство',
+        'Tactical': 'Тактическое',
+        'Charge': 'Взрывчатка',
+        'Launcher': 'Гранатомет',
+        'Bow': 'Лук',
+        'Arrows': 'Стрелы',
+        'Crate': 'Ящик',
+        'Recon': 'Разведка',
+        'Other': 'Прочее'
     };
 
     function toggleHideUnlocked(checked) {

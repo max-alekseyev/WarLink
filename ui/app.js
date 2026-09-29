@@ -519,6 +519,8 @@ function handleModalBackdropDismiss(e) {
         closeDonateModal();
     } else if (id === 'modal-add-game' && typeof closeAddGameModal === 'function') {
         closeAddGameModal();
+    } else if (id === 'modal-bug-report' && typeof closeBugReportModal === 'function') {
+        closeBugReportModal();
     }
 }
 
@@ -533,6 +535,11 @@ function onModalBackdropClick(e) {
 // Global Keyboard Navigation (Escape to dismiss modals, sheets, and menus)
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+        const brModal = document.getElementById('modal-bug-report');
+        if (brModal && brModal.style.display !== 'none') {
+            closeBugReportModal();
+            return;
+        }
         const dossierModal = document.getElementById('modal-sponsor-dossier');
         if (dossierModal && dossierModal.style.display !== 'none') {
             closeSponsorDossier();
@@ -904,6 +911,10 @@ function openLogFile() {
 
 function openSingboxLogFile() {
     fetch('/api/open-singbox-log').catch(() => {});
+}
+
+function openLogsFolder() {
+    fetch('/api/open-logs-folder').catch(() => {});
 }
 
 async function runBenchmark() {

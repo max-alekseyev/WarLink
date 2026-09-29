@@ -2,6 +2,7 @@ package deps
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,6 +38,166 @@ func GetCoreDir() string {
 
 func EnsureCoreDir() error {
 	return os.MkdirAll(GetCoreDir(), 0755)
+}
+
+func GetLogsDir() string {
+	return filepath.Join(GetCoreDir(), "logs")
+}
+
+func EnsureLogsDir() error {
+	return os.MkdirAll(GetLogsDir(), 0755)
+}
+
+const (
+	maxLogFileSize = 15 * 1024 * 1024 // 15 MB cap
+	keepLogTail    = 10 * 1024 * 1024 // keep last 10 MB on cap
+	logMaxAge      = 7 * 24 * time.Hour
+)
+
+// capFileSize ensures a log file does not exceed maxLogFileSize. If it does, keeps only the last keepLogTail bytes.
+func capFileSize(filePath string) {
+	fi, err := os.Stat(filePath)
+	if err != nil || fi.Size() <= maxLogFileSize {
+		return
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	seekPos := fi.Size() - keepLogTail
+	if _, err := f.Seek(seekPos, io.SeekStart); err != nil {
+		return
+	}
+
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		return
+	}
+	_ = f.Close()
+
+	_ = os.WriteFile(filePath, buf, 0644)
+}
+
+// RotateLogs performs two-session rotation for warlink.log (warlink.log -> warlink.prev.log),
+// caps existing logs to 15 MB, migrates legacy logs, and cleans files older than 7 days.
+func RotateLogs() error {
+	_ = EnsureLogsDir()
+	logsDir := GetLogsDir()
+
+	// 1. Two-session rotation: warlink.log -> warlink.prev.log
+	currLog := filepath.Join(logsDir, "warlink.log")
+	prevLog := filepath.Join(logsDir, "warlink.prev.log")
+	if _, err := os.Stat(currLog); err == nil {
+		_ = os.Remove(prevLog)
+		_ = os.Rename(currLog, prevLog)
+	}
+
+	// 2. Migrate legacy warlink_core/warlink.log if present
+	legacyCoreLog := filepath.Join(GetCoreDir(), "warlink.log")
+	if _, err := os.Stat(legacyCoreLog); err == nil {
+		if _, errPrev := os.Stat(prevLog); errPrev != nil {
+			_ = os.Rename(legacyCoreLog, prevLog)
+		} else {
+			_ = os.Remove(legacyCoreLog)
+		}
+	}
+
+	// 3. Migrate & cap legacy singbox.log if in old dir
+	oldSbLog := filepath.Join(GetCoreDir(), "singbox", "singbox.log")
+	newSbLog := filepath.Join(logsDir, "singbox.log")
+	if _, err := os.Stat(oldSbLog); err == nil {
+		if _, errNew := os.Stat(newSbLog); errNew != nil {
+			_ = os.Rename(oldSbLog, newSbLog)
+		} else {
+			_ = os.Remove(oldSbLog)
+		}
+	}
+
+	// 4. Cap sizes of active logs
+	logFiles := []string{
+		filepath.Join(logsDir, "singbox.log"),
+		filepath.Join(logsDir, "winws2.log"),
+		filepath.Join(logsDir, "game.log"),
+		filepath.Join(logsDir, "warlink.prev.log"),
+	}
+	for _, lf := range logFiles {
+		capFileSize(lf)
+	}
+
+	// 5. TTL Cleanup: remove temp or dump files older than 7 days
+	entries, err := os.ReadDir(logsDir)
+	if err == nil {
+		cutoff := time.Now().Add(-logMaxAge)
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := strings.ToLower(e.Name())
+			if strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".dmp") || strings.HasSuffix(name, ".bak") {
+				if info, iErr := e.Info(); iErr == nil && info.ModTime().Before(cutoff) {
+					_ = os.Remove(filepath.Join(logsDir, e.Name()))
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// FetchWardogsGameLog locates WARDOGS game logs and copies the latest events to warlink_core/logs/game.log.
+func FetchWardogsGameLog() error {
+	_ = EnsureLogsDir()
+	destLog := filepath.Join(GetLogsDir(), "game.log")
+
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return nil
+	}
+
+	candidates := []string{
+		filepath.Join(localAppData, "Wardogs", "Saved", "Logs", "Wardogs.log"),
+		filepath.Join(localAppData, "WardogsGame", "Saved", "Logs", "WardogsGame.log"),
+	}
+
+	var foundSource string
+	for _, c := range candidates {
+		if fi, err := os.Stat(c); err == nil && fi.Size() > 0 {
+			foundSource = c
+			break
+		}
+	}
+
+	if foundSource == "" {
+		return nil
+	}
+
+	fi, err := os.Stat(foundSource)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Open(foundSource)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	readStart := int64(0)
+	if fi.Size() > keepLogTail {
+		readStart = fi.Size() - keepLogTail
+	}
+	if _, err := f.Seek(readStart, io.SeekStart); err != nil {
+		return err
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(destLog, data, 0644)
 }
 
 func GetZapretDir() string {

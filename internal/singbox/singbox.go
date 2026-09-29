@@ -27,6 +27,7 @@ import (
 )
 
 var (
+	ClientVersion       = "v2.1.9"
 	DefaultServerIP     = "138.124.103.99"
 	DefaultServerAPI    = "http://138.124.103.99"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -469,6 +470,7 @@ func AcquireSession(game ...string) (string, error) {
 			"timestamp":      ts,
 			"nonce":          nonce,
 			"game":           targetGame,
+			"app_version":    ClientVersion,
 		})
 
 		req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
@@ -476,6 +478,7 @@ func AcquireSession(game ...string) (string, error) {
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "WarLink-Client/"+ClientVersion)
 
 		if hmacSecret != "" {
 			dataToSign := fmt.Sprintf("%s:%d:%s", deviceID, ts, nonce)
@@ -581,6 +584,7 @@ func ReleaseSession() error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "WarLink-Client/"+ClientVersion)
 
 	client := &http.Client{Timeout: 2500 * time.Millisecond}
 	resp, err := client.Do(req)
@@ -840,6 +844,30 @@ func FetchRemoteConfig(serverAPI string, token string, game string, targetProces
 		return formatted.Bytes(), nil
 	}
 	return res.Config, nil
+}
+
+// GetDefaultLogsDir returns the warlink_core/logs directory for sing-box logging.
+func GetDefaultLogsDir() string {
+	exe, err := os.Executable()
+	if err == nil {
+		dir := filepath.Dir(exe)
+		core := filepath.Join(dir, "warlink_core")
+		if _, statErr := os.Stat(core); statErr == nil {
+			l := filepath.Join(core, "logs")
+			_ = os.MkdirAll(l, 0755)
+			return l
+		}
+		parent := filepath.Dir(dir)
+		core = filepath.Join(parent, "warlink_core")
+		if _, statErr := os.Stat(core); statErr == nil {
+			l := filepath.Join(core, "logs")
+			_ = os.MkdirAll(l, 0755)
+			return l
+		}
+	}
+	l := filepath.Join("warlink_core", "logs")
+	_ = os.MkdirAll(l, 0755)
+	return l
 }
 
 // GenerateConfig creates a sing-box JSON configuration routing target processes,
@@ -1218,7 +1246,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	cfg := Config{
 		Log: LogConfig{
 			Level:     "info",
-			Output:    "singbox.log",
+			Output:    filepath.ToSlash(filepath.Join(GetDefaultLogsDir(), "singbox.log")),
 			Timestamp: true,
 		},
 		DNS: dnsConfig,
@@ -1314,6 +1342,12 @@ func NewManager(coreDir string) *Manager {
 
 func (m *Manager) GetBinDir() string {
 	return filepath.Join(m.coreDir, "singbox")
+}
+
+func (m *Manager) GetLogsDir() string {
+	dir := filepath.Join(m.coreDir, "logs")
+	_ = os.MkdirAll(dir, 0755)
+	return dir
 }
 
 func (m *Manager) GetExePath() string {
@@ -1475,7 +1509,7 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 		_ = m.logFile.Close()
 		m.logFile = nil
 	}
-	stderrPath := filepath.Join(m.GetBinDir(), "singbox_stderr.log")
+	stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
 	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
 		m.logFile = f
 		cmd.Stderr = f
@@ -1612,7 +1646,7 @@ func (m *Manager) AddTargetProcess(proc string, logFn func(string)) error {
 		_ = m.logFile.Close()
 		m.logFile = nil
 	}
-	stderrPath := filepath.Join(m.GetBinDir(), "singbox_stderr.log")
+	stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
 	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
 		m.logFile = f
 		cmd.Stderr = f
@@ -1672,7 +1706,10 @@ func (m *Manager) HasAuthError() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	logPath := filepath.Join(m.GetBinDir(), "singbox.log")
+	logPath := filepath.Join(m.GetLogsDir(), "singbox.log")
+	if _, err := os.Stat(logPath); err != nil {
+		logPath = filepath.Join(m.GetBinDir(), "singbox.log")
+	}
 	info, err := os.Stat(logPath)
 	if err != nil || info.Size() == 0 {
 		return false

@@ -292,8 +292,8 @@ func (e *Engine) EnsureWinwsRunning() error {
 	}
 
 	deps.HealWinDivertService(e.log)
-
-	logPath := filepath.Join(zapretDir, "winws2.log")
+	_ = deps.EnsureLogsDir()
+	logPath := filepath.Join(deps.GetLogsDir(), "winws2.log")
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
 		if attempt > 1 {

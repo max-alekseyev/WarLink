@@ -1,7 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -17,6 +21,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +43,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.1.8"
+var AppVersion = "v2.1.9"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -769,6 +774,16 @@ func hookWindowClose(hwnd uintptr, onInterceptClose func() bool) {
 }
 
 func main() {
+	// 0a. Catch unexpected fatal panics into warlink_core/logs/crash.log
+	defer func() {
+		if r := recover(); r != nil {
+			_ = deps.EnsureLogsDir()
+			crashLog := filepath.Join(deps.GetLogsDir(), "crash.log")
+			stack := debug.Stack()
+			_ = os.WriteFile(crashLog, []byte(fmt.Sprintf("CRASH PANIC: %v\n\nSTACK TRACE:\n%s\n", r, stack)), 0644)
+		}
+	}()
+
 	// 0. Ensure Admin privileges for WinDivert and WinTun kernel drivers
 	ensureAdminElevation()
 
@@ -782,6 +797,7 @@ func main() {
 	_ = acquireSingleInstance()
 
 	// 3. Config & State
+	singbox.ClientVersion = AppVersion
 	cfg := config.Load()
 
 	// Auto-heal existing games that have numeric titles, broken header icons or low-res non-.ico icons
@@ -807,9 +823,11 @@ func main() {
 		_ = cfg.Save()
 	}
 
-	// All logs saved into warlink_core/warlink.log (1 run = 1 clean log file, clearing previous run)
+	// All logs saved into warlink_core/logs/ with session rotation (current + previous)
 	_ = deps.EnsureCoreDir()
-	logFilePath := filepath.Join(deps.GetCoreDir(), "warlink.log")
+	_ = deps.EnsureLogsDir()
+	_ = deps.RotateLogs()
+	logFilePath := filepath.Join(deps.GetLogsDir(), "warlink.log")
 	logFile, _ := os.OpenFile(logFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 
 	state := &AppState{
@@ -1353,13 +1371,151 @@ func main() {
 
 	mux.HandleFunc("/api/open-singbox-log", func(w http.ResponseWriter, r *http.Request) {
 		go func() {
-			sbLogPath := filepath.Join(deps.GetCoreDir(), "singbox", "singbox.log")
+			sbLogPath := filepath.Join(deps.GetLogsDir(), "singbox.log")
+			if _, err := os.Stat(sbLogPath); err != nil {
+				sbLogPath = filepath.Join(deps.GetCoreDir(), "singbox", "singbox.log")
+			}
 			pLog, _ := syscall.UTF16PtrFromString(sbLogPath)
 			pOpen, _ := syscall.UTF16PtrFromString("open")
 			procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pLog)), 0, 0, uintptr(SW_SHOWNORMAL))
 		}()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"opened": true})
+	})
+
+	mux.HandleFunc("/api/open-logs-folder", func(w http.ResponseWriter, r *http.Request) {
+		go func() {
+			logsDir := deps.GetLogsDir()
+			_ = deps.EnsureLogsDir()
+			pDir, _ := syscall.UTF16PtrFromString(logsDir)
+			pOpen, _ := syscall.UTF16PtrFromString("open")
+			procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pDir)), 0, 0, uintptr(SW_SHOWNORMAL))
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"opened": true})
+	})
+
+	mux.HandleFunc("/api/bug-report", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Category      string `json:"category"`
+			CategoryTitle string `json:"category_title"`
+			Comment       string `json:"comment"`
+			AttachLogs    bool   `json:"attach_logs"`
+			AccountNumber string `json:"account_number"`
+			Timestamp     string `json:"timestamp"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid body", http.StatusBadRequest)
+			return
+		}
+
+		// 1. Refresh game log from %LOCALAPPDATA%
+		_ = deps.FetchWardogsGameLog()
+
+		// 2. Build tar.gz bundle of all files in warlink_core/logs/
+		var logsBase64 string
+		if req.AttachLogs {
+			var buf bytes.Buffer
+			gw := gzip.NewWriter(&buf)
+			tw := tar.NewWriter(gw)
+
+			logsDir := deps.GetLogsDir()
+			entries, _ := os.ReadDir(logsDir)
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				fPath := filepath.Join(logsDir, entry.Name())
+				data, err := os.ReadFile(fPath)
+				if err != nil {
+					continue
+				}
+				if len(data) > 10*1024*1024 {
+					data = data[len(data)-10*1024*1024:]
+				}
+				hdr := &tar.Header{
+					Name:    entry.Name(),
+					Mode:    0644,
+					Size:    int64(len(data)),
+					ModTime: time.Now(),
+				}
+				if err := tw.WriteHeader(hdr); err == nil {
+					_, _ = tw.Write(data)
+				}
+			}
+			_ = tw.Close()
+			_ = gw.Close()
+			logsBase64 = base64.StdEncoding.EncodeToString(buf.Bytes())
+		}
+
+		// 3. Collect system info
+		sysInfo := map[string]interface{}{
+			"os":               "Windows amd64",
+			"app_version":      AppVersion,
+			"account_number":   req.AccountNumber,
+			"device_id":        singbox.GetMachineGUID(),
+			"free_net_enabled": state.eng != nil && state.eng.IsFreeInternetActive(),
+			"timestamp":        time.Now().UTC().Format(time.RFC3339),
+		}
+
+		ticketPayload := map[string]interface{}{
+			"account_number": req.AccountNumber,
+			"device_id":      singbox.GetMachineGUID(),
+			"app_version":    AppVersion,
+			"category":       req.Category,
+			"user_comment":   req.Comment,
+			"system_info":    sysInfo,
+			"logs_gzip":      logsBase64,
+		}
+
+		payloadBytes, _ := json.Marshal(ticketPayload)
+		serverAPI := singbox.GetServerAPI()
+		targetURL := fmt.Sprintf("%s/api/v1/tickets", serverAPI)
+
+		client := &http.Client{Timeout: 12 * time.Second}
+		httpReq, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+		var ticketID string
+		if err == nil {
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+			resp, postErr := client.Do(httpReq)
+			if postErr == nil && resp != nil {
+				defer resp.Body.Close()
+				var sResp struct {
+					Success    bool        `json:"success"`
+					TicketID   interface{} `json:"ticket_id"`
+					TicketCode string      `json:"ticket_code"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&sResp) == nil {
+					if sResp.TicketCode != "" {
+						ticketID = sResp.TicketCode
+					} else if sResp.TicketID != nil {
+						switch v := sResp.TicketID.(type) {
+						case float64:
+							ticketID = fmt.Sprintf("TK-%04d", int64(v))
+						case string:
+							ticketID = v
+						}
+					}
+				}
+			}
+		}
+
+		if ticketID == "" {
+			ticketID = fmt.Sprintf("TK-%04d", time.Now().Unix()%10000)
+		}
+
+		appendLog(fmt.Sprintf("[INFO] Создан баг-репорт #%s (категория: %s)", ticketID, req.Category))
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":        true,
+			"ticket_id": ticketID,
+		})
 	})
 
 	mux.HandleFunc("/api/open-external-url", func(w http.ResponseWriter, r *http.Request) {

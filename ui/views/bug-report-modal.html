@@ -1,0 +1,141 @@
+<!-- MODAL: Bug Report & Diagnostics Submission (Dark Cloudflare Inspired Utility) -->
+<div id="modal-bug-report" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card bug-report-modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <!-- Modal Header -->
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span class="modal-title">Отчет о проблеме</span>
+                <span id="br-account-badge" class="br-account-tag font-mono">#—</span>
+            </div>
+            <button class="btn-icon" onclick="closeBugReportModal()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18"/>
+                    <path d="m6 6 12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Form Body State -->
+        <div id="br-form-container" class="modal-body br-body">
+            <!-- Cooldown notice banner (anti-spam) -->
+            <div id="br-cooldown-banner" class="br-cooldown-banner" style="display: none;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <span id="br-cooldown-text">Повторная отправка отчета доступна через 03:00</span>
+            </div>
+
+            <!-- Problem Category Selection -->
+            <div class="form-group">
+                <label class="form-label" for="br-category-select">Категория инцидента:</label>
+                <div class="br-select-wrapper">
+                    <select id="br-category-select" class="form-select br-select" onchange="onBugReportCategoryChange(this.value)">
+                        <option value="game_crash">Сбой в игре WARDOGS / Вылет из матча</option>
+                        <option value="discord_dpi">Не работает Discord / Комплексный режим</option>
+                        <option value="gateway_conn">Ошибка подключения к шлюзу</option>
+                        <option value="high_ping">Высокий пинг / потеря пакетов</option>
+                        <option value="other">Другое</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- User Comment Textarea -->
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="form-label" for="br-comment-input">Описание ситуации:</label>
+                    <span id="br-char-counter" class="br-char-counter font-mono">0 / 500</span>
+                </div>
+                <textarea id="br-comment-input" class="form-textarea br-textarea" maxlength="500" rows="4" placeholder="Опишите, что произошло (например: потеряно соединение со шлюзом через 10 минут после старта раунда)..." oninput="onBugReportCommentInput(this.value)"></textarea>
+                <div id="br-comment-error" class="br-field-error" style="display: none;"></div>
+            </div>
+
+            <!-- Diagnostic Attachment Block -->
+            <div class="br-diag-block">
+                <div class="br-diag-header">
+                    <label class="br-checkbox-label">
+                        <input type="checkbox" id="br-attach-logs" checked onchange="onToggleAttachLogs(this.checked)">
+                        <span class="br-checkbox-text">Прикрепить диагностический лог</span>
+                    </label>
+                    <button type="button" id="btn-toggle-log-preview" class="btn-link br-preview-btn" onclick="toggleBugReportLogPreview()">
+                        <span id="br-preview-btn-text">Посмотреть лог</span>
+                        <svg id="br-preview-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Collapsible Log Inspector -->
+                <div id="br-log-preview-container" class="br-log-preview-container" style="display: none;">
+                    <div class="br-log-preview-header">
+                        <span class="br-log-meta-title">Деперсонализированный снимок системы</span>
+                        <span class="font-mono text-muted" style="font-size: 9px;">UTF-8 / Sanitized</span>
+                    </div>
+                    <pre id="br-log-preview-content" class="br-log-pre font-mono">Загрузка диагностического контекста...</pre>
+                </div>
+            </div>
+
+
+
+            <!-- Action Buttons -->
+            <div class="br-actions-row">
+                <button type="button" class="btn btn-secondary br-btn-cancel" onclick="closeBugReportModal()">Отмена</button>
+                <button type="button" id="btn-submit-bug-report" class="btn btn-primary br-btn-submit" onclick="submitBugReport()">
+                    <span id="br-submit-spinner" class="br-spinner" style="display: none;">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="spin-icon">
+                            <line x1="12" y1="2" x2="12" y2="6"/>
+                            <line x1="12" y1="18" x2="12" y2="22"/>
+                            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+                            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+                            <line x1="2" y1="12" x2="6" y2="12"/>
+                            <line x1="18" y1="12" x2="22" y2="12"/>
+                            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
+                            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+                        </svg>
+                    </span>
+                    <span id="br-submit-label">Отправить отчет</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Success State Container -->
+        <div id="br-success-container" class="modal-body br-success-body" style="display: none;">
+            <div class="br-success-icon-wrap">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <polyline points="9 12 11 14 15 10"/>
+                </svg>
+            </div>
+            <div class="br-success-title">Отчет успешно доставлен администратору</div>
+            <div class="br-success-text">
+                Ответ и рекомендации поступят депешей в ваш Центр уведомлений.
+            </div>
+
+            <div class="br-ticket-receipt">
+                <div class="br-receipt-row">
+                    <span class="br-receipt-label">Идентификатор тикета:</span>
+                    <span id="br-ticket-id" class="br-receipt-value font-mono">#TK-0000</span>
+                </div>
+                <div class="br-receipt-row">
+                    <span class="br-receipt-label">Время фиксации:</span>
+                    <span id="br-ticket-time" class="br-receipt-value font-mono">—</span>
+                </div>
+                <div class="br-receipt-row">
+                    <span class="br-receipt-label">Статус обработки:</span>
+                    <span class="br-receipt-value br-receipt-status">Принят в диспетчерскую</span>
+                </div>
+            </div>
+
+            <div style="margin-top: 14px; width: 100%;">
+                <button type="button" class="btn btn-secondary" style="width: 100%; justify-content: center; height: 32px;" onclick="closeBugReportModal()">
+                    Закрыть
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
