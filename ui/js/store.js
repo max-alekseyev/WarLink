@@ -1,4 +1,4 @@
-// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.1.7
+// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.1.8
 
 class UIStoreClass {
     constructor() {
@@ -134,7 +134,9 @@ class UIStoreClass {
             '/api/votes',
             '/api/profile',
             '/api/user-profile',
-            '/api/notifications'
+            '/api/notifications',
+            '/api/progression',
+            '/api/progression/database'
         ];
 
         await Promise.allSettled(endpoints.map(async (url) => {

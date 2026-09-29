@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.1.7"><img src="https://img.shields.io/badge/Релиз-v2.1.7-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.1.7"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.1.8"><img src="https://img.shields.io/badge/Релиз-v2.1.8-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.1.8"></a>
   <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe"><img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe"></a>
   <img src="https://img.shields.io/badge/Размер-~32_МБ-2d333b?style=for-the-badge" alt="Size">
   <a href="https://github.com/max-alekseyev/WarLink/releases"><img src="https://img.shields.io/github/downloads/max-alekseyev/WarLink/total?style=for-the-badge&color=0969da&label=Downloads" alt="Downloads"></a>
@@ -28,7 +28,7 @@
 - Ошибки «Connection lost / Server unreachable» при загрузке карты
 - Высокий пинг, подергивания и внезапная потеря пакетов (packet loss)
 
-**WarLink v2.1.7** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
+**WarLink v2.1.8** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
 
 ---
 
@@ -41,7 +41,7 @@
 
 ---
 
-## Ключевые возможности WarLink v2.1.7
+## Ключевые возможности WarLink v2.1.8
 
 - **Анонимная учетная запись (Mullvad-style):** 16-значный криптографический номер аккаунта без почты, паролей и сбора персональных данных. Поддержка связывания нескольких устройств (ПК и ноутбук).
 - **Встроенный центр уведомлений:** прямое получение важных новостей шлюза, технических оповещений и подтверждений внутри приложения с историей и индикатором непрочитанных сообщений.

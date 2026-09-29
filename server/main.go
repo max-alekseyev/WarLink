@@ -603,6 +603,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/notifications/read", state.handleNotificationRead)
 	publicMux.HandleFunc("/api/v1/admin/notifications", state.handleAdminNotifications)
 	publicMux.HandleFunc("/api/v1/sponsors", state.handleSponsors)
+	publicMux.HandleFunc("/api/v1/progression/database", state.handleProgressionDatabase)
 	publicMux.HandleFunc("/api/v1/profile", state.handleProfile)
 	publicMux.HandleFunc("/api/v1/profile/avatar", state.handleProfileAvatar)
 
@@ -612,6 +613,13 @@ func main() {
 	}
 	_ = os.MkdirAll(avatarsDir, 0755)
 	publicMux.Handle("/avatars/", http.StripPrefix("/avatars/", http.FileServer(http.Dir(avatarsDir))))
+
+	staticDir := "/opt/warlink-server/static"
+	if _, err := os.Stat("/opt/warlink-server"); os.IsNotExist(err) {
+		staticDir = "./static"
+	}
+	_ = os.MkdirAll(staticDir, 0755)
+	publicMux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 
 	publicMux.HandleFunc("/api/v1/admin/features", state.handleAdminFeatures)
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
@@ -4534,6 +4542,46 @@ func (s *AppState) handleAdminNotifications(w http.ResponseWriter, r *http.Reque
 	default:
 		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *AppState) handleProgressionDatabase(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=1800")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	dbPath := "/opt/warlink-server/progression_db.json"
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "internal/progression/progression_db.json"
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "progression/progression_db.json"
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "progression_db.json"
+	}
+
+	data, err := os.ReadFile(dbPath)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "database_not_found"})
+		return
+	}
+
+	sum := sha256.Sum256(data)
+	etag := fmt.Sprintf("\"%x\"", sum[:8])
+	w.Header().Set("ETag", etag)
+
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	_, _ = w.Write(data)
 }
 
 type DonationItem struct {

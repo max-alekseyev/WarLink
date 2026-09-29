@@ -76,6 +76,25 @@
         return 'assets/career/300.webp';
     }
 
+    function normalizeItemIcon(icon) {
+        if (!icon) return 'wardogs_icon.png';
+        if (icon.startsWith('http://') || icon.startsWith('https://')) return icon;
+        let clean = icon;
+        if (clean.startsWith('guides/icons/')) {
+            clean = 'static/wardogs/items/' + clean.slice(13);
+        } else if (clean.startsWith('/guides/icons/')) {
+            clean = 'static/wardogs/items/' + clean.slice(14);
+        } else if (clean.startsWith('guides/images/')) {
+            clean = 'static/wardogs/renders/' + clean.slice(14);
+        } else if (clean.startsWith('/guides/images/')) {
+            clean = 'static/wardogs/renders/' + clean.slice(15);
+        }
+        if (!clean.startsWith('/')) {
+            clean = '/' + clean;
+        }
+        return clean;
+    }
+
     function checkFirstTimeGuide() {
         if (currentProgression && currentProgression.guide_dismissed) {
             return;
@@ -134,46 +153,69 @@
     }
 
     async function loadProgressionData() {
-        try {
+        const fetcher = async () => {
             const resp = await fetch('/api/progression');
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.progression) {
-                    currentProgression = data.progression;
-                    if (!currentProgression.roles) {
-                        currentProgression.roles = {};
-                    }
-                    if (!currentProgression.xp_progress) {
-                        currentProgression.xp_progress = {};
-                    }
-                    if (!Array.isArray(currentProgression.unlocked_items)) {
-                        currentProgression.unlocked_items = [];
-                    }
+            if (!resp.ok) throw new Error('Failed to load progression: ' + resp.status);
+            return await resp.json();
+        };
+
+        const render = (data) => {
+            if (!data) return;
+            if (data.progression) {
+                currentProgression = data.progression;
+                if (!currentProgression.roles) {
+                    currentProgression.roles = {};
                 }
-                if (data.next_unlocks) {
-                    nextUnlocks = data.next_unlocks;
+                if (!currentProgression.xp_progress) {
+                    currentProgression.xp_progress = {};
                 }
-                renderAll();
+                if (!Array.isArray(currentProgression.unlocked_items)) {
+                    currentProgression.unlocked_items = [];
+                }
             }
-        } catch (e) {
-            console.error('Failed loading progression data:', e);
+            if (data.next_unlocks) {
+                nextUnlocks = data.next_unlocks;
+            }
+            renderAll();
+        };
+
+        if (window.UIStore && typeof UIStore.requestSWR === 'function') {
+            await UIStore.requestSWR('/api/progression', fetcher, render, () => {});
+        } else {
+            try {
+                const data = await fetcher();
+                render(data);
+            } catch (e) {
+                console.error('Failed loading progression data:', e);
+            }
         }
     }
 
     async function loadCatalogDatabase() {
-        try {
+        const fetcher = async () => {
             const resp = await fetch('/api/progression/database');
-            if (resp.ok) {
-                const data = await resp.json();
-                if (data.unlocks && Array.isArray(data.unlocks)) {
-                    allUnlocks = data.unlocks;
-                    updateCareerNextReward();
-                    updateTargetBanner();
-                    renderCatalog();
-                }
+            if (!resp.ok) throw new Error('Failed to load catalog: ' + resp.status);
+            return await resp.json();
+        };
+
+        const render = (data) => {
+            if (data && data.unlocks && Array.isArray(data.unlocks)) {
+                allUnlocks = data.unlocks;
+                updateCareerNextReward();
+                updateTargetBanner();
+                renderCatalog();
             }
-        } catch (e) {
-            console.error('Failed loading catalog database:', e);
+        };
+
+        if (window.UIStore && typeof UIStore.requestSWR === 'function') {
+            await UIStore.requestSWR('/api/progression/database', fetcher, render, () => {});
+        } else {
+            try {
+                const data = await fetcher();
+                render(data);
+            } catch (e) {
+                console.error('Failed loading catalog database:', e);
+            }
         }
     }
 
@@ -350,7 +392,7 @@
         const pctEl = document.getElementById('prog-target-pct');
         const fillEl = document.getElementById('prog-target-bar-fill');
 
-        if (imgEl) imgEl.src = targetItem.icon || 'wardogs_icon.png';
+        if (imgEl) imgEl.src = normalizeItemIcon(targetItem.icon);
         if (nameEl) nameEl.textContent = targetItem.name_ru || targetItem.name;
         if (catEl) catEl.textContent = SUBCAT_RU[targetItem.subcategory] || targetItem.subcategory || targetItem.tab || 'Предмет';
         if (roleLblEl) roleLblEl.textContent = roleNameRu;
@@ -577,7 +619,7 @@
                 rowClass = 'is-wishlist-row';
             }
 
-            const iconUrl = item.icon || 'wardogs_icon.png';
+            const iconUrl = normalizeItemIcon(item.icon);
             const priceFormatted = item.price ? '$' + item.price.toLocaleString('en-US') : '—';
             const catName = item.category_ru || SUBCAT_RU[item.subcategory] || item.subcategory || item.tab || 'Предмет';
             const displayName = item.name_ru || item.name;

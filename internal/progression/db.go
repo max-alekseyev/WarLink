@@ -3,9 +3,15 @@ package progression
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 //go:embed progression_db.json
@@ -72,13 +78,22 @@ func loadDatabase() *Database {
 		catalog:       make([]map[string]interface{}, 0),
 	}
 
+	rawBytes := embeddedDBJSON
+	// Check if cached database exists on disk (e.g. downloaded from server)
+	for _, cachePath := range []string{"warlink_core/cached_progression_db.json", "core/cached_progression_db.json", "cached_progression_db.json"} {
+		if cached, err := os.ReadFile(cachePath); err == nil && len(cached) > 1000 {
+			rawBytes = cached
+			break
+		}
+	}
+
 	var raw struct {
 		Roles   []string                 `json:"roles"`
 		Unlocks []UnlockItem             `json:"unlocks"`
 		Catalog []map[string]interface{} `json:"catalog"`
 	}
 
-	if err := json.Unmarshal(embeddedDBJSON, &raw); err == nil {
+	if err := json.Unmarshal(rawBytes, &raw); err == nil {
 		if len(raw.Roles) > 0 {
 			db.roles = raw.Roles
 		}
@@ -100,6 +115,81 @@ func loadDatabase() *Database {
 		}
 	}
 	return db
+}
+
+// UpdateFromJSON updates the database in memory from fresh JSON bytes.
+func (db *Database) UpdateFromJSON(data []byte) error {
+	var raw struct {
+		Roles   []string                 `json:"roles"`
+		Unlocks []UnlockItem             `json:"unlocks"`
+		Catalog []map[string]interface{} `json:"catalog"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw.Unlocks) == 0 {
+		return fmt.Errorf("empty unlocks in progression data")
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if len(raw.Roles) > 0 {
+		db.roles = raw.Roles
+	}
+	db.allUnlocks = raw.Unlocks
+	db.catalog = raw.Catalog
+	db.unlocksByRole = make(map[string][]UnlockItem)
+
+	for _, item := range raw.Unlocks {
+		role := strings.ToLower(item.Role)
+		db.unlocksByRole[role] = append(db.unlocksByRole[role], item)
+	}
+
+	for role := range db.unlocksByRole {
+		items := db.unlocksByRole[role]
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].Level < items[j].Level
+		})
+		db.unlocksByRole[role] = items
+	}
+	return nil
+}
+
+// SyncWithServer fetches the latest progression database from the remote server API and caches it.
+func SyncWithServer(serverAPI string, cacheDir string) error {
+	if serverAPI == "" {
+		return fmt.Errorf("empty serverAPI")
+	}
+	u := strings.TrimRight(serverAPI, "/") + "/api/v1/progression/database"
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(u)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if len(body) < 1000 {
+		return fmt.Errorf("database response too small: %d bytes", len(body))
+	}
+
+	db := GetDatabase()
+	if err := db.UpdateFromJSON(body); err != nil {
+		return err
+	}
+
+	if cacheDir != "" {
+		_ = os.MkdirAll(cacheDir, 0755)
+		cacheFile := filepath.Join(cacheDir, "cached_progression_db.json")
+		_ = os.WriteFile(cacheFile, body, 0644)
+	}
+	return nil
 }
 
 // GetUnlocksForRole returns all unlock items for a given role sorted by level.

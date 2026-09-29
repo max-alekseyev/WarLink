@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"io/fs"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -37,7 +38,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.1.7"
+var AppVersion = "v2.1.8"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -1111,8 +1112,97 @@ func main() {
 	subFS, _ := fs.Sub(uiFS, "ui")
 	mux := http.NewServeMux()
 
+	_ = mime.AddExtensionType(".webp", "image/webp")
+	_ = mime.AddExtensionType(".png", "image/png")
+
 	mux.Handle("/", http.FileServer(http.FS(subFS)))
-	mux.Handle("/guides/", http.StripPrefix("/guides/", http.FileServer(http.Dir("guides"))))
+	staticCacheDir := filepath.Join(deps.GetCoreDir(), "cache", "static")
+	_ = os.MkdirAll(staticCacheDir, 0755)
+
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+
+	serveStaticAsset := func(w http.ResponseWriter, r *http.Request, relPath string) {
+		relPath = strings.TrimPrefix(relPath, "/")
+		if relPath == "" || strings.Contains(relPath, "..") {
+			http.NotFound(w, r)
+			return
+		}
+
+		// 1. Check local core cache first (warlink_core/cache/static/...)
+		localCachedPath := filepath.Join(staticCacheDir, filepath.FromSlash(relPath))
+		if _, err := os.Stat(localCachedPath); err == nil {
+			w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+			http.ServeFile(w, r, localCachedPath)
+			return
+		}
+
+		// 2. Check local dev repository folders if available (guides/icons or guides/images)
+		if strings.HasPrefix(relPath, "wardogs/items/") {
+			slug := strings.TrimPrefix(relPath, "wardogs/items/")
+			for _, baseDir := range []string{exeDir, "."} {
+				devPath := filepath.Join(baseDir, "guides", "icons", filepath.FromSlash(slug))
+				if _, err := os.Stat(devPath); err == nil {
+					w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+					http.ServeFile(w, r, devPath)
+					return
+				}
+			}
+		} else if strings.HasPrefix(relPath, "wardogs/renders/") {
+			slug := strings.TrimPrefix(relPath, "wardogs/renders/")
+			for _, baseDir := range []string{exeDir, "."} {
+				devPath := filepath.Join(baseDir, "guides", "images", filepath.FromSlash(slug))
+				if _, err := os.Stat(devPath); err == nil {
+					w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+					http.ServeFile(w, r, devPath)
+					return
+				}
+			}
+		}
+
+		// 3. Proxy from gateway server static API and cache locally
+		serverAPI := singbox.GetServerAPI()
+		if serverAPI == "" {
+			serverAPI = "http://138.124.103.99"
+		}
+		targetURL := fmt.Sprintf("%s/static/%s", strings.TrimRight(serverAPI, "/"), relPath)
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Get(targetURL)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			defer resp.Body.Close()
+			data, err := io.ReadAll(resp.Body)
+			if err == nil && len(data) > 0 {
+				_ = os.MkdirAll(filepath.Dir(localCachedPath), 0755)
+				_ = os.WriteFile(localCachedPath, data, 0644)
+				w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+				http.ServeFile(w, r, localCachedPath)
+				return
+			}
+		}
+
+		http.NotFound(w, r)
+	}
+
+	// Route 1: Modern CDN Static
+	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		relPath := strings.TrimPrefix(r.URL.Path, "/static/")
+		serveStaticAsset(w, r, relPath)
+	})
+
+	// Route 2: Backward-compatible guides/ routing (transparently served from static)
+	mux.HandleFunc("/guides/", func(w http.ResponseWriter, r *http.Request) {
+		raw := strings.TrimPrefix(r.URL.Path, "/guides/")
+		var relPath string
+		if strings.HasPrefix(raw, "icons/") {
+			relPath = "wardogs/items/" + strings.TrimPrefix(raw, "icons/")
+		} else if strings.HasPrefix(raw, "images/") {
+			relPath = "wardogs/renders/" + strings.TrimPrefix(raw, "images/")
+		} else {
+			http.NotFound(w, r)
+			return
+		}
+		serveStaticAsset(w, r, relPath)
+	})
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.Lock()
@@ -2300,6 +2390,12 @@ func main() {
 
 	mux.HandleFunc("/api/progression/database", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		go func() {
+			serverAPI := singbox.GetServerAPI()
+			if serverAPI != "" {
+				_ = progression.SyncWithServer(serverAPI, deps.GetCoreDir())
+			}
+		}()
 		db := progression.GetDatabase()
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"unlocks": db.GetAllUnlocks(),
