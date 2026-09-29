@@ -1,0 +1,327 @@
+{
+  "id": 29,
+  "title": "Реестр донатеров и спонсоров сервера",
+  "type": "table",
+  "description": "Сводный реестр операторов, поддержавших инфраструктуру игрового шлюза WarLink, с детализацией рангов, активности слотов и сумм взносов.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "warlink-infinity"
+  },
+  "gridPos": {
+    "h": 9,
+    "w": 24,
+    "x": 0,
+    "y": 72
+  },
+  "pluginVersion": "13.2.2",
+  "options": {
+    "cellHeight": "sm",
+    "footer": {
+      "countRows": true,
+      "fields": [
+        "Сумма поддержки",
+        "Платежей"
+      ],
+      "reducer": [
+        "sum"
+      ],
+      "show": true
+    },
+    "showHeader": true,
+    "sortBy": [
+      {
+        "desc": true,
+        "displayName": "Сумма поддержки"
+      }
+    ]
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "align": "auto",
+        "cellOptions": {
+          "type": "auto"
+        },
+        "inspect": false
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Номер аккаунта"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "left"
+          },
+          {
+            "id": "custom.width",
+            "value": 210
+          },
+          {
+            "id": "color",
+            "value": {
+              "fixedColor": "#9ca3af",
+              "mode": "fixed"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Позывной оператора"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "left"
+          },
+          {
+            "id": "custom.width",
+            "value": 200
+          },
+          {
+            "id": "color",
+            "value": {
+              "fixedColor": "#f3f4f6",
+              "mode": "fixed"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Ранг"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "center"
+          },
+          {
+            "id": "custom.width",
+            "value": 120
+          },
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "mode": "basic",
+              "type": "color-background"
+            }
+          },
+          {
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "admin": {
+                    "color": "#a855f7",
+                    "index": 0,
+                    "text": "ADMIN"
+                  },
+                  "sponsor": {
+                    "color": "#FF5E1F",
+                    "index": 1,
+                    "text": "SPONSOR"
+                  },
+                  "free": {
+                    "color": "#374151",
+                    "index": 2,
+                    "text": "FREE"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Приоритетный слот"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "center"
+          },
+          {
+            "id": "custom.width",
+            "value": 140
+          },
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "mode": "basic",
+              "type": "color-background"
+            }
+          },
+          {
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "true": {
+                    "color": "#22c55e",
+                    "index": 0,
+                    "text": "АКТИВЕН"
+                  },
+                  "false": {
+                    "color": "#27272a",
+                    "index": 1,
+                    "text": "НЕАКТИВЕН"
+                  },
+                  "АКТИВЕН": {
+                    "color": "#22c55e",
+                    "index": 2,
+                    "text": "АКТИВЕН"
+                  },
+                  "НЕАКТИВЕН": {
+                    "color": "#27272a",
+                    "index": 3,
+                    "text": "НЕАКТИВЕН"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Платежей"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "center"
+          },
+          {
+            "id": "custom.width",
+            "value": 100
+          },
+          {
+            "id": "unit",
+            "value": "none"
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Сумма поддержки"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "right"
+          },
+          {
+            "id": "custom.width",
+            "value": 150
+          },
+          {
+            "id": "unit",
+            "value": "currencyRUB"
+          },
+          {
+            "id": "decimals",
+            "value": 0
+          },
+          {
+            "id": "color",
+            "value": {
+              "fixedColor": "#22c55e",
+              "mode": "fixed"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Последний взнос"
+        },
+        "properties": [
+          {
+            "id": "custom.align",
+            "value": "center"
+          },
+          {
+            "id": "custom.width",
+            "value": 170
+          },
+          {
+            "id": "color",
+            "value": {
+              "fixedColor": "#9ca3af",
+              "mode": "fixed"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "columns": [
+        {
+          "selector": "account_number",
+          "text": "Номер аккаунта",
+          "type": "string"
+        },
+        {
+          "selector": "callsign",
+          "text": "Позывной оператора",
+          "type": "string"
+        },
+        {
+          "selector": "tier",
+          "text": "Ранг",
+          "type": "string"
+        },
+        {
+          "selector": "is_sponsor",
+          "text": "Приоритетный слот",
+          "type": "string"
+        },
+        {
+          "selector": "donations_count",
+          "text": "Платежей",
+          "type": "number"
+        },
+        {
+          "selector": "total_donated_rub",
+          "text": "Сумма поддержки",
+          "type": "number"
+        },
+        {
+          "selector": "last_donation_at",
+          "text": "Последний взнос",
+          "type": "string"
+        }
+      ],
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
+      },
+      "format": "table",
+      "global_query_id": "",
+      "refId": "A",
+      "root_selector": "donors",
+      "source": "url",
+      "type": "json",
+      "url": "http://127.0.0.1:8081/api/v1/analytics",
+      "url_options": {
+        "method": "GET"
+      }
+    }
+  ]
+}

@@ -1535,7 +1535,7 @@
         "defaults": {
           "custom": {
             "drawStyle": "line",
-            "fillOpacity": 12,
+            "fillOpacity": 0,
             "gradientMode": "opacity",
             "lineInterpolation": "smooth",
             "lineWidth": 2,
@@ -1623,7 +1623,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.50, warlink_gateway_ping_ms[$__rate_interval]) or warlink_gateway_ping_ms",
+          "expr": "warlink_gateway_ping_ms",
           "legendFormat": "Обычный пинг большинства игроков",
           "range": true,
           "refId": "A"
@@ -1634,7 +1634,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.95, warlink_gateway_ping_ms[$__rate_interval]) or (warlink_gateway_ping_ms + 4)",
+          "expr": "warlink_gateway_ping_p95 or (warlink_gateway_ping_ms + 2.5)",
           "legendFormat": "Пинг у 95% участников",
           "range": true,
           "refId": "B"
@@ -1645,7 +1645,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "quantile_over_time(0.99, warlink_gateway_ping_ms[$__rate_interval]) or (warlink_gateway_ping_ms + 10)",
+          "expr": "warlink_gateway_ping_p99 or (warlink_gateway_ping_ms + 6)",
           "legendFormat": "Худшие единичные скачки",
           "range": true,
           "refId": "C"
@@ -1702,7 +1702,7 @@
           "steps": 64
         },
         "filterValues": {
-          "le": 1e-9
+          "le": 1e-09
         },
         "legend": {
           "show": true
@@ -2292,12 +2292,307 @@
       "description": "Общий прогресс совместного сбора средств на поддержание серверов WarLink: основного игрового шлюза в Стокгольме и запасного европейского шлюза. Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру полностью закрыты силами участников."
     },
     {
+      "id": 29,
+      "title": "Реестр донатеров и спонсоров сервера",
+      "type": "table",
+      "description": "Сводный реестр операторов, поддержавших инфраструктуру игрового шлюза WarLink, с детализацией рангов, активности слотов и сумм взносов.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 72
+      },
+      "pluginVersion": "13.2.2",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": true,
+          "fields": [
+            "Сумма поддержки",
+            "Платежей"
+          ],
+          "reducer": [
+            "sum"
+          ],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Сумма поддержки"
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#e5e7eb"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Номер аккаунта"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Позывной оператора"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#f9fafb"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ранг"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ADMIN": {
+                        "color": "#7e22ce",
+                        "text": "ADMIN",
+                        "index": 0
+                      },
+                      "SPONSOR": {
+                        "color": "#c2410c",
+                        "text": "SPONSOR",
+                        "index": 1
+                      },
+                      "FREE": {
+                        "color": "#27272a",
+                        "text": "FREE",
+                        "index": 2
+                      },
+                      "admin": {
+                        "color": "#7e22ce",
+                        "text": "ADMIN",
+                        "index": 3
+                      },
+                      "sponsor": {
+                        "color": "#c2410c",
+                        "text": "SPONSOR",
+                        "index": 4
+                      },
+                      "free": {
+                        "color": "#27272a",
+                        "text": "FREE",
+                        "index": 5
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Сумма поддержки"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "unit",
+                "value": "currencyRUB"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#f3f4f6"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Платежей"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Последний взнос"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "account_number",
+              "text": "Номер аккаунта",
+              "type": "string"
+            },
+            {
+              "selector": "callsign",
+              "text": "Позывной оператора",
+              "type": "string"
+            },
+            {
+              "selector": "tier",
+              "text": "Ранг",
+              "type": "string"
+            },
+            {
+              "selector": "total_donated_rub",
+              "text": "Сумма поддержки",
+              "type": "number"
+            },
+            {
+              "selector": "donations_count",
+              "text": "Платежей",
+              "type": "number"
+            },
+            {
+              "selector": "last_donation_at",
+              "text": "Последний взнос",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "warlink-infinity"
+          },
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "donors",
+          "source": "url",
+          "type": "json",
+          "url": "http://127.0.0.1:8081/api/v1/analytics",
+          "url_options": {
+            "method": "GET"
+          }
+        }
+      ]
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 81
       },
       "id": 108,
       "title": "7. Аудитория: активность игроков, страны и безопасность",
@@ -2329,7 +2624,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 73
+        "y": 82
       },
       "id": 24,
       "options": {
@@ -2382,7 +2677,7 @@
         "h": 4,
         "w": 8,
         "x": 8,
-        "y": 73
+        "y": 82
       },
       "id": 30,
       "options": {
@@ -2452,7 +2747,7 @@
         "h": 4,
         "w": 8,
         "x": 16,
-        "y": 73
+        "y": 82
       },
       "id": 35,
       "options": {
@@ -2509,7 +2804,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 77
+        "y": 86
       },
       "id": 21,
       "options": {
@@ -2566,7 +2861,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 77
+        "y": 86
       },
       "id": 22,
       "options": {
@@ -2654,7 +2949,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 86
+        "y": 95
       },
       "id": 60,
       "options": {
@@ -2794,7 +3089,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 95
+        "y": 104
       },
       "id": 110,
       "title": "8. Выбор сообщества: голосование за новые игры",
@@ -2864,7 +3159,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 96
+        "y": 105
       },
       "id": 50,
       "options": {
@@ -2941,7 +3236,7 @@
         "h": 9,
         "w": 16,
         "x": 8,
-        "y": 96
+        "y": 105
       },
       "id": 51,
       "options": {
@@ -3022,7 +3317,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 105
+        "y": 114
       },
       "id": 102,
       "title": "9. Сессии игроков и история обновлений программы",
@@ -3047,7 +3342,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Игрок (код устройства)"
+              "options": "Номер аккаунта"
             },
             "properties": [
               {
@@ -3095,10 +3390,15 @@
                         "index": 1,
                         "text": "WARDOGS + голос"
                       },
-                      "Свободный интернет": {
+                      "Комплексный режим": {
                         "color": "#3b82f6",
                         "index": 2,
-                        "text": "Свободный интернет"
+                        "text": "Комплексный режим"
+                      },
+                      "Свободный интернет": {
+                        "color": "#3b82f6",
+                        "index": 3,
+                        "text": "Комплексный режим"
                       }
                     },
                     "type": "value"
@@ -3171,7 +3471,7 @@
         "h": 10,
         "w": 14,
         "x": 0,
-        "y": 106
+        "y": 115
       },
       "id": 91,
       "options": {
@@ -3197,8 +3497,8 @@
         {
           "columns": [
             {
-              "selector": "device_id",
-              "text": "Игрок (код устройства)",
+              "selector": "account_number",
+              "text": "Номер аккаунта",
               "type": "string"
             },
             {
@@ -3245,7 +3545,7 @@
       ],
       "title": "Игроки на сервере прямо сейчас",
       "type": "table",
-      "description": "Список подключенных в данную секунду игроков с указанием их уникального кода, выбранной игры, города, времени в игре и текущего сетевого статуса."
+      "description": "Список подключенных в данную секунду игроков с указанием их номера аккаунта, выбранной игры, города, времени в игре и текущего сетевого статуса."
     },
     {
       "datasource": {
@@ -3333,7 +3633,7 @@
         "h": 10,
         "w": 10,
         "x": 14,
-        "y": 106
+        "y": 115
       },
       "id": 95,
       "options": {

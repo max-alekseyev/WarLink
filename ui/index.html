@@ -22,10 +22,10 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.1.6</span>
+                <span class="brand-version">v2.1.7</span>
             </div>
 
-            <!-- Global Airplane-Style Toggle: Free Internet -->
+            <!-- Global Airplane-Style Toggle: Complex Mode (DPI) -->
             <div class="titlebar-center">
                 <div id="free-net-control" class="free-net-toggle" onclick="toggleFreeInternet(event)">
                     <svg class="free-net-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -33,7 +33,7 @@
                         <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
                         <path d="M2 12h20"/>
                     </svg>
-                    <span class="free-net-title">Свободный интернет</span>
+                    <span class="free-net-title">Комплексный режим</span>
                     <span id="free-net-switch" class="switch-pill">
                         <span class="switch-thumb"></span>
                     </span>
@@ -49,6 +49,12 @@
                             <circle cx="12" cy="7" r="4"/>
                         </svg>
                     </div>
+                </button>
+                <button id="btn-progression-toggle" class="win-btn win-icon-btn" onclick="toggleProgression(event)" title="Уровень WARDOGS">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="7 11 12 6 17 11"/>
+                        <polyline points="7 18 12 13 17 18"/>
+                    </svg>
                 </button>
                 <button id="btn-sponsors-toggle" class="win-btn win-icon-btn" onclick="toggleSponsors(event)" title="Доска почёта спонсоров">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -84,7 +90,7 @@
         <!-- Main Workspace -->
         <main class="main-body">
             <!-- VIEW 1: Games Shortcuts Showcase -->
-            <div id="view-showcase" class="showcase-view">
+            <div id="view-showcase" class="showcase-view active">
                 <div class="showcase-header">
                     <span class="showcase-title">ВИТРИНА ИГР</span>
                     <span class="showcase-hint font-mono" style="font-size: 10px; color: var(--text-muted); line-height: 1;">Клик — запуск • ПКМ — меню</span>
@@ -112,6 +118,7 @@
             </div>
 
             <!-- Mount points for decomposed views and modals -->
+            <div data-partial="views/progression-view.html"></div>
             <div data-partial="views/settings-view.html"></div>
             <div data-partial="views/notifications-view.html"></div>
             <div data-partial="views/sponsors-view.html"></div>
@@ -199,12 +206,15 @@
     </div>
 
     <!-- Modular Script Bundle -->
+    <script src="js/store.js"></script>
     <script src="js/foley.js"></script>
     <script src="js/audio.js"></script>
     <script src="app.js"></script>
+    <script src="js/callsigns.js"></script>
     <script src="js/voting.js"></script>
     <script src="js/dossier.js"></script>
     <script src="js/sponsors.js"></script>
     <script src="js/account.js"></script>
+    <script src="js/progression.js"></script>
 </body>
 </html>

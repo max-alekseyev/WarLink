@@ -47,6 +47,29 @@ async function fetchSponsors() {
     const grid = document.getElementById('sponsors-grid');
     if (!grid) return;
 
+    if (typeof UIStore !== 'undefined' && typeof UIStore.requestSWR === 'function') {
+        await UIStore.requestSWR(
+            '/api/sponsors',
+            async () => {
+                const resp = await fetch('/api/sponsors');
+                if (!resp.ok) return null;
+                return await resp.json();
+            },
+            (data, isFresh) => {
+                const sponsors = (data && data.sponsors) ? data.sponsors : [];
+                cachedSponsors = sponsors;
+                updateCommunityGoal(cachedSponsors);
+                renderSponsors(cachedSponsors);
+            },
+            () => {
+                if (grid.children.length === 0) {
+                    grid.innerHTML = getSponsorsSkeletonHtml(4);
+                }
+            }
+        );
+        return;
+    }
+
     if (cachedSponsors !== null) {
         renderSponsors(cachedSponsors);
         updateCommunityGoal(cachedSponsors);
@@ -206,23 +229,27 @@ function renderSponsors(sponsors) {
         return;
     }
 
-    grid.innerHTML = displayedSponsors.map((s) => {
-        // Find original index in cachedSponsors so opening dossier references correct object
-        const originalIdx = cachedSponsors ? cachedSponsors.indexOf(s) : 0;
-        const avatarHtml = s.avatar_url ? `
-            <img class="sponsor-card-avatar" src="${escapeHtml(s.avatar_url)}" alt="">
-        ` : `
-            <div class="sponsor-card-placeholder">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
-                    <circle cx="12" cy="7" r="4"/>
-                </svg>
-            </div>
-        `;
+    // Keyed reconciliation to prevent DOM re-creation
+    const existingCards = new Map();
+    Array.from(grid.querySelectorAll('.sponsor-card[data-sponsor-key]')).forEach(el => {
+        existingCards.set(el.dataset.sponsorKey, el);
+    });
 
-        const nick = s.nickname ? escapeHtml(s.nickname) : `Игрок #${(s.account_number || '').slice(-4) || '????'}`;
-        
-        // Strict anonymity check: if user chose to hide amount, never render numbers!
+    if (existingCards.size === 0 && (grid.querySelector('.skeleton-card') || grid.querySelector('div:not(.sponsor-card)'))) {
+        grid.innerHTML = '';
+    }
+
+    const currentKeys = new Set();
+
+    displayedSponsors.forEach((s) => {
+        const originalIdx = cachedSponsors ? cachedSponsors.indexOf(s) : 0;
+        const sponsorKey = s.account_number || s.nickname || ('idx-' + originalIdx);
+        currentKeys.add(sponsorKey);
+
+        const cleanNick = (window.NobelCallsigns && window.NobelCallsigns.sanitizeNickname)
+            ? window.NobelCallsigns.sanitizeNickname(s.nickname, s.account_number)
+            : (s.nickname && !s.nickname.includes('****') ? s.nickname : 'Аноним');
+        const nick = escapeHtml(cleanNick);
         const isSecret = Boolean(s.hide_donation_amount || s.is_secret || s.secret_donations);
         let metaText = `Спонсор сервера • ${escapeHtml(s.joined_date || '')}`;
         if (isSecret) {
@@ -231,8 +258,59 @@ function renderSponsors(sponsors) {
             metaText = `Вклад: ${s.total_donated_rub} ₽ • ${escapeHtml(s.joined_date || '')}`;
         }
 
-        return `
-            <div class="sponsor-card" onclick="openSponsorDossierByIndex(${originalIdx >= 0 ? originalIdx : 0})" title="Посмотреть боевое досье оператора">
+        const existing = existingCards.get(sponsorKey);
+        if (existing) {
+            existing.onclick = () => openSponsorDossierByIndex(originalIdx >= 0 ? originalIdx : 0);
+            const nickEl = existing.querySelector('.sponsor-card-nick');
+            if (nickEl && nickEl.textContent !== nick) nickEl.textContent = nick;
+            const metaEl = existing.querySelector('.sponsor-card-meta');
+            if (metaEl && metaEl.textContent !== metaText) metaEl.textContent = metaText;
+
+            const imgEl = existing.querySelector('img.sponsor-card-avatar');
+            if (s.avatar_url) {
+                if (imgEl) {
+                    if (imgEl.src !== s.avatar_url) imgEl.src = s.avatar_url;
+                } else {
+                    const placeholder = existing.querySelector('.sponsor-card-placeholder');
+                    if (placeholder) {
+                        const newImg = document.createElement('img');
+                        newImg.className = 'sponsor-card-avatar';
+                        newImg.src = escapeHtml(s.avatar_url);
+                        newImg.alt = '';
+                        placeholder.replaceWith(newImg);
+                    }
+                }
+            } else if (imgEl) {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'sponsor-card-placeholder';
+                placeholder.innerHTML = `
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                `;
+                imgEl.replaceWith(placeholder);
+            }
+            grid.appendChild(existing);
+        } else {
+            const card = document.createElement('div');
+            card.className = 'sponsor-card';
+            card.dataset.sponsorKey = sponsorKey;
+            card.title = 'Посмотреть боевое досье оператора';
+            card.onclick = () => openSponsorDossierByIndex(originalIdx >= 0 ? originalIdx : 0);
+
+            const avatarHtml = s.avatar_url ? `
+                <img class="sponsor-card-avatar" src="${escapeHtml(s.avatar_url)}" alt="">
+            ` : `
+                <div class="sponsor-card-placeholder">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                </div>
+            `;
+
+            card.innerHTML = `
                 ${avatarHtml}
                 <div class="sponsor-card-info">
                     <span class="sponsor-card-nick">${nick}</span>
@@ -247,7 +325,14 @@ function renderSponsors(sponsors) {
                         <polyline points="10 9 9 9 8 9"/>
                     </svg>
                 </div>
-            </div>
-        `;
-    }).join('');
+            `;
+            grid.appendChild(card);
+        }
+    });
+
+    existingCards.forEach((el, key) => {
+        if (!currentKeys.has(key) && el.parentNode === grid) {
+            grid.removeChild(el);
+        }
+    });
 }

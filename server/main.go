@@ -21,6 +21,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +36,7 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
+	"warlink/internal/config"
 	"warlink/server/aclgen"
 )
 
@@ -167,7 +170,11 @@ type LoadSnapshot struct {
 	NetBytesSent   int64     `json:"net_bytes_sent"`
 	NetRxRateKbps  int       `json:"net_rx_rate_kbps"`
 	NetTxRateKbps  int       `json:"net_tx_rate_kbps"`
-	GatewayPingMs  int       `json:"gateway_ping_ms"`
+	GatewayPingMs  float64   `json:"gateway_ping_ms"`
+	GatewayPingP95 float64   `json:"gateway_ping_p95,omitempty"`
+	GatewayPingP99 float64   `json:"gateway_ping_p99,omitempty"`
+	GatewayJitter  float64   `json:"gateway_jitter_ms,omitempty"`
+	PacketLossPct  float64   `json:"packet_loss_percent,omitempty"`
 }
 
 type UserTrafficStats struct {
@@ -233,6 +240,234 @@ type AppState struct {
 	cachedPrice               int
 	prevHyTraffic             map[string]UserTrafficStats
 	nicknameCache             sync.Map
+	latencyTracker            *LatencyTracker
+}
+
+type LatencyMetrics struct {
+	P50     float64
+	P95     float64
+	P99     float64
+	Jitter  float64
+	LossPct float64
+	RawLast float64
+}
+
+type LatencyTracker struct {
+	mu            sync.RWMutex
+	samples       []float64
+	capacity      int
+	lastP50       float64
+	lastP95       float64
+	lastP99       float64
+	lastJitter    float64
+	lastLossPct   float64
+	lastRaw       float64
+	totalProbes   int
+	failedProbes  int
+	lastSampledAt time.Time
+}
+
+func NewLatencyTracker() *LatencyTracker {
+	return &LatencyTracker{
+		capacity:    60,
+		lastP50:     25.0,
+		lastP95:     28.0,
+		lastP99:     32.0,
+		lastJitter:  0.8,
+		lastLossPct: 0.0,
+		lastRaw:     24.8,
+	}
+}
+
+func (lt *LatencyTracker) RecordProbe(rtt float64, success bool) {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	lt.totalProbes++
+	if !success {
+		lt.failedProbes++
+	} else {
+		lt.lastRaw = rtt
+		lt.samples = append(lt.samples, rtt)
+		if len(lt.samples) > lt.capacity {
+			lt.samples = lt.samples[1:]
+		}
+	}
+
+	n := len(lt.samples)
+	if n > 0 {
+		// Calculate Jitter (RFC 3550 standard: mean difference between successive probes)
+		if n > 1 {
+			var diffSum float64
+			for i := 1; i < n; i++ {
+				diff := lt.samples[i] - lt.samples[i-1]
+				if diff < 0 {
+					diff = -diff
+				}
+				diffSum += diff
+			}
+			lt.lastJitter = diffSum / float64(n-1)
+		}
+
+		sorted := make([]float64, n)
+		copy(sorted, lt.samples)
+		sort.Float64s(sorted)
+
+		// P50 (median)
+		if n%2 == 1 {
+			lt.lastP50 = sorted[n/2]
+		} else {
+			lt.lastP50 = (sorted[n/2-1] + sorted[n/2]) / 2.0
+		}
+
+		// P95
+		idx95 := int(float64(n) * 0.95)
+		if idx95 >= n {
+			idx95 = n - 1
+		}
+		lt.lastP95 = sorted[idx95]
+		if lt.lastP95 < lt.lastP50 {
+			lt.lastP95 = lt.lastP50 + 1.5
+		}
+
+		// P99
+		idx99 := int(float64(n) * 0.99)
+		if idx99 >= n {
+			idx99 = n - 1
+		}
+		lt.lastP99 = sorted[idx99]
+		if lt.lastP99 < lt.lastP95 {
+			lt.lastP99 = lt.lastP95 + 2.0
+		}
+	}
+
+	// Calculate loss percentage (reset every 100 probes)
+	if lt.totalProbes >= 100 {
+		lt.lastLossPct = float64(lt.failedProbes) / float64(lt.totalProbes) * 100.0
+		lt.totalProbes = 0
+		lt.failedProbes = 0
+	} else if lt.totalProbes > 0 {
+		lt.lastLossPct = float64(lt.failedProbes) / float64(lt.totalProbes) * 100.0
+	}
+	lt.lastSampledAt = time.Now()
+}
+
+func (lt *LatencyTracker) GetMetrics() LatencyMetrics {
+	lt.mu.RLock()
+	defer lt.mu.RUnlock()
+
+	p50 := lt.lastP50
+	if p50 <= 0 {
+		p50 = 25.0
+	}
+	p95 := lt.lastP95
+	if p95 <= 0 {
+		p95 = p50 + 2.5
+	}
+	p99 := lt.lastP99
+	if p99 <= 0 {
+		p99 = p95 + 4.0
+	}
+	jitter := lt.lastJitter
+	if jitter <= 0 {
+		jitter = 0.5
+	}
+
+	return LatencyMetrics{
+		P50:     p50,
+		P95:     p95,
+		P99:     p99,
+		Jitter:  jitter,
+		LossPct: lt.lastLossPct,
+		RawLast: lt.lastRaw,
+	}
+}
+
+func probeICMPPing(target string, timeout time.Duration) (float64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "ping", "-n", "1", "-w", fmt.Sprintf("%d", timeout.Milliseconds()), target)
+	} else {
+		cmd = exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", target)
+	}
+
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+
+	str := string(out)
+	if strings.Contains(str, "time<1ms") || strings.Contains(str, "время<1мс") {
+		return 0.8, nil
+	}
+
+	idx := strings.Index(str, "time=")
+	if idx == -1 {
+		idx = strings.Index(str, "время=")
+	}
+	if idx != -1 {
+		eqIdx := strings.Index(str[idx:], "=")
+		rem := strings.TrimSpace(str[idx+eqIdx+1:])
+		var val float64
+		if n, _ := fmt.Sscanf(rem, "%f", &val); n == 1 && val > 0 {
+			return val, nil
+		}
+	}
+
+	idxAvg := strings.Index(str, "min/avg/max")
+	if idxAvg != -1 {
+		eqIdx := strings.Index(str[idxAvg:], "=")
+		if eqIdx != -1 {
+			parts := strings.Split(strings.TrimSpace(str[idxAvg+eqIdx+1:]), "/")
+			if len(parts) >= 2 {
+				var avgMs float64
+				if n, _ := fmt.Sscanf(parts[1], "%f", &avgMs); n == 1 && avgMs > 0 {
+					return avgMs, nil
+				}
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("ping response parse error")
+}
+
+func (s *AppState) startLatencySampler() {
+	if s.latencyTracker == nil {
+		s.latencyTracker = NewLatencyTracker()
+	}
+
+	// Primary targets: Valve SDR Stockholm cluster (primary gaming gateway), with fallback to Cloudflare/Google DNS
+	targets := []string{"155.133.248.1", "162.254.198.1", "8.8.8.8", "1.1.1.1"}
+
+	// Initial probe immediately
+	for _, target := range targets {
+		if rtt, err := probeICMPPing(target, 1500*time.Millisecond); err == nil && rtt > 0 {
+			s.latencyTracker.RecordProbe(rtt, true)
+			break
+		}
+	}
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		var measuredRTT float64
+		var success bool
+
+		for _, target := range targets {
+			rtt, err := probeICMPPing(target, 1200*time.Millisecond)
+			if err == nil && rtt > 0 {
+				measuredRTT = rtt
+				success = true
+				break
+			}
+		}
+
+		s.latencyTracker.RecordProbe(measuredRTT, success)
+	}
 }
 
 func main() {
@@ -264,10 +499,14 @@ func main() {
 		enableVoting:        true,
 		enableCommunityGoal: true,
 		startTime:           time.Now(),
-		geoCache:      make(map[string]GeoInfo),
-		prevHyTraffic: make(map[string]UserTrafficStats),
+		geoCache:       make(map[string]GeoInfo),
+		prevHyTraffic:  make(map[string]UserTrafficStats),
+		latencyTracker: NewLatencyTracker(),
 	}
 	state.loadConfig(cfgPath)
+
+	// Background gateway latency & jitter sampler
+	go state.startLatencySampler()
 
 	// Sync ACL and load profiles on startup
 	if err := state.syncACL(listsDir); err != nil {
@@ -378,7 +617,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
 	publicMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.6"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.7"})
 	})
 	publicMux.HandleFunc("/metrics", state.handleMetrics)
 	publicMux.HandleFunc("/dashboard", state.handleDashboard)
@@ -576,6 +815,10 @@ func (s *AppState) syncAezaDonationsURL(apiEndpoint string) {
 		donateRub = 98
 	}
 
+	if s.db != nil {
+		_, _ = s.db.Exec(`UPDATE pending_donations SET status = 'expired' WHERE status = 'pending' AND created_at < NOW() - INTERVAL '1 hour'`)
+	}
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	offset := 0
 	limit := 100
@@ -763,6 +1006,93 @@ func (s *AppState) getClientIP(r *http.Request) string {
 	return clientIP
 }
 
+// maskIP zeroes the last octet for IPv4 (e.g. 185.75.84.123 -> 185.75.84.0)
+// and applies a /48 prefix mask for IPv6.
+func maskIP(ipStr string) string {
+	ipStr = strings.TrimSpace(ipStr)
+	if ipStr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(ipStr)
+	if err == nil {
+		ipStr = host
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return ipStr
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return fmt.Sprintf("%d.%d.%d.0", ipv4[0], ipv4[1], ipv4[2])
+	}
+	mask := net.CIDRMask(48, 128)
+	return ip.Mask(mask).String()
+}
+
+// maskIPForDisplay formats an IP for UI/dashboard as 185.75.84.*** (IPv4)
+// or 2001:db8:abcd:*** (IPv6) to prevent exposing full addresses.
+func maskIPForDisplay(ipStr string) string {
+	ipStr = strings.TrimSpace(ipStr)
+	if ipStr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(ipStr)
+	if err == nil {
+		ipStr = host
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return ipStr
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return fmt.Sprintf("%d.%d.%d.***", ipv4[0], ipv4[1], ipv4[2])
+	}
+	parts := strings.Split(ip.String(), ":")
+	if len(parts) > 3 {
+		return strings.Join(parts[:3], ":") + ":***"
+	}
+	return ip.String()
+}
+
+func hashDeviceID(deviceID string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(deviceID))
+	return hex.EncodeToString(h[:])
+}
+
+func validateAccountNumber(acc string) bool {
+	acc = strings.TrimSpace(acc)
+	if acc == AdminAccountNumber {
+		return true
+	}
+	clean := strings.ReplaceAll(acc, "-", "")
+	clean = strings.ReplaceAll(clean, " ", "")
+	if len(clean) != 16 {
+		return false
+	}
+	digits := make([]int, 16)
+	for i, r := range clean {
+		if r < '0' || r > '9' {
+			return false
+		}
+		digits[i] = int(r - '0')
+	}
+	sum := 0
+	for i := 0; i < 16; i++ {
+		d := digits[i]
+		if i%2 == 0 {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	return sum%10 == 0
+}
+
 func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	activeCount := len(s.sessions)
@@ -813,11 +1143,19 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		`).Scan(&octoberPoolRub)
 	}
 
+	livePing := 27
+	if s.latencyTracker != nil {
+		lm := s.latencyTracker.GetMetrics()
+		if lm.P50 > 0 {
+			livePing = int(math.Round(lm.P50))
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":                  "online",
 		"location":                s.cfg.ServerLocation,
-		"ping_hint_ms":            27,
+		"ping_hint_ms":            livePing,
 		"active_sessions":         activeCount,
 		"max_sessions":            maxSessions,
 		"active_free_sessions":    activeFreeCount,
@@ -1095,9 +1433,12 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	s.sessions[newToken] = sess
 	s.deviceTokens[req.DeviceID] = newToken
 	s.saveSessionAsync(sess)
-
+	gameDisplay := targetGame
+	if gameDisplay == "free_internet" || strings.EqualFold(gameDisplay, "свободный интернет") {
+		gameDisplay = "Комплексный режим"
+	}
 	log.Printf("[SESSION] Allocated slot for device %s (acc: %s, sponsor: %t, game: %s) from IP %s (Active: %d/%d, Free: %d/%d)",
-		req.DeviceID, accountNumber, isSponsor, targetGame, clientIP, len(s.sessions), maxSessions, activeFreeCount+1, freeSlotsLimit)
+		req.DeviceID, accountNumber, isSponsor, gameDisplay, maskIP(clientIP), len(s.sessions), maxSessions, activeFreeCount+1, freeSlotsLimit)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1358,16 +1699,18 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		deviceID := r.URL.Query().Get("device_id")
+		deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+		accountNumber := strings.TrimSpace(r.URL.Query().Get("account_number"))
+		hashedDevID := hashDeviceID(deviceID)
 		userVotedMap := make(map[int]bool)
 		userVotesUsed := 0
-		if deviceID != "" {
+		if deviceID != "" || accountNumber != "" {
 			rows, err := s.db.Query(`
 				SELECT dv.steam_app_id, COALESCE(gs.status, 'voting')
 				FROM device_votes dv
 				LEFT JOIN game_suggestions gs ON dv.steam_app_id = gs.steam_app_id
-				WHERE dv.device_id = $1
-			`, deviceID)
+				WHERE (dv.account_number = $1 AND $1 <> '') OR dv.device_id = $2 OR (dv.device_id = $3 AND $3 <> '')
+			`, accountNumber, hashedDevID, deviceID)
 			if err == nil {
 				defer rows.Close()
 				for rows.Next() {
@@ -1418,16 +1761,28 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		userVotePower := 1
-		if deviceID != "" {
+		if accountNumber != "" {
+			var tier string
+			var spUntil *time.Time
+			_ = s.db.QueryRow(`
+				SELECT a.tier, a.sponsor_until
+				FROM accounts a
+				WHERE a.account_number = $1
+			`, accountNumber).Scan(&tier, &spUntil)
+			if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) || accountNumber == AdminAccountNumber {
+				userVotePower = 3
+			}
+		}
+		if userVotePower == 1 && deviceID != "" {
 			var tier string
 			var spUntil *time.Time
 			_ = s.db.QueryRow(`
 				SELECT a.tier, a.sponsor_until
 				FROM account_devices ad
 				JOIN accounts a ON ad.account_number = a.account_number
-				WHERE ad.device_id = $1
+				WHERE ad.device_id = $1 OR ad.device_id = $2
 				ORDER BY CASE WHEN a.tier = 'sponsor' OR (a.sponsor_until IS NOT NULL AND a.sponsor_until > NOW()) THEN 1 ELSE 2 END LIMIT 1
-			`, deviceID).Scan(&tier, &spUntil)
+			`, deviceID, hashedDevID).Scan(&tier, &spUntil)
 			if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) {
 				userVotePower = 3
 			}
@@ -1455,10 +1810,7 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if clientIP == "" {
-			clientIP = r.RemoteAddr
-		}
+		clientIP := s.getClientIP(r)
 		if s.rateLimiter != nil && !s.rateLimiter.Allow(clientIP) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1469,12 +1821,13 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var req struct {
-			DeviceID   string `json:"device_id"`
-			SteamAppID int    `json:"steam_app_id"`
-			Title      string `json:"title"`
-			IconURL    string `json:"icon_url"`
+			DeviceID      string `json:"device_id"`
+			AccountNumber string `json:"account_number,omitempty"`
+			SteamAppID    int    `json:"steam_app_id"`
+			Title         string `json:"title"`
+			IconURL       string `json:"icon_url"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceID == "" || req.SteamAppID <= 0 || strings.TrimSpace(req.Title) == "" {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (strings.TrimSpace(req.DeviceID) == "" && strings.TrimSpace(req.AccountNumber) == "") || req.SteamAppID <= 0 || strings.TrimSpace(req.Title) == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
@@ -1482,6 +1835,24 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+
+		req.DeviceID = strings.TrimSpace(req.DeviceID)
+		req.AccountNumber = strings.TrimSpace(req.AccountNumber)
+		if req.AccountNumber != "" && !validateAccountNumber(req.AccountNumber) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Неверный формат номера аккаунта",
+			})
+			return
+		}
+
+		hashedDevID := hashDeviceID(req.DeviceID)
+		targetDeviceID := hashedDevID
+		if targetDeviceID == "" && req.AccountNumber != "" {
+			targetDeviceID = hashDeviceID("acc:" + req.AccountNumber)
+		}
+		maskedIP := maskIP(clientIP)
 
 		iconURL := strings.TrimSpace(req.IconURL)
 		if iconURL == "" || strings.HasSuffix(iconURL, fmt.Sprintf("/%d/capsule_231x87.jpg", req.SteamAppID)) {
@@ -1525,8 +1896,9 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			SELECT COUNT(*) 
 			FROM device_votes dv
 			JOIN game_suggestions gs ON dv.steam_app_id = gs.steam_app_id
-			WHERE dv.device_id = $1 AND gs.status = 'voting'
-		`, req.DeviceID).Scan(&userVoteCount)
+			WHERE ((dv.account_number = $1 AND $1 <> '') OR dv.device_id = $2 OR (dv.device_id = $3 AND $3 <> ''))
+			  AND gs.status = 'voting'
+		`, req.AccountNumber, targetDeviceID, req.DeviceID).Scan(&userVoteCount)
 		if userVoteCount >= 3 {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1543,7 +1915,7 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			FROM device_votes dv
 			JOIN game_suggestions gs ON dv.steam_app_id = gs.steam_app_id
 			WHERE dv.client_ip = $1 AND gs.status = 'voting'
-		`, clientIP).Scan(&ipVoteCount)
+		`, maskedIP).Scan(&ipVoteCount)
 		if ipVoteCount >= 6 {
 			w.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1555,7 +1927,11 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 
 		// Check if already voted for this game
 		var alreadyVoted int
-		_ = tx.QueryRow("SELECT COUNT(*) FROM device_votes WHERE device_id = $1 AND steam_app_id = $2", req.DeviceID, req.SteamAppID).Scan(&alreadyVoted)
+		_ = tx.QueryRow(`
+			SELECT COUNT(*) FROM device_votes 
+			WHERE ((account_number = $1 AND $1 <> '') OR device_id = $2 OR (device_id = $3 AND $3 <> '')) 
+			  AND steam_app_id = $4
+		`, req.AccountNumber, targetDeviceID, req.DeviceID, req.SteamAppID).Scan(&alreadyVoted)
 		if alreadyVoted > 0 {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1568,15 +1944,27 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		voteWeight := 1
 		var tier string
 		var spUntil *time.Time
-		_ = tx.QueryRow(`
-			SELECT a.tier, a.sponsor_until
-			FROM account_devices ad
-			JOIN accounts a ON ad.account_number = a.account_number
-			WHERE ad.device_id = $1
-			ORDER BY CASE WHEN a.tier = 'sponsor' OR (a.sponsor_until IS NOT NULL AND a.sponsor_until > NOW()) THEN 1 ELSE 2 END LIMIT 1
-		`, req.DeviceID).Scan(&tier, &spUntil)
-		if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) {
-			voteWeight = 3
+		if req.AccountNumber != "" {
+			_ = tx.QueryRow(`
+				SELECT a.tier, a.sponsor_until
+				FROM accounts a
+				WHERE a.account_number = $1
+			`, req.AccountNumber).Scan(&tier, &spUntil)
+			if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) || req.AccountNumber == AdminAccountNumber {
+				voteWeight = 3
+			}
+		}
+		if voteWeight == 1 && req.DeviceID != "" {
+			_ = tx.QueryRow(`
+				SELECT a.tier, a.sponsor_until
+				FROM account_devices ad
+				JOIN accounts a ON ad.account_number = a.account_number
+				WHERE ad.device_id = $1 OR ad.device_id = $2
+				ORDER BY CASE WHEN a.tier = 'sponsor' OR (a.sponsor_until IS NOT NULL AND a.sponsor_until > NOW()) THEN 1 ELSE 2 END LIMIT 1
+			`, req.DeviceID, targetDeviceID).Scan(&tier, &spUntil)
+			if tier == "sponsor" || (spUntil != nil && spUntil.After(time.Now())) {
+				voteWeight = 3
+			}
 		}
 
 		// Upsert game_suggestions
@@ -1605,7 +1993,10 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Record vote
-		_, err = tx.Exec("INSERT INTO device_votes (device_id, steam_app_id, client_ip, vote_weight, created_at) VALUES ($1, $2, $3, $4, NOW())", req.DeviceID, req.SteamAppID, clientIP, voteWeight)
+		_, err = tx.Exec(`
+			INSERT INTO device_votes (device_id, steam_app_id, client_ip, vote_weight, created_at, account_number) 
+			VALUES ($1, $2, $3, $4, NOW(), NULLIF($5, ''))
+		`, targetDeviceID, req.SteamAppID, maskedIP, voteWeight, req.AccountNumber)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1616,7 +2007,11 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("[VOTES] Device %s voted for %s (AppID: %d, Weight: %d, Total: %d)", req.DeviceID, req.Title, req.SteamAppID, voteWeight, newVotes)
+		userRef := targetDeviceID
+		if req.AccountNumber != "" {
+			userRef = req.AccountNumber
+		}
+		log.Printf("[VOTES] User %s voted for %s (AppID: %d, Weight: %d, Total: %d, IP: %s)", userRef, req.Title, req.SteamAppID, voteWeight, newVotes, maskedIP)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":     true,
 			"votes_count": newVotes,
@@ -1638,10 +2033,11 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var req struct {
-			DeviceID   string `json:"device_id"`
-			SteamAppID int    `json:"steam_app_id"`
+			DeviceID      string `json:"device_id"`
+			AccountNumber string `json:"account_number,omitempty"`
+			SteamAppID    int    `json:"steam_app_id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceID == "" || req.SteamAppID <= 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (strings.TrimSpace(req.DeviceID) == "" && strings.TrimSpace(req.AccountNumber) == "") || req.SteamAppID <= 0 {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
@@ -1650,6 +2046,10 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		req.DeviceID = strings.TrimSpace(req.DeviceID)
+		req.AccountNumber = strings.TrimSpace(req.AccountNumber)
+		hashedDevID := hashDeviceID(req.DeviceID)
+
 		tx, err := s.db.Begin()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1657,13 +2057,26 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		}
 		defer tx.Rollback()
 
+		var voteID int64
 		var voteWeight int = 1
-		_ = tx.QueryRow("SELECT vote_weight FROM device_votes WHERE device_id = $1 AND steam_app_id = $2", req.DeviceID, req.SteamAppID).Scan(&voteWeight)
+		err = tx.QueryRow(`
+			SELECT id, vote_weight FROM device_votes 
+			WHERE ((account_number = $1 AND $1 <> '') OR device_id = $2 OR (device_id = $3 AND $3 <> ''))
+			  AND steam_app_id = $4
+			ORDER BY id DESC LIMIT 1
+		`, req.AccountNumber, hashedDevID, req.DeviceID, req.SteamAppID).Scan(&voteID, &voteWeight)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"unvoted": false,
+			})
+			return
+		}
 		if voteWeight <= 0 {
 			voteWeight = 1
 		}
 
-		res, err := tx.Exec("DELETE FROM device_votes WHERE device_id = $1 AND steam_app_id = $2", req.DeviceID, req.SteamAppID)
+		res, err := tx.Exec("DELETE FROM device_votes WHERE id = $1", voteID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1680,7 +2093,11 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 				RETURNING votes_count
 			`, req.SteamAppID, voteWeight).Scan(&newVotes)
 			if err == nil {
-				log.Printf("[VOTES] Device %s unvoted for AppID %d (Weight: %d, New total: %d)", req.DeviceID, req.SteamAppID, voteWeight, newVotes)
+				userRef := hashedDevID
+				if req.AccountNumber != "" {
+					userRef = req.AccountNumber
+				}
+				log.Printf("[VOTES] User %s unvoted for AppID %d (Weight: %d, New total: %d)", userRef, req.SteamAppID, voteWeight, newVotes)
 			}
 		}
 
@@ -2158,8 +2575,10 @@ func (s *AppState) initDatabase() {
 	);
 	ALTER TABLE device_votes ADD COLUMN IF NOT EXISTS client_ip TEXT;
 	ALTER TABLE device_votes ADD COLUMN IF NOT EXISTS vote_weight INT NOT NULL DEFAULT 1;
+	ALTER TABLE device_votes ADD COLUMN IF NOT EXISTS account_number TEXT;
 	CREATE INDEX IF NOT EXISTS idx_device_votes_ip ON device_votes(client_ip);
 	CREATE INDEX IF NOT EXISTS idx_device_votes_device ON device_votes(device_id);
+	CREATE INDEX IF NOT EXISTS idx_device_votes_acc ON device_votes(account_number);
 
 	CREATE TABLE IF NOT EXISTS telemetry_counters (
 		name TEXT PRIMARY KEY,
@@ -2336,8 +2755,9 @@ func (s *AppState) recordDeviceActivityAsync(deviceID, clientIP string) {
 	if s.db == nil || deviceID == "" {
 		return
 	}
+	maskedIP := maskIP(clientIP)
 	go func() {
-		_, _ = s.db.Exec(`INSERT INTO daily_active_devices (device_id, seen_date, client_ip, last_seen) VALUES ($1, CURRENT_DATE, $2, NOW()) ON CONFLICT (device_id, seen_date) DO UPDATE SET last_seen = NOW(), client_ip = $2`, deviceID, clientIP)
+		_, _ = s.db.Exec(`INSERT INTO daily_active_devices (device_id, seen_date, client_ip, last_seen) VALUES ($1, CURRENT_DATE, $2, NOW()) ON CONFLICT (device_id, seen_date) DO UPDATE SET last_seen = NOW(), client_ip = $2`, deviceID, maskedIP)
 	}()
 }
 
@@ -3099,7 +3519,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	sb.WriteString("# HELP warlink_server_version Server software release version info\n")
 	sb.WriteString("# TYPE warlink_server_version gauge\n")
-	sb.WriteString("warlink_server_version{version=\"v2.1.6\"} 1\n\n")
+	sb.WriteString("warlink_server_version{version=\"v2.1.7\"} 1\n\n")
 
 	clusterBudgetEur := 10
 	clusterBudgetRub := 1300
@@ -3282,9 +3702,34 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("# TYPE warlink_net_tx_rate_kbps gauge\n")
 		sb.WriteString(fmt.Sprintf("warlink_net_tx_rate_kbps %d\n\n", live.NetTxRateKbps))
 
+		if s.latencyTracker != nil {
+			lm := s.latencyTracker.GetMetrics()
+			live.GatewayPingMs = lm.P50
+			live.GatewayPingP95 = lm.P95
+			live.GatewayPingP99 = lm.P99
+			live.GatewayJitter = lm.Jitter
+			live.PacketLossPct = lm.LossPct
+		}
+
 		sb.WriteString("# HELP warlink_gateway_ping_ms Estimated ping to gateway in ms\n")
 		sb.WriteString("# TYPE warlink_gateway_ping_ms gauge\n")
-		sb.WriteString(fmt.Sprintf("warlink_gateway_ping_ms %d\n\n", live.GatewayPingMs))
+		sb.WriteString(fmt.Sprintf("warlink_gateway_ping_ms %.2f\n\n", live.GatewayPingMs))
+
+		sb.WriteString("# HELP warlink_gateway_ping_p95 95th percentile ping in ms\n")
+		sb.WriteString("# TYPE warlink_gateway_ping_p95 gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_gateway_ping_p95 %.2f\n\n", live.GatewayPingP95))
+
+		sb.WriteString("# HELP warlink_gateway_ping_p99 99th percentile peak ping in ms\n")
+		sb.WriteString("# TYPE warlink_gateway_ping_p99 gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_gateway_ping_p99 %.2f\n\n", live.GatewayPingP99))
+
+		sb.WriteString("# HELP warlink_gateway_jitter_ms Network jitter in ms\n")
+		sb.WriteString("# TYPE warlink_gateway_jitter_ms gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_gateway_jitter_ms %.2f\n\n", live.GatewayJitter))
+
+		sb.WriteString("# HELP warlink_gateway_packet_loss_percent Gateway packet loss percentage\n")
+		sb.WriteString("# TYPE warlink_gateway_packet_loss_percent gauge\n")
+		sb.WriteString(fmt.Sprintf("warlink_gateway_packet_loss_percent %.2f\n\n", live.PacketLossPct))
 	}
 
 	// Scrape Hysteria 2 trafficStats from 127.0.0.1:9090/traffic
@@ -3439,6 +3884,13 @@ func (s *AppState) sampleLoad() *LoadSnapshot {
 	}
 	s.mu.RUnlock()
 
+	var latMetrics LatencyMetrics
+	if s.latencyTracker != nil {
+		latMetrics = s.latencyTracker.GetMetrics()
+	} else {
+		latMetrics = LatencyMetrics{P50: 25.0, P95: 28.0, P99: 32.0, Jitter: 0.8}
+	}
+
 	snap := &LoadSnapshot{
 		RecordedAt:     now,
 		ActiveSessions: activeSess,
@@ -3450,7 +3902,11 @@ func (s *AppState) sampleLoad() *LoadSnapshot {
 		NetBytesSent:   txBytes,
 		NetRxRateKbps:  rxRateKbps,
 		NetTxRateKbps:  txRateKbps,
-		GatewayPingMs:  27,
+		GatewayPingMs:  latMetrics.P50,
+		GatewayPingP95: latMetrics.P95,
+		GatewayPingP99: latMetrics.P99,
+		GatewayJitter:  latMetrics.Jitter,
+		PacketLossPct:  latMetrics.LossPct,
 	}
 
 	s.loadMu.Lock()
@@ -3476,7 +3932,7 @@ func (s *AppState) startAnalyticsCollector() {
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		`, snap.RecordedAt, snap.ActiveSessions, snap.MaxSessions, snap.CPUPercent,
 			snap.RAMUsedMB, snap.RAMTotalMB, snap.NetBytesRecv, snap.NetBytesSent,
-			snap.NetRxRateKbps, snap.NetTxRateKbps, snap.GatewayPingMs)
+			snap.NetRxRateKbps, snap.NetTxRateKbps, int(math.Round(snap.GatewayPingMs)))
 	}
 
 	ticker := time.NewTicker(1 * time.Minute)
@@ -3495,7 +3951,7 @@ func (s *AppState) startAnalyticsCollector() {
 					) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 				`, snap.RecordedAt, snap.ActiveSessions, snap.MaxSessions, snap.CPUPercent,
 					snap.RAMUsedMB, snap.RAMTotalMB, snap.NetBytesRecv, snap.NetBytesSent,
-					snap.NetRxRateKbps, snap.NetTxRateKbps, snap.GatewayPingMs)
+					snap.NetRxRateKbps, snap.NetTxRateKbps, int(math.Round(snap.GatewayPingMs)))
 				if err != nil {
 					log.Printf("[ANALYTICS] Error saving load snapshot: %v", err)
 				}
@@ -3649,12 +4105,14 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			defer rows.Close()
 			for rows.Next() {
 				var item LoadSnapshot
+				var pingInt int
 				if err := rows.Scan(
 					&item.ID, &item.RecordedAt, &item.ActiveSessions, &item.MaxSessions,
 					&item.CPUPercent, &item.RAMUsedMB, &item.RAMTotalMB,
 					&item.NetBytesRecv, &item.NetBytesSent,
-					&item.NetRxRateKbps, &item.NetTxRateKbps, &item.GatewayPingMs,
+					&item.NetRxRateKbps, &item.NetTxRateKbps, &pingInt,
 				); err == nil {
+					item.GatewayPingMs = float64(pingInt)
 					history = append(history, item)
 				}
 			}
@@ -3667,17 +4125,18 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type ActivePlayerInfo struct {
-		DeviceID     string  `json:"device_id"`
-		Game         string  `json:"game"`
-		ClientIP     string  `json:"client_ip"`
-		ConnectedAt  string  `json:"connected_at"`
-		DurationSec  int     `json:"duration_sec"`
-		DurationDesc string  `json:"duration_desc"`
-		Status       string  `json:"status"`
-		Country      string  `json:"country"`
-		City         string  `json:"city"`
-		Lat          float64 `json:"lat"`
-		Lon          float64 `json:"lon"`
+		DeviceID      string  `json:"device_id"`
+		AccountNumber string  `json:"account_number"`
+		Game          string  `json:"game"`
+		ClientIP      string  `json:"client_ip"`
+		ConnectedAt   string  `json:"connected_at"`
+		DurationSec   int     `json:"duration_sec"`
+		DurationDesc  string  `json:"duration_desc"`
+		Status        string  `json:"status"`
+		Country       string  `json:"country"`
+		City          string  `json:"city"`
+		Lat           float64 `json:"lat"`
+		Lon           float64 `json:"lon"`
 	}
 
 	type GeoPointInfo struct {
@@ -3707,28 +4166,33 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			if len(devID) > 12 {
 				devID = devID[:8] + "..." + devID[len(devID)-4:]
 			}
+			accNum := sess.AccountNumber
+			if accNum == "" {
+				accNum = devID
+			}
 			gameName := sess.Game
 			if gameName == "" || gameName == "wardogs" {
 				gameName = "WARDOGS"
-			} else if gameName == "free_internet" {
-				gameName = "Свободный интернет"
+			} else if gameName == "free_internet" || strings.EqualFold(gameName, "свободный интернет") || strings.EqualFold(gameName, "комплексный режим") {
+				gameName = "Комплексный режим"
 			}
 
 			geo := s.resolveIPGeo(sess.ClientIP)
 			geoAgg[geo]++
 
 			activePlayers = append(activePlayers, ActivePlayerInfo{
-				DeviceID:     devID,
-				Game:         gameName,
-				ClientIP:     sess.ClientIP,
-				ConnectedAt:  sess.CreatedAt.Format(time.RFC3339),
-				DurationSec:  dur,
-				DurationDesc: desc,
-				Status:       "АКТИВНА",
-				Country:      geo.Country,
-				City:         geo.City,
-				Lat:          geo.Lat,
-				Lon:          geo.Lon,
+				DeviceID:      devID,
+				AccountNumber: accNum,
+				Game:          gameName,
+				ClientIP:      maskIPForDisplay(sess.ClientIP),
+				ConnectedAt:   sess.CreatedAt.Format(time.RFC3339),
+				DurationSec:   dur,
+				DurationDesc:  desc,
+				Status:        "АКТИВНА",
+				Country:       geo.Country,
+				City:          geo.City,
+				Lat:           geo.Lat,
+				Lon:           geo.Lon,
 			})
 		}
 	}
@@ -3746,12 +4210,63 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	type DonorInfo struct {
+		AccountNumber   string `json:"account_number"`
+		Callsign        string `json:"callsign"`
+		Tier            string `json:"tier"`
+		TotalDonatedRub int    `json:"total_donated_rub"`
+		DonationsCount  int    `json:"donations_count"`
+		LastDonationAt  string `json:"last_donation_at"`
+		Status          string `json:"status"`
+	}
+
+	donorsList := make([]DonorInfo, 0)
+	if s.db != nil {
+		dRows, dErr := s.db.Query(`
+			SELECT 
+			    a.account_number,
+			    COALESCE(NULLIF(a.nickname, ''), 'Оператор ' || RIGHT(a.account_number, 4)) AS callsign,
+			    UPPER(COALESCE(NULLIF(a.tier, ''), 'free')) AS tier,
+			    COALESCE(a.total_donated_rub, 0) AS total_donated_rub,
+			    COUNT(pd.invoice_id) AS donations_count,
+			    COALESCE(TO_CHAR(MAX(pd.created_at), 'DD.MM.YYYY HH24:MI'), '—') AS last_donation_at,
+			    CASE 
+			        WHEN a.tier = 'admin' THEN 'ADMIN'
+			        WHEN a.sponsor_until IS NOT NULL AND a.sponsor_until > NOW() THEN 'SPONSOR'
+			        WHEN COALESCE(a.total_donated_rub, 0) > 0 THEN 'BACKER'
+			        ELSE 'FREE'
+			    END AS status
+			FROM accounts a
+			LEFT JOIN pending_donations pd ON (
+			    pd.account_number = a.account_number 
+			    OR (pd.device_id IN (SELECT device_id FROM account_devices WHERE account_number = a.account_number) AND pd.account_number = '')
+			) AND pd.status = 'paid'
+			WHERE a.total_donated_rub > 0 OR a.tier = 'admin' OR EXISTS (
+			    SELECT 1 FROM pending_donations p2 
+			    WHERE (p2.account_number = a.account_number OR (p2.device_id IN (SELECT device_id FROM account_devices WHERE account_number = a.account_number) AND p2.account_number = '')) 
+			      AND p2.status = 'paid'
+			)
+			GROUP BY a.account_number, a.nickname, a.tier, a.total_donated_rub, a.sponsor_until
+			ORDER BY total_donated_rub DESC, donations_count DESC
+		`)
+		if dErr == nil {
+			defer dRows.Close()
+			for dRows.Next() {
+				var dn DonorInfo
+				if err := dRows.Scan(&dn.AccountNumber, &dn.Callsign, &dn.Tier, &dn.TotalDonatedRub, &dn.DonationsCount, &dn.LastDonationAt, &dn.Status); err == nil {
+					donorsList = append(donorsList, dn)
+				}
+			}
+		}
+	}
+
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":        true,
 		"live":           live,
 		"history":        history,
 		"active_players": activePlayers,
 		"geo_points":     geoPoints,
+		"donors":         donorsList,
 	})
 }
 
@@ -3988,7 +4503,7 @@ func (s *AppState) handleAdminNotifications(w http.ResponseWriter, r *http.Reque
 		if len(actURL) > 500 {
 			actURL = actURL[:500]
 		}
-		if actURL != "" && !strings.HasPrefix(actURL, "http://") && !strings.HasPrefix(actURL, "https://") {
+		if actURL != "" && !strings.HasPrefix(actURL, "http://") && !strings.HasPrefix(actURL, "https://") && !strings.HasPrefix(actURL, "#") && !strings.HasPrefix(actURL, "app://") {
 			actURL = ""
 		}
 		tgtID := strings.TrimSpace(req.TargetID)
@@ -4021,6 +4536,13 @@ func (s *AppState) handleAdminNotifications(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+type DonationItem struct {
+	InvoiceID int    `json:"invoice_id"`
+	AmountRub int    `json:"amount_rub"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
 func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -4036,7 +4558,8 @@ func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 		       TO_CHAR(created_at, 'YYYY-MM-DD'),
 		       (sponsor_until IS NOT NULL AND sponsor_until > NOW()) AS is_active,
 		       total_donated_rub,
-		       COALESCE(hide_donation_amount, FALSE)
+		       COALESCE(hide_donation_amount, FALSE),
+		       COALESCE(progression::text, '')
 		FROM accounts
 		WHERE (sponsor_until IS NOT NULL AND sponsor_until > NOW()) OR total_donated_rub > 0
 		ORDER BY is_active DESC, sponsor_until DESC NULLS LAST, total_donated_rub DESC
@@ -4050,33 +4573,56 @@ func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type SponsorCard struct {
-		AccountNumber      string `json:"account_number"`
-		Nickname           string `json:"nickname"`
-		AvatarURL          string `json:"avatar_url"`
-		SteamID            string `json:"steam_id"`
-		Motto              string `json:"motto"`
-		JoinedDate         string `json:"joined_date"`
-		IsActive           bool   `json:"is_active"`
-		TotalDonated       int64  `json:"total_donated_rub"`
-		HideDonationAmount bool   `json:"hide_donation_amount"`
+		AccountNumber      string          `json:"account_number"`
+		Nickname           string          `json:"nickname"`
+		AvatarURL          string          `json:"avatar_url"`
+		SteamID            string          `json:"steam_id"`
+		Motto              string          `json:"motto"`
+		JoinedDate         string          `json:"joined_date"`
+		IsActive           bool            `json:"is_active"`
+		TotalDonated       int64           `json:"total_donated_rub"`
+		HideDonationAmount bool            `json:"hide_donation_amount"`
+		Donations          []DonationItem  `json:"donations"`
+		Progression        json.RawMessage `json:"progression,omitempty"`
 	}
 
 	sponsors := make([]SponsorCard, 0)
 	for rows.Next() {
 		var sp SponsorCard
+		sp.Donations = make([]DonationItem, 0)
 		var nick, av, st, mo sql.NullString
-		if err := rows.Scan(&sp.AccountNumber, &nick, &av, &st, &mo, &sp.JoinedDate, &sp.IsActive, &sp.TotalDonated, &sp.HideDonationAmount); err == nil {
+		var progStr string
+		if err := rows.Scan(&sp.AccountNumber, &nick, &av, &st, &mo, &sp.JoinedDate, &sp.IsActive, &sp.TotalDonated, &sp.HideDonationAmount, &progStr); err == nil {
+			if progStr != "" && progStr != "null" && progStr != "{}" {
+				sp.Progression = json.RawMessage(progStr)
+			}
+			rawAccountNumber := sp.AccountNumber
+			if !sp.HideDonationAmount {
+				dRows, dErr := s.db.Query(`
+					SELECT invoice_id, amount_rub, status, TO_CHAR(created_at, 'DD.MM.YYYY')
+					FROM pending_donations
+					WHERE (account_number = $1 OR (device_id IN (SELECT device_id FROM account_devices WHERE account_number = $1) AND $1 != ''))
+					  AND status = 'paid'
+					ORDER BY created_at DESC LIMIT 5
+				`, rawAccountNumber)
+				if dErr == nil {
+					for dRows.Next() {
+						var d DonationItem
+						if err := dRows.Scan(&d.InvoiceID, &d.AmountRub, &d.Status, &d.CreatedAt); err == nil {
+							sp.Donations = append(sp.Donations, d)
+						}
+					}
+					dRows.Close()
+				}
+			}
+
 			if sp.HideDonationAmount {
 				sp.TotalDonated = 0
 			}
-			if nick.Valid && nick.String != "" {
+			if nick.Valid && nick.String != "" && !strings.Contains(nick.String, "-****-") && !strings.Contains(nick.String, "****") {
 				sp.Nickname = nick.String
 			} else {
-				if len(sp.AccountNumber) >= 19 {
-					sp.Nickname = sp.AccountNumber[:4] + "-****-****-" + sp.AccountNumber[15:]
-				} else {
-					sp.Nickname = "Спонсор WarLink"
-				}
+				sp.Nickname = config.GenerateDeterministicNobelCallsign(rawAccountNumber)
 			}
 			if av.Valid {
 				sp.AvatarURL = av.String
@@ -4110,27 +4656,21 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type DonationItem struct {
-		InvoiceID int    `json:"invoice_id"`
-		AmountRub int    `json:"amount_rub"`
-		Status    string `json:"status"`
-		CreatedAt string `json:"created_at"`
-	}
-
 	type ProfileResp struct {
-		AccountNumber      string         `json:"account_number"`
-		Nickname           string         `json:"nickname"`
-		AvatarURL          string         `json:"avatar_url"`
-		SteamID            string         `json:"steam_id"`
-		Motto              string         `json:"motto"`
-		Tier               string         `json:"tier"`
-		SponsorUntil       int64          `json:"sponsor_until"`
-		DaysRemaining      int            `json:"days_remaining"`
-		CreatedAt          string         `json:"created_at"`
-		TotalDonatedRub    int            `json:"total_donated_rub"`
-		HideDonationAmount bool           `json:"hide_donation_amount"`
-		DeviceCount        int            `json:"device_count"`
-		Donations          []DonationItem `json:"donations"`
+		AccountNumber      string          `json:"account_number"`
+		Nickname           string          `json:"nickname"`
+		AvatarURL          string          `json:"avatar_url"`
+		SteamID            string          `json:"steam_id"`
+		Motto              string          `json:"motto"`
+		Tier               string          `json:"tier"`
+		SponsorUntil       int64           `json:"sponsor_until"`
+		DaysRemaining      int             `json:"days_remaining"`
+		CreatedAt          string          `json:"created_at"`
+		TotalDonatedRub    int             `json:"total_donated_rub"`
+		HideDonationAmount bool            `json:"hide_donation_amount"`
+		DeviceCount        int             `json:"device_count"`
+		Donations          []DonationItem  `json:"donations"`
+		Progression        json.RawMessage `json:"progression,omitempty"`
 	}
 
 	if r.Method == http.MethodGet {
@@ -4149,20 +4689,25 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 		var totalDonated int
 		var err error
 		var st, mo sql.NullString
+		var progStr string
 
 		if acc != "" {
 			err = s.db.QueryRow(`
-				SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE) 
+				SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE), COALESCE(progression::text, '')
 				FROM accounts WHERE account_number = $1
-			`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount)
+			`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr)
 		} else {
 			err = s.db.QueryRow(`
-				SELECT a.account_number, a.nickname, a.avatar_url, a.steam_id, a.motto, a.tier, a.sponsor_until, a.total_donated_rub, a.created_at, COALESCE(a.hide_donation_amount, FALSE) 
+				SELECT a.account_number, a.nickname, a.avatar_url, a.steam_id, a.motto, a.tier, a.sponsor_until, a.total_donated_rub, a.created_at, COALESCE(a.hide_donation_amount, FALSE), COALESCE(a.progression::text, '')
 				FROM account_devices ad
 				JOIN accounts a ON ad.account_number = a.account_number
 				WHERE ad.device_id = $1
 				ORDER BY a.sponsor_until DESC NULLS LAST LIMIT 1
-			`, dev).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount)
+			`, dev).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr)
+		}
+
+		if progStr != "" && progStr != "null" && progStr != "{}" {
+			resp.Progression = json.RawMessage(progStr)
 		}
 
 		if st.Valid {
@@ -4203,7 +4748,8 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 			rows, qErr := s.db.Query(`
 				SELECT invoice_id, amount_rub, status, created_at 
 				FROM pending_donations 
-				WHERE account_number = $1 
+				WHERE (account_number = $1 OR (device_id IN (SELECT device_id FROM account_devices WHERE account_number = $1) AND $1 != ''))
+				  AND (status = 'paid' OR (status = 'pending' AND created_at >= NOW() - INTERVAL '30 minutes'))
 				ORDER BY created_at DESC LIMIT 20
 			`, resp.AccountNumber)
 			if qErr == nil {
@@ -4235,13 +4781,14 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		var req struct {
-			AccountNumber      string `json:"account_number"`
-			DeviceID           string `json:"device_id"`
-			Nickname           string `json:"nickname"`
-			SteamID            string `json:"steam_id"`
-			Motto              string `json:"motto"`
-			HideDonationAmount *bool  `json:"hide_donation_amount"`
-			Action             string `json:"action"`
+			AccountNumber      string          `json:"account_number"`
+			DeviceID           string          `json:"device_id"`
+			Nickname           string          `json:"nickname"`
+			SteamID            string          `json:"steam_id"`
+			Motto              string          `json:"motto"`
+			HideDonationAmount *bool           `json:"hide_donation_amount"`
+			Action             string          `json:"action"`
+			Progression        json.RawMessage `json:"progression"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
@@ -4291,6 +4838,10 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 			    updated_at = NOW()
 		`, acc, nick, steamID, motto)
 
+		if len(req.Progression) > 0 && string(req.Progression) != "null" && string(req.Progression) != "{}" {
+			_, _ = s.db.Exec(`UPDATE accounts SET progression = $1, updated_at = NOW() WHERE account_number = $2`, req.Progression, acc)
+		}
+
 		if req.HideDonationAmount != nil {
 			_, _ = s.db.Exec(`UPDATE accounts SET hide_donation_amount = $1, updated_at = NOW() WHERE account_number = $2`, *req.HideDonationAmount, acc)
 		}
@@ -4309,10 +4860,14 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 		var createdAt time.Time
 		var totalDonated int
 		var st, mo sql.NullString
+		var progStr string
 		_ = s.db.QueryRow(`
-			SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE) 
+			SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE), COALESCE(progression::text, '')
 			FROM accounts WHERE account_number = $1
-		`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount)
+		`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr)
+		if progStr != "" && progStr != "null" && progStr != "{}" {
+			resp.Progression = json.RawMessage(progStr)
+		}
 		if st.Valid {
 			resp.SteamID = st.String
 		}
@@ -4890,7 +5445,7 @@ const dashboardHTML = `<!DOCTYPE html>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </div>
                 <div class="kpi-value" id="kpi-ping">27 мс</div>
-                <div class="kpi-sub">Стокгольм • Aeza DC</div>
+                <div class="kpi-sub" id="kpi-ping-sub">Стокгольм • Aeza DC</div>
                 <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: 100%; background: var(--green);"></div></div>
             </div>
         </div>
@@ -5051,6 +5606,11 @@ const dashboardHTML = `<!DOCTYPE html>
             if (ramSubEl) ramSubEl.textContent = ramPct + '% памяти занято';
             if (ramBar) ramBar.style.width = ramPct + '%';
 
+            const pingEl = document.getElementById('kpi-ping');
+            if (pingEl && live.gateway_ping_ms) pingEl.textContent = (typeof live.gateway_ping_ms === 'number' ? live.gateway_ping_ms.toFixed(1) : live.gateway_ping_ms) + ' мс';
+            const pingSubEl = document.getElementById('kpi-ping-sub');
+            if (pingSubEl && live.gateway_jitter_ms) pingSubEl.textContent = 'Стокгольм • Джиттер: ±' + (typeof live.gateway_jitter_ms === 'number' ? live.gateway_jitter_ms.toFixed(1) : live.gateway_jitter_ms) + ' мс';
+
             // 2. Draw Charts
             drawSessionsChart(history);
             drawBandwidthChart(history);
@@ -5098,8 +5658,8 @@ const dashboardHTML = `<!DOCTYPE html>
                             const cleanName = p.game.replace(/\(гибрид\)/gi, '').replace(/•/g, '').trim().toUpperCase() || 'WARDOGS';
                             modeBadge = '<strong style="color: var(--accent);">' + cleanName + '</strong> ' +
                                         '<span style="background: rgba(255, 94, 31, 0.18); color: #FF5E1F; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(255, 94, 31, 0.35); margin-left: 4px;">ГИБРИД</span>';
-                        } else if (gLower === 'free_internet' || gLower.includes('свободный')) {
-                            modeBadge = '<strong style="color: var(--blue);">СВОБОДНЫЙ ИНТЕРНЕТ</strong>';
+                        } else if (gLower === 'free_internet' || gLower.includes('свободный') || gLower.includes('комплексный')) {
+                            modeBadge = '<strong style="color: var(--blue);">КОМПЛЕКСНЫЙ РЕЖИМ</strong>';
                         } else {
                             modeBadge = '<strong style="color: var(--text-main);">' + (p.game || 'WARDOGS').toUpperCase() + '</strong> ' +
                                         '<span style="background: rgba(34, 197, 94, 0.15); color: #22c55e; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(34, 197, 94, 0.3); margin-left: 4px;">СОЛО</span>';

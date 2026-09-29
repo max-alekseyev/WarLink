@@ -1,5 +1,5 @@
 <!-- VIEW: Settings Panel (Progressive Disclosure) -->
-<div id="view-details" class="details-view" style="display: none;">
+<div id="view-details" class="details-view">
     <div class="details-header">
         <span class="details-title">Параметры маршрутизации</span>
         <button class="details-close" onclick="toggleDetails(event)">Закрыть</button>
@@ -7,7 +7,15 @@
 
     <div class="details-content">
         <div class="setting-group">
-            <span class="setting-group-title">СВОБОДНЫЙ ИНТЕРНЕТ (DPI)</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">КОМПЛЕКСНЫЙ РЕЖИМ (DPI)</span>
+                <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
+            </div>
+            <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
+                <div class="privacy-info-text">
+                    WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов (ст. 3 152-ФЗ).
+                </div>
+            </div>
             <div class="setting-info-row">
                 <span class="info-label">Сетевой фильтр:</span>
                 <span class="info-value">WinDivert (Zapret winws2)</span>

@@ -1,0 +1,398 @@
+<div id="view-progression" class="details-view">
+    <!-- Header: Title without slashes, Reset Button, Import Button, Close Button -->
+    <div class="details-header">
+        <div class="details-header-left">
+            <span class="details-title font-mono">УРОВЕНЬ WARDOGS</span>
+        </div>
+        <div class="details-header-right">
+            <button id="btn-prog-help" class="btn-prog-action font-mono" onclick="ProgressionController.toggleGuide()" title="Инструкция по использованию">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                <span>Справка</span>
+            </button>
+            <input type="file" id="prog-file-input" accept="image/*" style="display: none;" onchange="ProgressionController.onFileSelected(event)">
+            <button id="btn-prog-reset" class="btn-prog-action font-mono" onclick="ProgressionController.resetAll()" title="Сбросить весь прогресс до 0">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                </svg>
+                <span>Сбросить</span>
+            </button>
+            <button id="btn-prog-import" class="btn-prog-action font-mono" onclick="ProgressionController.triggerImport()" title="Вставить скриншот из буфера (Ctrl+V) или выбрать файл">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                </svg>
+                <span>Импорт (Ctrl+V)</span>
+            </button>
+            <button class="details-close" onclick="toggleProgression(event)">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- DropZone Overlay for Drag & Drop -->
+    <div id="prog-dropzone" class="prog-dropzone" style="display: none;">
+        <div class="prog-dropzone-box">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span class="prog-dropzone-title">Перетащите скриншот экрана «РАЗБЛОКИРОВАТЬ»</span>
+            <span class="prog-dropzone-sub font-mono">1080p • 1440p • 4K • 720p • 21:9 Ultrawide</span>
+        </div>
+    </div>
+
+    <!-- Main Scrollable Body -->
+    <div class="details-content prog-content-scroll" ondragover="ProgressionController.onDragOver(event)" ondragleave="ProgressionController.onDragLeave(event)" ondrop="ProgressionController.onDrop(event)">
+        <!-- Section 1: MetaForge-Style Main Widget Card -->
+        <div class="prog-metaforge-card">
+            <!-- Top Career Row -->
+            <div class="prog-career-row">
+                <div class="prog-career-crest-wrap">
+                    <img id="prog-career-badge-img" class="prog-career-badge-img" src="assets/career/1.webp" alt="Значок карьеры" onerror="this.src='wardogs_icon.png'">
+                </div>
+                <div class="prog-career-info-wrap">
+                    <span id="prog-career-val" class="prog-career-big-num font-mono">110</span>
+                    <div class="prog-career-next-text font-mono">
+                        <span class="prog-next-label">Следующая награда: </span>
+                        <span id="prog-career-next-name" class="prog-career-next-name">M1911 Pistol</span>
+                        <span class="prog-text-sep">|</span>
+                        <span id="prog-career-next-lvl" class="prog-gold-lvl">Ур. 115</span>
+                        <span class="prog-text-sep">|</span>
+                        <span id="prog-career-next-price" class="prog-grey-price">$5,000</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6 Circular Role Dials Row -->
+            <div class="prog-dials-row">
+                <!-- 1. Assault -->
+                <div class="prog-dial-column" data-role="assault">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-assault" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-assault" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/assault.webp" alt="Штурмовик">
+                            <span id="prog-lvl-assault" class="prog-dial-number font-mono">11</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('assault', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('assault', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ШТУРМОВИК</span>
+                        <span id="prog-dial-name-assault" class="prog-dial-item-name font-mono" title="Galil">Galil</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-assault" class="prog-gold-lvl">Ур. 10</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-assault">35,000 XP</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 2. Medic -->
+                <div class="prog-dial-column" data-role="medic">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-medic" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-medic" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/medic.webp" alt="Медик">
+                            <span id="prog-lvl-medic" class="prog-dial-number font-mono">22</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('medic', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('medic', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">МЕДИК</span>
+                        <span id="prog-dial-name-medic" class="prog-dial-item-name font-mono" title="Super-45">Super-45</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-medic" class="prog-gold-lvl">Ур. 35</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-medic">75,000 XP</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 3. Recon -->
+                <div class="prog-dial-column" data-role="recon">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-recon" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-recon" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/recon.webp" alt="Разведчик">
+                            <span id="prog-lvl-recon" class="prog-dial-number font-mono">12</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('recon', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('recon', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">РАЗВЕДЧИК</span>
+                        <span id="prog-dial-name-recon" class="prog-dial-item-name font-mono" title="СВД">СВД</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-recon" class="prog-gold-lvl">Ур. 12</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-recon">18,000 XP</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 4. Support -->
+                <div class="prog-dial-column" data-role="support">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-support" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-support" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/support.webp" alt="Поддержка">
+                            <span id="prog-lvl-support" class="prog-dial-number font-mono">28</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('support', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('support', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ПОДДЕРЖКА</span>
+                        <span id="prog-dial-name-support" class="prog-dial-item-name font-mono" title="PKM">PKM</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-support" class="prog-gold-lvl">Ур. 30</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-support">80,000 XP</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 5. Driver -->
+                <div class="prog-dial-column" data-role="driver">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-driver" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-driver" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/driver.webp" alt="Водитель">
+                            <span id="prog-lvl-driver" class="prog-dial-number font-mono">21</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('driver', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('driver', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ВОДИТЕЛЬ</span>
+                        <span id="prog-dial-name-driver" class="prog-dial-item-name font-mono" title="Gepard">Gepard</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-driver" class="prog-gold-lvl">Ур. 30</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-driver">65,000 XP</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 6. Pilot -->
+                <div class="prog-dial-column" data-role="pilot">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-pilot" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-pilot" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/pilot.webp" alt="Пилот">
+                            <span id="prog-lvl-pilot" class="prog-dial-number font-mono">16</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('pilot', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('pilot', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ПИЛОТ</span>
+                        <span id="prog-dial-name-pilot" class="prog-dial-item-name font-mono" title="Havoc">Havoc</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-pilot" class="prog-gold-lvl">Ур. 35</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-pilot">90,000 XP</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: Active Target Roadmap Banner (Visible when target is active) -->
+        <div id="prog-target-banner" class="prog-target-banner" style="display: none;">
+            <div class="prog-target-left">
+                <div class="prog-target-icon-wrap">
+                    <img id="prog-target-img" class="prog-target-img" src="wardogs_icon.png" alt="Цель" onerror="this.src='wardogs_icon.png'">
+                </div>
+                <div class="prog-target-meta">
+                    <div class="prog-target-title-row">
+                        <span class="prog-target-badge font-mono">ЦЕЛЬ</span>
+                        <span id="prog-target-name" class="prog-target-name font-mono">M4A1</span>
+                        <span id="prog-target-cat" class="prog-target-cat font-mono">Штурм. винтовка</span>
+                    </div>
+                    <div class="prog-target-req-row font-mono">
+                        <span id="prog-target-role-lbl" class="prog-target-gold">ШТУРМОВИК</span>
+                        <span class="prog-text-sep">•</span>
+                        <span>Требуется: <strong id="prog-target-req-lvl" class="prog-gold-lvl">Ур. 20</strong></span>
+                        <span class="prog-text-sep">•</span>
+                        <span id="prog-target-remaining">Осталось: 9 ур.</span>
+                    </div>
+                    <div class="prog-target-finance-row font-mono">
+                        <span class="prog-finance-label">Цена цели:</span>
+                        <strong id="prog-target-price" class="prog-green-price">$10,000</strong>
+                        <span class="prog-text-sep">•</span>
+                        <span class="prog-finance-label">Бюджет ветки:</span>
+                        <strong id="prog-target-path-budget" class="prog-gold-price">$27,500</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="prog-target-right">
+                <div class="prog-target-progress-row font-mono">
+                    <span id="prog-target-cur-status">11 / 20</span>
+                    <span id="prog-target-pct">55%</span>
+                </div>
+                <div class="prog-target-bar-track">
+                    <div id="prog-target-bar-fill" class="prog-target-bar-fill" style="width: 55%;"></div>
+                </div>
+                <button class="btn-prog-target-cancel font-mono" onclick="ProgressionController.toggleWishlist('', event)" title="Снять цель">
+                    Снять цель
+                </button>
+            </div>
+        </div>
+
+        <!-- Section 3: Catalog of Unlocks in Table Format -->
+        <div class="prog-section-header">
+            <div class="prog-catalog-header-left">
+                <span class="prog-section-title font-mono">КАТАЛОГ РАЗБЛОКИРОВОК</span>
+                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(58 наград)</span>
+            </div>
+            <div class="prog-catalog-filter-row">
+                <label class="prog-hide-unlocked-label font-mono">
+                    <input type="checkbox" id="check-prog-hide-unlocked" onchange="ProgressionController.toggleHideUnlocked(this.checked)">
+                    <span class="prog-checkbox-box">
+                        <svg class="prog-checkbox-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </span>
+                    <span class="prog-checkbox-text">Скрыть открытое</span>
+                </label>
+                <input type="text" id="prog-search-input" class="prog-search-input font-mono" placeholder="Поиск оружия, модуля, патрона..." oninput="ProgressionController.onSearchInput(event)">
+            </div>
+        </div>
+
+        <!-- Role Filter Tabs: 1. Карьера, 2. Штурмовик, 3. Медик, 4. Разведчик, 5. Поддержка, 6. Водитель, 7. Пилот -->
+        <div class="prog-filter-tabs">
+            <button class="prog-tab-btn active" data-filter="career" onclick="ProgressionController.setFilter('career')">Карьера</button>
+            <button class="prog-tab-btn" data-filter="assault" onclick="ProgressionController.setFilter('assault')">Штурмовик</button>
+            <button class="prog-tab-btn" data-filter="medic" onclick="ProgressionController.setFilter('medic')">Медик</button>
+            <button class="prog-tab-btn" data-filter="recon" onclick="ProgressionController.setFilter('recon')">Разведчик</button>
+            <button class="prog-tab-btn" data-filter="support" onclick="ProgressionController.setFilter('support')">Поддержка</button>
+            <button class="prog-tab-btn" data-filter="driver" onclick="ProgressionController.setFilter('driver')">Водитель</button>
+            <button class="prog-tab-btn" data-filter="pilot" onclick="ProgressionController.setFilter('pilot')">Пилот</button>
+        </div>
+
+        <!-- Catalog Items Table: Lock, Level, Reward, Category, Price, Target -->
+        <div class="prog-table-container">
+            <table class="prog-table font-mono">
+                <thead>
+                    <tr>
+                        <th class="th-lock" title="Разблокировка предмета"></th>
+                        <th class="th-lvl">УР.</th>
+                        <th class="th-item">НАГРАДА</th>
+                        <th class="th-cat">КАТЕГОРИЯ</th>
+                        <th class="th-price">ЦЕНА</th>
+                        <th class="th-target">ЦЕЛЬ</th>
+                    </tr>
+                </thead>
+                <tbody id="prog-catalog-tbody">
+                    <!-- Dynamic rows rendered by progression.js -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Инструкция (поверх всего окна приложения) -->
+<div id="prog-guide-modal" class="modal-backdrop" style="display: none;" onclick="if (event.target === this) ProgressionController.dismissGuide()">
+    <div class="modal-card prog-guide-modal-card" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span class="modal-title font-mono">ИНСТРУКЦИЯ</span>
+            <button class="btn-icon" onclick="ProgressionController.dismissGuide()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        
+        <div class="prog-modal-body">
+            <div class="prog-guide-steps-vertical">
+                <!-- 1 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">1</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">ПОЛНЫЙ СКРИНШОТ В ИГРЕ</div>
+                        <div class="prog-step-text">
+                            В меню WARDOGS откройте вкладку <strong>«Разблокировать»</strong> или в матче нажмите <strong>Tab</strong> (вкладка «Прогресс»).
+                        </div>
+                        <div class="prog-step-callout">
+                            <strong>Важно:</strong> делайте <strong>полный снимок экрана</strong> (PrintScreen, Win+Shift+S на весь экран или F12 в Steam). Не обрезайте края.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">2</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">ИМПОРТ В ПРИЛОЖЕНИЕ</div>
+                        <div class="prog-step-text">
+                            Нажмите <strong>Ctrl+V</strong> в окне программы или кнопку <strong>«Импорт»</strong>.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">3</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">ВЫБОР ЦЕЛИ</div>
+                        <div class="prog-step-text">
+                            В каталоге нажмите на иконку прицела, чтобы закрепить предмет и отслеживать прогресс.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="prog-guide-footer-btn">
+            <button class="btn btn-action font-mono" onclick="ProgressionController.dismissGuide()">
+                <span>ПОНЯТНО</span>
+            </button>
+        </div>
+    </div>
+</div>

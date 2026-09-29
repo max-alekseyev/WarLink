@@ -46,6 +46,11 @@ if ($UpdateRepo) {
     $ldflags += " -X warlink/internal/updater.UpdateRepo=$UpdateRepo"
 }
 
+if (Get-Command goversioninfo -ErrorAction SilentlyContinue) {
+    Write-Host "[INFO] Generating Windows resources from versioninfo.json..." -ForegroundColor Cyan
+    goversioninfo -o rsrc_windows_amd64.syso versioninfo.json
+}
+
 Write-Host "[BUILD] Compiling dist\WarLink.exe with -trimpath..." -ForegroundColor Yellow
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"

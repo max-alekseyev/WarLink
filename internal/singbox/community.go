@@ -23,21 +23,25 @@ type InAppNotification struct {
 	IsRead      bool   `json:"is_read"`
 }
 
-type SponsorCard struct {
-	AccountNumber      string `json:"account_number"`
-	Nickname           string `json:"nickname"`
-	AvatarURL          string `json:"avatar_url"`
-	JoinedDate         string `json:"joined_date"`
-	IsActive           bool   `json:"is_active"`
-	TotalDonated       int64  `json:"total_donated_rub"`
-	HideDonationAmount bool   `json:"hide_donation_amount"`
-}
-
 type DonationHistoryItem struct {
 	InvoiceID int    `json:"invoice_id"`
 	AmountRub int    `json:"amount_rub"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
+}
+
+type SponsorCard struct {
+	AccountNumber      string                `json:"account_number"`
+	Nickname           string                `json:"nickname"`
+	AvatarURL          string                `json:"avatar_url"`
+	SteamID            string                `json:"steam_id"`
+	Motto              string                `json:"motto"`
+	JoinedDate         string                `json:"joined_date"`
+	IsActive           bool                  `json:"is_active"`
+	TotalDonated       int64                 `json:"total_donated_rub"`
+	HideDonationAmount bool                  `json:"hide_donation_amount"`
+	Donations          []DonationHistoryItem `json:"donations"`
+	Progression        json.RawMessage       `json:"progression,omitempty"`
 }
 
 type ProfileInfo struct {
@@ -53,6 +57,7 @@ type ProfileInfo struct {
 	TotalDonatedRub int                   `json:"total_donated_rub"`
 	DeviceCount     int                   `json:"device_count"`
 	Donations       []DonationHistoryItem `json:"donations"`
+	Progression     json.RawMessage       `json:"progression,omitempty"`
 }
 
 // GetNotifications fetches in-app notifications for the current account and device.
@@ -229,6 +234,38 @@ func UpdateProfile(account, device, nickname string, optionalExtra ...string) (*
 		return nil, err
 	}
 	return &p, nil
+}
+
+// SyncProgression sends player progression to server so sponsors can share their progression in dossier.
+func SyncProgression(account, device string, prog interface{}) error {
+	serverAPI := GetServerAPI()
+	if serverAPI == "" || account == "" || prog == nil {
+		return nil
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	payload := map[string]interface{}{
+		"account_number": account,
+		"device_id":      device,
+		"progression":    prog,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/profile", serverAPI), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
 }
 
 // ResetOtherDevices removes all other registered devices for the account on the server.

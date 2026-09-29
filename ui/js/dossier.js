@@ -184,7 +184,14 @@ function renderDossierSvg(data, secret = false, steamLinked = true, showMotto = 
         <path d="M 16 56 C 16 42, 48 42, 48 56" fill="none" stroke="#68766c" stroke-width="1.8"/>
     `;
 
-    return `
+        const displayCallsign = (function() {
+            let s = data.callsign || 'АНОНИМ';
+            if (s.length > 17) return s.slice(0, 16) + '…';
+            return s;
+        })();
+        const callsignFontSize = (displayCallsign.length > 14) ? 10 : (displayCallsign.length > 11 ? 11.5 : 13.5);
+
+        return `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 380" width="640" height="380">
         <defs>
             <clipPath id="dossier-avatar-clip">
@@ -236,47 +243,14 @@ function renderDossierSvg(data, secret = false, steamLinked = true, showMotto = 
         </g>
 
         <g transform="translate(114, 68)">
-            <text x="0" y="14" font-family="'JetBrains Mono', monospace" font-size="14.5" font-weight="800" fill="#0f100e">${data.callsign}</text>
+            <text x="0" y="14" font-family="'JetBrains Mono', monospace" font-size="${callsignFontSize}" font-weight="800" fill="#0f100e">${displayCallsign}</text>
             ${rankBlock}
             ${steamBlock}
         </g>
 
         ${mottoBlock}
 
-        <!-- ШТРИХКОД -->
-        <g transform="translate(28, 206)">
-            <rect x="0" y="0" width="224" height="148" fill="rgba(220, 212, 190, 0.45)" stroke="#605545" stroke-width="1" stroke-dasharray="2,2" rx="1"/>
-            
-            <g transform="translate(14, 22)" fill="#111111">
-                <rect x="0" y="0" width="2" height="48"/>
-                <rect x="4" y="0" width="1" height="48"/>
-                <rect x="7" y="0" width="3" height="48"/>
-                <rect x="13" y="0" width="1" height="48"/>
-                <rect x="16" y="0" width="2" height="48"/>
-                <rect x="21" y="0" width="3" height="48"/>
-                <rect x="27" y="0" width="1" height="48"/>
-                <rect x="31" y="0" width="2" height="48"/>
-                <rect x="36" y="0" width="3" height="48"/>
-                <rect x="42" y="0" width="1" height="48"/>
-                <rect x="46" y="0" width="2.5" height="48"/>
-                <rect x="52" y="0" width="1.5" height="48"/>
-                <rect x="56" y="0" width="3" height="48"/>
-                <rect x="62" y="0" width="1" height="48"/>
-                <rect x="66" y="0" width="2" height="48"/>
-                <rect x="71" y="0" width="3" height="48"/>
-                <rect x="77" y="0" width="1.5" height="48"/>
-                <rect x="81" y="0" width="2.5" height="48"/>
-                <rect x="86" y="0" width="2" height="48"/>
-                <rect x="91" y="0" width="1" height="48"/>
-            </g>
-
-            <text x="124" y="42" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="800" fill="#1b1c1a" letter-spacing="1">WARLINK</text>
-            <text x="124" y="58" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="600" fill="#756e5c">SPONSOR PASS</text>
-
-            <line x1="14" y1="84" x2="210" y2="84" stroke="#bfb69e" stroke-width="0.75"/>
-            <text x="14" y="104" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" fill="#423d32">STATUS: VERIFIED</text>
-            <text x="14" y="120" font-family="'JetBrains Mono', monospace" font-size="7.5" font-weight="600" fill="#7a725d">ОФИЦИАЛЬНЫЙ СПОНСОР</text>
-        </g>
+        ${renderDossierBadgeBlock(data)}
 
         <!-- ПРАВАЯ КОЛОНКА -->
         <g transform="translate(284, 56)">
@@ -454,22 +428,23 @@ function renderErrorDossierSvg(errorMessage = 'ОШИБКА ПОЛУЧЕНИЯ �
 }
 
 function renderDossierHistoryRows(data) {
-    if (data.donations && data.donations.length > 0) {
+    const validDonations = (data.donations || []).filter(item => {
+        const s = (item.status || '').toLowerCase();
+        return s === 'paid' || s === 'confirmed';
+    });
+    if (validDonations.length > 0) {
         let rows = '';
-        const items = data.donations.slice(0, 2);
+        const items = validDonations.slice(0, 2);
         items.forEach((item, idx) => {
             const yOffset = 52 + idx * 44;
             const dDate = (item.created_at || '').slice(0, 10) || data.joinedDate;
-            const dTitle = item.amount_rub ? `ПОДДЕРЖКА (${item.amount_rub} ₽)` : 'ПОДДЕРЖКА ШЛЮЗА';
-            const isPaid = (item.status === 'paid' || item.status === 'confirmed');
-            const dStatus = isPaid ? 'ОПЛАЧЕНО' : 'В ОБРАБОТКЕ';
-            const statusColor = isPaid ? '#1b5e28' : '#706856';
+            const dTitle = (item.amount_rub && !data.isSecret) ? `ПОДДЕРЖКА (${item.amount_rub} ₽)` : 'ПОДДЕРЖКА ШЛЮЗА';
             rows += `
                 <g transform="translate(0, ${yOffset})">
                     <rect x="0" y="0" width="328" height="38" fill="rgba(224, 218, 202, 0.45)" stroke="#c8c0aa" stroke-width="0.75" rx="1"/>
                     <text x="14" y="23" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="600" fill="#2b2821">${escapeHtml(dDate)}</text>
                     <text x="100" y="23" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="600" fill="#2b2821">${escapeHtml(dTitle)}</text>
-                    <text x="270" y="23" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" fill="${statusColor}">${dStatus}</text>
+                    <text x="270" y="23" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" fill="#1b5e28">ОПЛАЧЕНО</text>
                 </g>
             `;
         });
@@ -479,6 +454,115 @@ function renderDossierHistoryRows(data) {
         <g transform="translate(0, 52)">
             <rect x="0" y="0" width="328" height="82" fill="rgba(220, 212, 190, 0.3)" stroke="#c8c0aa" stroke-width="0.75" stroke-dasharray="2,2" rx="1"/>
             <text x="164" y="46" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600" fill="#756e5c">ЗАПИСИ О ВЗНОСАХ В РЕЕСТРЕ ОТСУТСТВУЮТ</text>
+        </g>
+    `;
+}
+
+function renderDossierBadgeBlock(data) {
+    if (data.progression && data.progression.hasProgression) {
+        const prog = data.progression;
+        const roles = prog.roles || {};
+        const careerLvl = prog.careerLevel || 0;
+        const target = prog.targetItem;
+
+        let targetHtml = '';
+        if (target) {
+            const rawTargetName = target.name || 'Оружие';
+            const shortName = rawTargetName.length > 18 ? rawTargetName.slice(0, 17) + '…' : rawTargetName;
+            const cur = target.curLvl || 0;
+            const req = target.level || 0;
+            const pct = req > 0 ? Math.min(100, Math.round((cur / req) * 100)) : 100;
+            const fillWidth = Math.round((pct / 100) * 198);
+            const remText = target.remLvl === 0 ? 'ДОСТИГНУТО' : `Осталось: ${target.remLvl} ур.`;
+
+            targetHtml = `
+                <line x1="14" y1="85" x2="210" y2="85" stroke="#bfb69e" stroke-width="0.75"/>
+                <!-- ЦЕЛЬ ОПЕРАТОРА -->
+                <g transform="translate(14, 94)">
+                    <g transform="translate(0, 1)" stroke="#ff5e1f" stroke-width="1.2" fill="none">
+                        <circle cx="5" cy="5" r="4.2"/>
+                        <circle cx="5" cy="5" r="1.5"/>
+                        <line x1="0.5" y1="5" x2="9.5" y2="5"/>
+                        <line x1="5" y1="0.5" x2="5" y2="9.5"/>
+                    </g>
+                    <text x="14" y="9" font-family="'JetBrains Mono', monospace" font-size="7.5" font-weight="800" fill="#1b1c1a">${escapeHtml(shortName)} (Ур. ${target.level})</text>
+                    <text x="0" y="22" font-family="'JetBrains Mono', monospace" font-size="6.5" font-weight="600" fill="#665f4d">${cur}/${req} ур. • <tspan font-weight="700" fill="#ff5e1f">${remText}</tspan></text>
+                    
+                    <!-- Прогресс-бар -->
+                    <rect x="0" y="27" width="198" height="4" fill="#cdc4ad" rx="1"/>
+                    <rect x="0" y="27" width="${fillWidth}" height="4" fill="#ff5e1f" rx="1"/>
+                </g>
+            `;
+        }
+
+        return `
+        <!-- WARDOGS БОЕВОЙ СТАТУС -->
+        <g transform="translate(28, 206)">
+            <rect x="0" y="0" width="224" height="148" fill="rgba(220, 212, 190, 0.45)" stroke="#605545" stroke-width="1" stroke-dasharray="2,2" rx="1"/>
+            
+            <!-- Заголовок -->
+            <text x="14" y="17" font-family="'Space Mono', monospace" font-size="8.5" font-weight="800" fill="#1b1c1a" letter-spacing="0.5">WARDOGS // БОЕВОЙ СТАТУС</text>
+            <line x1="14" y1="23" x2="210" y2="23" stroke="#bfb69e" stroke-width="0.75"/>
+
+            <!-- Карточка уровня карьеры -->
+            <g transform="translate(14, 28)">
+                <rect x="0" y="0" width="52" height="48" fill="rgba(15, 16, 14, 0.05)" stroke="#807660" stroke-width="0.75" rx="1"/>
+                <text x="26" y="11" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="6.5" font-weight="700" fill="#756e5c" letter-spacing="0.5">КАРЬЕРА</text>
+                <text x="26" y="32" text-anchor="middle" font-family="'Space Mono', monospace" font-size="18" font-weight="800" fill="#0f100e">${careerLvl}</text>
+                <text x="26" y="43" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="6" font-weight="700" fill="#1b5e28">LVL</text>
+            </g>
+
+            <!-- Сетка 6 ролей -->
+            <g transform="translate(72, 28)">
+                <text x="0" y="11" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ШТУРМОВИК: <tspan font-weight="800" fill="#0f100e">${roles.assault || 0}</tspan></text>
+                <text x="0" y="26" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">МЕДИК: <tspan font-weight="800" fill="#0f100e">${roles.medic || 0}</tspan></text>
+                <text x="0" y="41" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">РАЗВЕДЧИК: <tspan font-weight="800" fill="#0f100e">${roles.recon || 0}</tspan></text>
+
+                <text x="68" y="11" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ПОДДЕРЖКА: <tspan font-weight="800" fill="#0f100e">${roles.support || 0}</tspan></text>
+                <text x="68" y="26" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ВОДИТЕЛЬ: <tspan font-weight="800" fill="#0f100e">${roles.driver || 0}</tspan></text>
+                <text x="68" y="41" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ПИЛОТ: <tspan font-weight="800" fill="#0f100e">${roles.pilot || 0}</tspan></text>
+            </g>
+
+            ${targetHtml}
+        </g>
+        `;
+    }
+
+    // Стандартный штрихкод (fallback когда прогрессия не настроена)
+    return `
+        <!-- ШТРИХКОД -->
+        <g transform="translate(28, 206)">
+            <rect x="0" y="0" width="224" height="148" fill="rgba(220, 212, 190, 0.45)" stroke="#605545" stroke-width="1" stroke-dasharray="2,2" rx="1"/>
+            
+            <g transform="translate(14, 22)" fill="#111111">
+                <rect x="0" y="0" width="2" height="48"/>
+                <rect x="4" y="0" width="1" height="48"/>
+                <rect x="7" y="0" width="3" height="48"/>
+                <rect x="13" y="0" width="1" height="48"/>
+                <rect x="16" y="0" width="2" height="48"/>
+                <rect x="21" y="0" width="3" height="48"/>
+                <rect x="27" y="0" width="1" height="48"/>
+                <rect x="31" y="0" width="2" height="48"/>
+                <rect x="36" y="0" width="3" height="48"/>
+                <rect x="42" y="0" width="1" height="48"/>
+                <rect x="46" y="0" width="2.5" height="48"/>
+                <rect x="52" y="0" width="1.5" height="48"/>
+                <rect x="56" y="0" width="3" height="48"/>
+                <rect x="62" y="0" width="1" height="48"/>
+                <rect x="66" y="0" width="2" height="48"/>
+                <rect x="71" y="0" width="3" height="48"/>
+                <rect x="77" y="0" width="1.5" height="48"/>
+                <rect x="81" y="0" width="2.5" height="48"/>
+                <rect x="86" y="0" width="2" height="48"/>
+                <rect x="91" y="0" width="1" height="48"/>
+            </g>
+
+            <text x="124" y="42" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="800" fill="#1b1c1a" letter-spacing="1">WARLINK</text>
+            <text x="124" y="58" font-family="'JetBrains Mono', monospace" font-size="8" font-weight="600" fill="#756e5c">SPONSOR PASS</text>
+
+            <line x1="14" y1="84" x2="210" y2="84" stroke="#bfb69e" stroke-width="0.75"/>
+            <text x="14" y="104" font-family="'JetBrains Mono', monospace" font-size="8.5" font-weight="700" fill="#423d32">STATUS: VERIFIED</text>
+            <text x="14" y="120" font-family="'JetBrains Mono', monospace" font-size="7.5" font-weight="600" fill="#7a725d">ОФИЦИАЛЬНЫЙ СПОНСОР</text>
         </g>
     `;
 }
@@ -523,8 +607,67 @@ function prepareDossierData(sponsor) {
             : `https://steamcommunity.com/id/${encodeURIComponent(steamId)}`;
     }
     
+    let donations = sponsor.donations || [];
+    if ((!donations || donations.length === 0) && typeof cachedAccountProfile !== 'undefined' && cachedAccountProfile) {
+        const isCurrent = (sponsor.account_number && cachedAccountProfile.account_number && 
+            (sponsor.account_number === cachedAccountProfile.account_number || 
+             sponsor.account_number === (cachedAccountProfile.account_number.slice(0, 4) + '-****-****-' + cachedAccountProfile.account_number.slice(15)))) ||
+            (sponsor.nickname && cachedAccountProfile.nickname && sponsor.nickname.toLowerCase() === cachedAccountProfile.nickname.toLowerCase());
+        if (isCurrent && cachedAccountProfile.donations && cachedAccountProfile.donations.length > 0) {
+            donations = cachedAccountProfile.donations;
+        }
+    }
+
+    const cleanNick = (window.NobelCallsigns && window.NobelCallsigns.sanitizeNickname)
+        ? window.NobelCallsigns.sanitizeNickname(sponsor.nickname, sponsor.account_number)
+        : (sponsor.nickname && !sponsor.nickname.includes('****') ? sponsor.nickname : 'Аноним');
+
+    let progressionData = null;
+    if (sponsor.progression && (sponsor.progression.career_level > 0 || sponsor.progression.careerLevel > 0)) {
+        const roles = sponsor.progression.roles || {};
+        const careerLvl = sponsor.progression.career_level || sponsor.progression.careerLevel || 0;
+        let targetItemInfo = sponsor.progression.target_item || null;
+        if (!targetItemInfo && sponsor.progression.wishlist_id && window.ProgressionController && window.ProgressionController.getAllUnlocks) {
+            const all = window.ProgressionController.getAllUnlocks();
+            const it = all.find(x => x.unlock_id === sponsor.progression.wishlist_id);
+            if (it) {
+                const targetRole = it.role || 'assault';
+                const curLvl = targetRole === 'career' ? careerLvl : (roles[targetRole] || 0);
+                const reqLvl = it.level || 0;
+                const remLvl = Math.max(0, reqLvl - curLvl);
+                targetItemInfo = {
+                    name: it.name_ru || it.name,
+                    level: reqLvl,
+                    role: targetRole,
+                    curLvl: curLvl,
+                    remLvl: remLvl,
+                    isReached: curLvl >= reqLvl
+                };
+            }
+        }
+        progressionData = {
+            hasProgression: true,
+            careerLevel: careerLvl,
+            roles: roles,
+            targetItem: targetItemInfo
+        };
+    } else if (window.ProgressionController && window.ProgressionController.getProgressionSummary) {
+        const isCurrent = (typeof cachedAccountProfile !== 'undefined' && cachedAccountProfile && 
+            sponsor.account_number && cachedAccountProfile.account_number && 
+            sponsor.account_number === cachedAccountProfile.account_number) ||
+            (!sponsor.account_number && !sponsor.donations) ||
+            (sponsor.nickname === 'МОЙ ПРОФИЛЬ' || sponsor.nickname === 'ОПЕРАТОР ШЛЮЗА');
+
+        const currentNick = (typeof cachedAccountProfile !== 'undefined' && cachedAccountProfile && cachedAccountProfile.nickname) || '';
+        const isMyNick = currentNick && sponsor.nickname && sponsor.nickname.toLowerCase() === currentNick.toLowerCase();
+
+        if (isCurrent || isMyNick) {
+            progressionData = window.ProgressionController.getProgressionSummary();
+        }
+    }
+
     return {
-        callsign: (sponsor.nickname || 'OPERATOR').toUpperCase(),
+        callsign: cleanNick.toUpperCase(),
         rankTitle,
         avatarTier,
         stampTitle: 'VERIFIED SPONSOR',
@@ -537,7 +680,8 @@ function prepareDossierData(sponsor) {
         joinedDate: formattedJoined,
         motto: sponsor.motto || '',
         avatarUrl: sponsor.avatar_url || '',
-        donations: sponsor.donations || []
+        donations: donations,
+        progression: progressionData
     };
 }
 
@@ -581,19 +725,13 @@ function openSponsorDossier(sponsor) {
     }
 
     modal.style.display = 'flex';
-    container.innerHTML = renderLoadingDossierSvg();
-
     const data = prepareDossierData(sponsor);
-
-    dossierLoadingTimer = setTimeout(() => {
-        container.innerHTML = renderDossierSvg(
-            data,
-            data.isSecret,
-            Boolean(data.steamId),
-            Boolean(data.motto)
-        );
-        dossierLoadingTimer = null;
-    }, 180);
+    container.innerHTML = renderDossierSvg(
+        data,
+        data.isSecret,
+        Boolean(data.steamId),
+        Boolean(data.motto)
+    );
 }
 
 function closeSponsorDossier() {

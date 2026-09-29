@@ -67,7 +67,7 @@
       {
         "id": 12345,
         "name": "WarLink Stockholm",
-        "ip": "138.124.103.99",
+        "ip": "198.51.100.1",
         "typeSlug": "vps",
         "expiresAt": "2026-10-15T12:00:00Z",
         "status": "active",

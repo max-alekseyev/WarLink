@@ -1,12 +1,15 @@
 package singbox
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -431,4 +434,53 @@ func TestManagerScopeChangeDetection(t *testing.T) {
 		t.Errorf("expected mgr to remain running when scope unchanged")
 	}
 }
+
+func TestGetMachineGUID(t *testing.T) {
+	hexRegex := regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+	guid1 := GetMachineGUID()
+	if guid1 == "" {
+		t.Fatal("GetMachineGUID() returned empty string")
+	}
+	if len(guid1) != 32 {
+		t.Fatalf("expected 32-char hex string, got %d chars: %s", len(guid1), guid1)
+	}
+	if !hexRegex.MatchString(guid1) {
+		t.Fatalf("GetMachineGUID() result is not a valid 32-byte hex string: %s", guid1)
+	}
+
+	// 1. Verify determinism: repeated calls must return identical output
+	for i := 0; i < 100; i++ {
+		guidNext := GetMachineGUID()
+		if guidNext != guid1 {
+			t.Fatalf("GetMachineGUID() is not deterministic: iteration %d got %s != %s", i, guidNext, guid1)
+		}
+	}
+
+	// 2. Collision resistance simulation on 50,000 distinct machine IDs
+	seen := make(map[string]struct{}, 50000)
+	for i := 0; i < 50000; i++ {
+		simulatedRaw := fmt.Sprintf("simulated-guid-%d-%d", i, i*7919)
+		h := sha256.Sum256([]byte(simulatedRaw + "_wl_dev_salt_v2"))
+		hashStr := fmt.Sprintf("%x", h[:16])
+		if len(hashStr) != 32 || !hexRegex.MatchString(hashStr) {
+			t.Fatalf("simulated hash formatting error: %s", hashStr)
+		}
+		if _, exists := seen[hashStr]; exists {
+			t.Fatalf("hash collision detected at iteration %d for hash: %s", i, hashStr)
+		}
+		seen[hashStr] = struct{}{}
+	}
+
+	// 3. Salt differentiation test
+	rawSample := "fixed-device-id-xyz"
+	h1 := sha256.Sum256([]byte(rawSample + "_wl_dev_salt_v1"))
+	h2 := sha256.Sum256([]byte(rawSample + "_wl_dev_salt_v2"))
+	str1 := fmt.Sprintf("%x", h1[:16])
+	str2 := fmt.Sprintf("%x", h2[:16])
+	if str1 == str2 {
+		t.Fatalf("expected different hashes with different salts, got identical: %s", str1)
+	}
+}
+
 

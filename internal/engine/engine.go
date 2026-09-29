@@ -104,7 +104,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 	e.mu.Unlock()
 
 	if enable {
-		e.log("[FREE NET] Включение режима «Свободный интернет» (YouTube, Discord, Telegram, WhatsApp, web)...")
+		e.log("[FREE NET] Включение режима «Комплексный режим» (YouTube, Discord, Telegram, WhatsApp, web)...")
 		if !deps.HasZapret() {
 			if err := deps.PrepareZapret(e.log); err != nil {
 				return fmt.Errorf("ошибка загрузки компонентов: %w", err)
@@ -194,7 +194,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		}
 		return nil
 	} else {
-		e.log("[FREE NET] Отключение режима «Свободный интернет» (браузер возвращен на прямой интернет)...")
+		e.log("[FREE NET] Отключение режима «Комплексный режим» (браузер возвращен на прямой интернет)...")
 		e.mu.Lock()
 		e.freeInternetActive = false
 		e.cfg.FreeInternetEnabled = false
@@ -284,9 +284,9 @@ func (e *Engine) EnsureWinwsRunning() error {
 
 	args := preset.BuildModularArgs(zapretDir, isFreeNet)
 	if isFreeNet && isConn {
-		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в композитном режиме (Свободный интернет + Игра)...", preset.Name))
+		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в композитном режиме (Комплексный режим + Игра)...", preset.Name))
 	} else if isFreeNet {
-		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в режиме «Свободный интернет» (YouTube/Discord/Web)...", preset.Name))
+		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в режиме «Комплексный режим» (YouTube/Discord/Web)...", preset.Name))
 	} else {
 		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в селективном игровом режиме...", preset.Name))
 	}
@@ -706,7 +706,7 @@ func (e *Engine) disconnectInternal() error {
 		e.mu.Unlock()
 		// No sc stop/delete — WinDivert releases its handle when winws2.exe exits.
 	} else {
-		e.log("[INFO] Игра закрыта. Режим «Свободный интернет» переведен в базовый веб-профиль")
+		e.log("[INFO] Игра закрыта. Режим «Комплексный режим» переведен в базовый веб-профиль")
 		_ = e.stopWinws()
 		_ = e.EnsureWinwsRunning()
 	}

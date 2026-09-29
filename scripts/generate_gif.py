@@ -47,7 +47,7 @@ def main():
         page = browser.new_page(viewport={'width': 520, 'height': 370}, device_scale_factor=1)
 
         mock_data = {
-            "version": "v2.1.6",
+            "version": "v2.1.7",
             "is_connected": False,
             "ping_ms": 29,
             "gateway_ping": 29,

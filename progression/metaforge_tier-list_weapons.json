@@ -1,0 +1,141 @@
+{
+  "tiers": {
+    "s": [
+      {
+        "slug": "fal",
+        "note": "60 damage a shot at 650 RPM is the fastest kill in the game, and it stays lethal out to 800 m."
+      },
+      {
+        "slug": "m4",
+        "note": "The most forgiving rifle in Wardogs: 800 RPM, 910 m/s muzzle velocity and top-tier attachment support."
+      },
+      {
+        "slug": "pkm",
+        "note": "Belt-fed 7.62x54 at 55 damage a round. It wins any fight it is allowed to finish."
+      },
+      {
+        "slug": "svd",
+        "note": "55 damage semi-auto at 480 RPM makes it the most forgiving DMR for repeat hits."
+      }
+    ],
+    "a": [
+      {
+        "slug": "bmr-308",
+        "note": "Hardest-hitting marksman rifle at 60 damage, with 450 RPM follow-up shots."
+      },
+      {
+        "slug": "compound-bow",
+        "note": "Requires some effort to unlock and not as forgiving as some rifles, but absolutely deadly in the right hands."
+      },
+      {
+        "slug": "super-45",
+        "note": "1,200 RPM of 30-damage .45 ACP shreds anything inside 50 m."
+      },
+      {
+        "slug": "amr-50",
+        "note": "The .50 cal answer to everything: 107 damage a hit and a 2,000 m effective range."
+      },
+      {
+        "slug": "t-21",
+        "note": "Matches the M4 round for round with 750 RPM and the same 910 m/s velocity."
+      },
+      {
+        "slug": "m249-saw",
+        "note": "850 RPM of belt-fed 5.56 suppression, heavier and slower to handle than the rifles."
+      }
+    ],
+    "b": [
+      {
+        "slug": "ak74",
+        "note": "Cheap, controllable and everywhere. 26 damage at 650 RPM keeps it one step behind the M4."
+      },
+      {
+        "slug": "galil",
+        "note": "Fastest 5.56 in the air at 950 m/s muzzle velocity, but only 650 RPM behind it."
+      },
+      {
+        "slug": "m500",
+        "note": "Eight 25-damage pellets a shell make it a one-pump kill at the door."
+      },
+      {
+        "slug": "a-91",
+        "note": "Compact 700 RPM bullpup whose 715 m/s velocity caps it at mid range."
+      },
+      {
+        "slug": "sks",
+        "note": "42 damage semi-auto for pocket change. Three body shots drop an unarmoured target."
+      },
+      {
+        "slug": "sv98",
+        "note": "Same 55-damage round as the Mosin with better optics and 1,000 m of reach."
+      },
+      {
+        "slug": "mk22",
+        "note": "Accurate to 1,000 m, but 60 damage means a body shot does not finish the job."
+      },
+      {
+        "slug": "mp5",
+        "note": "The benchmark SMG: 800 RPM, tame recoil and a hard falloff past 200 m."
+      },
+      {
+        "slug": "amp-9",
+        "note": "Fastest 9mm in class at 900 RPM; 400 m/s velocity keeps it a room-clearer."
+      },
+      {
+        "slug": "mgl-40",
+        "note": "Six 100-damage grenades on a drum, but the 100 m/s arc takes real practice."
+      }
+    ],
+    "c": [
+      {
+        "slug": "bushmaster-m17s",
+        "note": "Same 28-damage round as the M4, but 715 m/s velocity and a 300 m ceiling."
+      },
+      {
+        "slug": "kh-2002",
+        "note": "A 700 RPM bullpup that does nothing the cheaper rifles above it do not."
+      },
+      {
+        "slug": "mosin-nagant",
+        "note": "Iron-sight pedigree and 55 damage, outclassed by the SV98 everywhere but the shop."
+      },
+      {
+        "slug": "pp-19-vityaz",
+        "note": "An MP5 with slower rounds. Take it when the MP5 is not on the shelf."
+      },
+      {
+        "slug": "deagle",
+        "note": "63 damage a trigger pull is the hardest-hitting sidearm; the recoil is the price."
+      },
+      {
+        "slug": "judge",
+        "note": "45-damage revolver rounds hit hard, but 200 RPM leaves no room to miss."
+      },
+      {
+        "slug": "ggx-18",
+        "note": "A 1,200 RPM machine pistol that burns its magazine faster than it drops targets."
+      },
+      {
+        "slug": "mp43",
+        "note": "Both 8-pellet barrels dump in under a second. Then the reload leaves you exposed."
+      }
+    ],
+    "d": [
+      {
+        "slug": "scout-rifle-td",
+        "note": "A bolt action chambered in 5.56: 28 damage a shot is the training rifle it sounds like."
+      },
+      {
+        "slug": "ggx-17",
+        "note": "The starter 9mm sidearm. 22 damage with nothing else going for it."
+      },
+      {
+        "slug": "m1911",
+        "note": "30 damage at 430 RPM with a 253 m/s crawl. Carried for style, not results."
+      }
+    ]
+  },
+  "analysis": "This is just an iteration of a tier list - feel free to make and share your own! The general guiding principle for us is that damage-per-shot matters more than rate of fire. Armor reduction and falloff apply to every hit, so fewer hits means less damage lost to falloff and mitigated by armor. That is why the FAL outranks the faster 5.56 rifles, which all do an identical 28 damage and separate only on fire rate and muzzle velocity.\n\nLower down, most weapons fall into their placements because they cannot break through into higher tiers rather than being a \"bad weapon\". For example, the Super-45 has the highest close-range output in the game and still sits in A tier, because it pretty much stops working past 50 meters.",
+  "updatedAt": "2026-09-08T21:17:47.335+00:00",
+  "source": "db"
+}

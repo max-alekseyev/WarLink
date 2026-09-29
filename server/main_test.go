@@ -196,8 +196,8 @@ func TestHandleAnalyticsActivePlayers(t *testing.T) {
 	if p.Game != "WARDOGS" {
 		t.Errorf("expected game WARDOGS, got %s", p.Game)
 	}
-	if p.ClientIP != "198.51.100.22" {
-		t.Errorf("expected IP 198.51.100.22, got %s", p.ClientIP)
+	if p.ClientIP != "198.51.100.***" {
+		t.Errorf("expected masked IP 198.51.100.***, got %s", p.ClientIP)
 	}
 }
 

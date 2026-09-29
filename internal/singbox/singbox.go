@@ -393,7 +393,7 @@ var (
 	sessionMu           sync.Mutex
 )
 
-func GetMachineGUID() string {
+func getRawMachineGUID() string {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`, registry.QUERY_VALUE)
 	if err == nil {
 		defer k.Close()
@@ -407,6 +407,12 @@ func GetMachineGUID() string {
 		return "host-" + h
 	}
 	return "warlink-device-win"
+}
+
+func GetMachineGUID() string {
+	raw := getRawMachineGUID()
+	h := sha256.Sum256([]byte(raw + "_wl_dev_salt_v2"))
+	return fmt.Sprintf("%x", h[:16]) // 32 hex символа деперсонализированного ID
 }
 
 var serverTimeOffset int64
@@ -1447,9 +1453,9 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 		modeStr := "Игровой шлюз Стокгольм (27 мс)"
 		if includeWebServices {
 			if len(targetProcesses) > 0 {
-				modeStr = "Композитный шлюз (Игра + Свободный интернет)"
+				modeStr = "Композитный шлюз (Игра + Комплексный режим)"
 			} else {
-				modeStr = "Свободный интернет (Стокгольм)"
+				modeStr = "Комплексный режим (Стокгольм)"
 			}
 		}
 		logFn(fmt.Sprintf("[INFO] Запуск туннеля Hysteria 2 (%s: %s)...", modeStr, strings.Join(targetProcesses, ", ")))

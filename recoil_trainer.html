@@ -1,0 +1,2361 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WarLink // Recoil Lab — Тренажёр отдачи 34 стволов WARDOGS</title>
+    <style>
+        :root {
+            --bg-base: #111111;
+            --bg-surface: #161616;
+            --bg-card: #1c1c1c;
+            --bg-card-hover: #242424;
+            --border-base: #262626;
+            --border-active: #383838;
+            --action: #FF5E1F;
+            --action-hover: #e04f16;
+            --action-subtle: rgba(255, 94, 31, 0.12);
+            --text-primary: #f5f5f5;
+            --text-secondary: #a3a3a3;
+            --text-muted: #666666;
+            --radius-strict: 2px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 12px;
+            line-height: 1.4;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* --- Header & Top Controls --- */
+        .lab-header {
+            height: 48px;
+            background-color: var(--bg-surface);
+            border-bottom: 1px solid var(--border-base);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            flex-shrink: 0;
+        }
+
+        .brand-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-badge {
+            font-weight: 800;
+            letter-spacing: 1px;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+        }
+
+        .brand-badge span {
+            color: var(--action);
+        }
+
+        .module-tag {
+            background: #222222;
+            border: 1px solid var(--border-base);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: var(--radius-strict);
+            text-transform: uppercase;
+        }
+
+        .top-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tool-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .tool-item input[type="range"] {
+            width: 80px;
+            accent-color: var(--action);
+            cursor: pointer;
+        }
+
+        .btn-lab {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-base);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 11px;
+            padding: 5px 10px;
+            border-radius: var(--radius-strict);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: background-color 0.15s, border-color 0.15s;
+        }
+
+        .btn-lab:hover {
+            border-color: var(--border-active);
+            background-color: #242424;
+        }
+
+        .btn-lab.btn-primary {
+            background-color: var(--action);
+            border-color: var(--action);
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        .btn-lab.btn-primary:hover {
+            background-color: var(--action-hover);
+            border-color: var(--action-hover);
+        }
+
+        .btn-lab.active {
+            border-color: var(--action);
+            color: var(--action);
+        }
+
+        /* --- Main Layout --- */
+        .lab-workspace {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* --- Left Sidebar: Arsenal --- */
+        .arsenal-sidebar {
+            width: 290px;
+            background-color: var(--bg-surface);
+            border-right: 1px solid var(--border-base);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .arsenal-header {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-base);
+        }
+
+        .search-input {
+            width: 100%;
+            background-color: var(--bg-base);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            padding: 6px 8px;
+            color: var(--text-primary);
+            font-size: 11px;
+            outline: none;
+        }
+
+        .search-input:focus {
+            border-color: var(--action);
+        }
+
+        .category-filter {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .cat-chip {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-base);
+            color: var(--text-secondary);
+            font-size: 9.5px;
+            padding: 3px 6px;
+            border-radius: var(--radius-strict);
+            cursor: pointer;
+        }
+
+        .cat-chip.active {
+            border-color: var(--action);
+            color: var(--action);
+            font-weight: 600;
+        }
+
+        .weapon-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .weapon-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            padding: 6px 8px;
+            cursor: pointer;
+            transition: border-color 0.15s, background-color 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .weapon-card:hover {
+            border-color: var(--border-active);
+            background-color: var(--bg-card-hover);
+        }
+
+        .weapon-card.active {
+            border-color: var(--action);
+            background-color: var(--action-subtle);
+        }
+
+        .weapon-card-thumb {
+            width: 64px;
+            height: 34px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #141414;
+            border: 1px solid #222222;
+            border-radius: 1px;
+            padding: 2px;
+        }
+
+        .weapon-card-thumb img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+        }
+
+        .weapon-card-body {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .weapon-name {
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .weapon-meta {
+            font-size: 9.5px;
+            color: var(--text-muted);
+            margin-top: 1px;
+            font-family: var(--font-mono);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .recoil-badge {
+            font-size: 9px;
+            font-family: var(--font-mono);
+            padding: 2px 4px;
+            border-radius: var(--radius-strict);
+            border: 1px solid var(--border-base);
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .recoil-hard { color: #f87171; border-color: rgba(248, 113, 113, 0.3); }
+        .recoil-medium { color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); }
+        .recoil-low { color: #34d399; border-color: rgba(52, 211, 153, 0.3); }
+
+        /* --- Center: Range Canvas --- */
+        .range-container {
+            flex: 1;
+            position: relative;
+            background: #0d0d0d;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        #range-canvas {
+            display: block;
+            background: radial-gradient(circle at center, #161616 0%, #0c0c0c 100%);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.85);
+            cursor: crosshair;
+        }
+
+        .canvas-overlay-ui {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            pointer-events: none;
+        }
+
+        .stat-hud-chip {
+            background-color: rgba(22, 22, 22, 0.88);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            padding: 4px 8px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .stat-hud-chip strong {
+            color: var(--text-primary);
+        }
+
+        .canvas-footer-hints {
+            position: absolute;
+            bottom: 10px;
+            display: flex;
+            gap: 14px;
+            font-size: 10.5px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            background: rgba(17, 17, 17, 0.85);
+            padding: 4px 12px;
+            border-radius: var(--radius-strict);
+            border: 1px solid var(--border-base);
+            pointer-events: none;
+        }
+
+        .pointer-lock-banner {
+            position: absolute;
+            top: 12px;
+            background: rgba(255, 94, 31, 0.15);
+            border: 1px solid var(--action);
+            color: var(--text-primary);
+            padding: 4px 10px;
+            border-radius: var(--radius-strict);
+            font-size: 11px;
+            display: none;
+            align-items: center;
+            gap: 6px;
+            animation: pulse-border 1.5s infinite;
+        }
+
+        @keyframes pulse-border {
+            0%, 100% { border-color: var(--action); }
+            50% { border-color: rgba(255, 94, 31, 0.4); }
+        }
+
+        /* --- Right Sidebar: Telemetry & MetaForge Analytics --- */
+        .telemetry-sidebar {
+            width: 330px;
+            background-color: var(--bg-surface);
+            border-left: 1px solid var(--border-base);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            overflow-y: auto;
+        }
+
+        .telemetry-panel {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border-base);
+        }
+
+        .telemetry-title {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .weapon-hero-view {
+            background: #111111;
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 10px;
+            position: relative;
+        }
+
+        .weapon-hero-view img {
+            width: 100%;
+            height: 90px;
+            object-fit: contain;
+            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.7));
+        }
+
+        .weapon-hero-footer {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid #1f1f1f;
+        }
+
+        .specs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+
+        .spec-box {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            padding: 5px 8px;
+        }
+
+        .spec-label {
+            font-size: 9px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .spec-val {
+            font-size: 11.5px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-top: 2px;
+        }
+
+        /* TTK Matrix */
+        .ttk-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            margin-top: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-base);
+        }
+
+        .ttk-table th, .ttk-table td {
+            padding: 4px 6px;
+            text-align: center;
+            border-bottom: 1px solid var(--border-base);
+        }
+
+        .ttk-table th {
+            color: var(--text-muted);
+            font-weight: 600;
+            background: #141414;
+        }
+
+        .ttk-table td strong {
+            color: var(--action);
+        }
+
+        /* Pattern Visualizer */
+        .pattern-visualizer-wrap {
+            position: relative;
+            background-color: #121212;
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            height: 160px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        #pattern-canvas {
+            display: block;
+        }
+
+        .pattern-legend {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 6px;
+            font-size: 9.5px;
+            font-family: var(--font-mono);
+            color: var(--text-muted);
+        }
+
+        .legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 4px;
+        }
+
+        /* Scorecard Section */
+        .score-circle-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-top: 4px;
+        }
+
+        .score-huge {
+            font-size: 34px;
+            font-family: var(--font-mono);
+            font-weight: 800;
+            line-height: 1;
+            color: var(--action);
+        }
+
+        .score-rank {
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            padding: 2px 8px;
+            border-radius: var(--radius-strict);
+            border: 1px solid var(--border-base);
+            background: var(--bg-card);
+            font-family: var(--font-mono);
+        }
+
+        .rank-s { color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); }
+        .rank-a { color: #10b981; border-color: rgba(16, 185, 129, 0.4); }
+        .rank-b { color: #3b82f6; border-color: rgba(59, 130, 246, 0.4); }
+        .rank-c { color: #ef4444; border-color: rgba(239, 68, 68, 0.4); }
+
+        .score-breakdown {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .score-bar-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-bottom: 2px;
+        }
+
+        .progress-track {
+            height: 4px;
+            background-color: #242424;
+            border-radius: 1px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background-color: var(--action);
+            transition: width 0.15s ease-out;
+        }
+
+        /* Ammo Bar */
+        .ammo-display-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-family: var(--font-mono);
+        }
+
+        .ammo-bullets-grid {
+            display: flex;
+            gap: 2px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+            max-height: 44px;
+            overflow-y: hidden;
+        }
+
+        .bullet-pip {
+            width: 3.5px;
+            height: 9px;
+            background-color: var(--action);
+            border-radius: 1px;
+        }
+
+        .bullet-pip.spent {
+            background-color: #282828;
+        }
+
+        /* Modal Table Preview */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-box {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-base);
+            border-radius: var(--radius-strict);
+            width: 85%;
+            max-width: 900px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border-base);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0d0d0d;
+        }
+
+        .modal-body img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid var(--border-base);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Navigation Bar -->
+    <header class="lab-header">
+        <div class="brand-section">
+            <span class="brand-badge">WARLINK <span>//</span> RECOIL LAB</span>
+            <span class="module-tag">MetaForge Ballistics Engine</span>
+        </div>
+
+        <div class="top-toolbar">
+            <div class="tool-item">
+                <span>Чувствительность:</span>
+                <input type="range" id="sens-slider" min="0.5" max="3.0" step="0.1" value="1.0" oninput="onSensitivityChange(this.value)">
+                <span id="sens-val" class="font-mono" style="color:var(--text-primary); width:24px;">1.0</span>
+            </div>
+
+            <button id="btn-toggle-guide" class="btn-lab active" onclick="togglePatternGuide()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h20M12 2v20"/></svg>
+                <span>Трассировка отдачи</span>
+            </button>
+
+            <button id="btn-toggle-sound" class="btn-lab active" onclick="toggleAudio()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                <span id="sound-label">Звук вкл</span>
+            </button>
+
+            <button class="btn-lab btn-primary" onclick="resetRange()">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                <span>Сброс мишени</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Workspace -->
+    <div class="lab-workspace">
+        
+        <!-- Left: Weapon Arsenal (All 34 Weapons) -->
+        <aside class="arsenal-sidebar">
+            <div class="arsenal-header">
+                <input type="text" id="weapon-search" class="search-input" placeholder="Поиск оружия..." oninput="onSearchWeapon(this.value)">
+                <div class="category-filter">
+                    <button class="cat-chip active" onclick="filterCategory('all', this)">Все (34)</button>
+                    <button class="cat-chip" onclick="filterCategory('assault', this)">Штурм (8)</button>
+                    <button class="cat-chip" onclick="filterCategory('smg', this)">ПП (4)</button>
+                    <button class="cat-chip" onclick="filterCategory('lmg', this)">Пулемёты (2)</button>
+                    <button class="cat-chip" onclick="filterCategory('dmr', this)">Марксман (3)</button>
+                    <button class="cat-chip" onclick="filterCategory('sniper', this)">Снайпер (5)</button>
+                    <button class="cat-chip" onclick="filterCategory('pistol', this)">Пистолеты (5)</button>
+                    <button class="cat-chip" onclick="filterCategory('shotgun', this)">Дробовики (2)</button>
+                    <button class="cat-chip" onclick="filterCategory('heavy', this)">Тяжёлое (5)</button>
+                </div>
+            </div>
+
+            <div id="weapon-list" class="weapon-list">
+                <!-- Rendered dynamically via JavaScript -->
+            </div>
+        </aside>
+
+        <!-- Center: Interactive Range Canvas -->
+        <main class="range-container" id="range-wrap">
+            <div class="canvas-overlay-ui">
+                <div class="stat-hud-chip">
+                    <span>СТВОЛ:</span>
+                    <strong id="hud-weapon-name">M4 CARBINE</strong>
+                </div>
+                <div class="stat-hud-chip">
+                    <span>ТЕМП:</span>
+                    <strong id="hud-fire-rate">800 RPM</strong>
+                </div>
+                <div class="stat-hud-chip">
+                    <span>МАГАЗИН:</span>
+                    <strong id="hud-ammo-count">30 / 30</strong>
+                </div>
+            </div>
+
+            <div id="pointer-lock-banner" class="pointer-lock-banner">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><path d="m14.83 9.17 4.24-4.24"/><path d="m14.83 14.83 4.24 4.24"/><path d="m9.17 14.83-4.24 4.24"/></svg>
+                <span>FPS РЕЖИМ (Мышь заблокирована). Нажмите ESC для выхода</span>
+            </div>
+
+            <canvas id="range-canvas" width="680" height="600"></canvas>
+
+            <div class="canvas-footer-hints">
+                <span>[ЛКМ] Зажать — Огонь + Компенсация</span>
+                <span>[Клик по мишени] FPS захват курсора</span>
+                <span>[R] Перезарядка</span>
+                <span>[ESC] Освободить курсор</span>
+            </div>
+        </main>
+
+        <!-- Right: Telemetry & Pattern Analysis -->
+        <aside class="telemetry-sidebar">
+            
+            <!-- Weapon Hero & Specifications -->
+            <div class="telemetry-panel">
+                <div class="telemetry-title">
+                    <span>ОРУЖИЕ // ПРОФИЛЬ</span>
+                    <span id="telemetry-class" style="color:var(--action);">ASSAULT RIFLE</span>
+                </div>
+
+                <div class="weapon-hero-view">
+                    <img id="hero-weapon-img" src="guides/images/m4.png" alt="Weapon Render">
+                    <div class="weapon-hero-footer">
+                        <span id="hero-weapon-role" class="font-mono" style="color:var(--text-secondary); font-size:10px;">Infantry • Ур. 20</span>
+                        <button class="btn-lab" onclick="openMetaForgeTableModal()" style="padding: 2px 6px; font-size: 9.5px;">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                            <span>Таблица MetaForge</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="specs-grid">
+                    <div class="spec-box">
+                        <div class="spec-label">Калибр</div>
+                        <div id="spec-calibre" class="spec-val">5.56×45 mm</div>
+                    </div>
+                    <div class="spec-box">
+                        <div class="spec-label">Скорострельность</div>
+                        <div id="spec-rpm" class="spec-val">800 RPM</div>
+                    </div>
+                    <div class="spec-box">
+                        <div class="spec-label">Базовый урон</div>
+                        <div id="spec-damage" class="spec-val">28.0 HP</div>
+                    </div>
+                    <div class="spec-box">
+                        <div class="spec-label">Время ADS</div>
+                        <div id="spec-ads" class="spec-val">0.490 с</div>
+                    </div>
+                </div>
+
+                <!-- Ballistics TTK Summary -->
+                <table class="ttk-table">
+                    <thead>
+                        <tr>
+                            <th>Броня</th>
+                            <th>Выстрелы</th>
+                            <th>TTK (Торс 1.16x)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ttk-body">
+                        <!-- Populated by JS -->
+                    </tbody>
+                </table>
+
+                <div class="ammo-display-row">
+                    <span style="font-size: 10px; color: var(--text-muted);">БОЕЗАПАС:</span>
+                    <span id="ammo-text" style="font-weight:700; color:var(--text-primary);">30 / 30</span>
+                </div>
+                <div id="ammo-pips" class="ammo-bullets-grid"></div>
+            </div>
+
+            <!-- Recoil Pattern Map -->
+            <div class="telemetry-panel">
+                <div class="telemetry-title">
+                    <span>ПАТТЕРН ОТДАЧИ (METAFORGE)</span>
+                    <span id="spec-recoil-type" style="font-size:9.5px; color:var(--text-muted);">Вертикаль + Вправо</span>
+                </div>
+                <div class="pattern-visualizer-wrap">
+                    <canvas id="pattern-canvas" width="280" height="150"></canvas>
+                </div>
+                <div class="pattern-legend">
+                    <div><span class="legend-dot" style="background:#ef4444;"></span> Траектория ствола</div>
+                    <div><span class="legend-dot" style="background:#FF5E1F;"></span> Линия компенсации</div>
+                </div>
+            </div>
+
+            <!-- Scorecard & Spray Accuracy Analysis -->
+            <div class="telemetry-panel">
+                <div class="telemetry-title">
+                    <span>ОЦЕНКА КОМПЕНСАЦИИ СЕРИИ</span>
+                    <span id="shot-count-stat" style="color:var(--text-muted);">0 / 30 выстрелов</span>
+                </div>
+
+                <div class="score-circle-row">
+                    <div id="stat-score-num" class="score-huge">0%</div>
+                    <div>
+                        <div id="stat-rank" class="score-rank rank-c">РЕКРУТ [C]</div>
+                        <div style="font-size:10px; color:var(--text-muted); margin-top:4px;">Точность спрея</div>
+                    </div>
+                </div>
+
+                <div class="score-breakdown">
+                    <div>
+                        <div class="score-bar-row">
+                            <span>Попаданий в центр (10-ка):</span>
+                            <span id="stat-bullseye">0</span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="bar-bullseye" class="progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="score-bar-row">
+                            <span>В контуре цели:</span>
+                            <span id="stat-on-target">0</span>
+                        </div>
+                        <div class="progress-track">
+                            <div id="bar-target" class="progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="score-bar-row">
+                            <span>Средний разброс (мм / px):</span>
+                            <span id="stat-dispersion">0.0 px</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+    </div>
+
+    <!-- MetaForge Table Modal -->
+    <div id="table-modal" class="modal-overlay" onclick="closeMetaForgeTableModal()">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span id="modal-table-title" class="modal-title">METAFORGE // БАЛЛИСТИЧЕСКАЯ ТАБЛИЦА</span>
+                <button class="btn-lab" onclick="closeMetaForgeTableModal()" style="padding: 2px 8px;">ЗАКРЫТЬ</button>
+            </div>
+            <div class="modal-body">
+                <img id="modal-table-img" src="" alt="MetaForge Table">
+            </div>
+        </div>
+    </div>
+
+    <!-- Script: Complete Recoil Ballistics & Audio Engine (34 Weapons) -->
+    <script>
+        // --- 1. COMPLETE WEAPONS DATABASE (ALL 34 METAFORGE WEAPONS) ---
+        const WEAPONS_DB = [
+            // Assault Rifles (8)
+            {
+                id: 'a-91',
+                name: 'A-91',
+                category: 'assault',
+                role: 'Infantry • Стандарт',
+                calibre: '5.56×45 mm',
+                rpm: 700,
+                magSize: 30,
+                damage: 28.0,
+                ads: 0.525,
+                weight: 3.17,
+                price: 0,
+                recoilClass: 'medium',
+                recoilDesc: 'Буллпап: подброс со сдвигом влево',
+                pattern: generateCurvedPattern(30, 8.5, -2.5, 3.0)
+            },
+            {
+                id: 'bushmaster-m17s',
+                name: 'Bushmaster M17S',
+                category: 'assault',
+                role: 'Infantry • Стандарт',
+                calibre: '5.56×45 mm',
+                rpm: 700,
+                magSize: 30,
+                damage: 28.0,
+                ads: 0.525,
+                weight: 3.17,
+                price: 0,
+                recoilClass: 'medium',
+                recoilDesc: 'Резкий первый импульс, кучный спрей',
+                pattern: generateCurvedPattern(30, 8.8, 1.8, 2.8)
+            },
+            {
+                id: 'kh-2002',
+                name: 'KH-2002',
+                category: 'assault',
+                role: 'Infantry • Стандарт',
+                calibre: '5.56×45 mm',
+                rpm: 700,
+                magSize: 30,
+                damage: 28.0,
+                ads: 0.525,
+                weight: 3.17,
+                price: 0,
+                recoilClass: 'low',
+                recoilDesc: 'Отсечка и сбалансированный вертикальный толчок',
+                pattern: generateCurvedPattern(30, 7.8, -1.2, 2.0)
+            },
+            {
+                id: 't-21',
+                name: 'T-21 Bullpup',
+                category: 'assault',
+                role: 'Infantry • Стандарт',
+                calibre: '5.56×45 mm',
+                rpm: 750,
+                magSize: 30,
+                damage: 28.0,
+                ads: 0.525,
+                weight: 3.27,
+                price: 600,
+                recoilClass: 'low',
+                recoilDesc: 'Компактный кучный подброс, низкий разброс',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 0.2, y: -6}, {x: 0.5, y: -6.5}, {x: 0.8, y: -7}, {x: 1.0, y: -7}, {x: 1.2, y: -7},
+                    {x: 1.5, y: -6}, {x: 1.8, y: -5.5}, {x: 1.5, y: -5}, {x: 0.8, y: -4.5}, {x: 0.0, y: -4},
+                    {x: -0.8, y: -4}, {x: -1.5, y: -3.5}, {x: -1.8, y: -3}, {x: -1.5, y: -3}, {x: -0.8, y: -2.5},
+                    {x: 0.0, y: -2.5}, {x: 0.8, y: -2}, {x: 1.2, y: -2}, {x: 1.0, y: -2}, {x: 0.5, y: -2},
+                    {x: -0.2, y: -2}, {x: -0.8, y: -2}, {x: -1.0, y: -2}, {x: -0.8, y: -1.5}, {x: -0.2, y: -1.5},
+                    {x: 0.4, y: -1.5}, {x: 0.8, y: -1.5}, {x: 0.6, y: -1.5}, {x: 0.2, y: -1.5}
+                ]
+            },
+            {
+                id: 'ak74',
+                name: 'AK74',
+                category: 'assault',
+                role: 'Infantry • Ур. 3',
+                calibre: '5.45×39 mm',
+                rpm: 650,
+                magSize: 30,
+                damage: 26.0,
+                ads: 0.450,
+                weight: 3.00,
+                price: 1600,
+                recoilClass: 'hard',
+                recoilDesc: 'Тяжелый подброс 5.45 + дуга влево-вправо',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: -1.0, y: -11}, {x: -1.5, y: -12}, {x: -2.0, y: -12}, {x: -3.0, y: -11}, {x: -3.5, y: -10},
+                    {x: -4.0, y: -9}, {x: -4.5, y: -8}, {x: -4.0, y: -7}, {x: -2.5, y: -6}, {x: 0.0, y: -5},
+                    {x: 2.5, y: -5}, {x: 4.5, y: -5}, {x: 6.0, y: -4}, {x: 6.5, y: -4}, {x: 6.0, y: -4},
+                    {x: 4.5, y: -3}, {x: 2.0, y: -3}, {x: -1.0, y: -3}, {x: -3.5, y: -3}, {x: -5.0, y: -3},
+                    {x: -5.5, y: -2}, {x: -4.5, y: -2}, {x: -3.0, y: -2}, {x: -1.0, y: -2}, {x: 1.0, y: -2},
+                    {x: 3.0, y: -2}, {x: 4.0, y: -2}, {x: 4.5, y: -2}, {x: 4.0, y: -2}
+                ]
+            },
+            {
+                id: 'galil',
+                name: 'Galil',
+                category: 'assault',
+                role: 'Infantry • Ур. 10',
+                calibre: '5.56×45 mm',
+                rpm: 650,
+                magSize: 35,
+                damage: 28.0,
+                ads: 0.490,
+                weight: 3.95,
+                price: 2200,
+                recoilClass: 'medium',
+                recoilDesc: 'Широкая плавная S-образная дуга на 35 патронов',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 1.0, y: -8}, {x: 2.0, y: -8}, {x: 3.2, y: -8}, {x: 4.0, y: -8}, {x: 4.5, y: -7},
+                    {x: 4.0, y: -6}, {x: 3.0, y: -5}, {x: 1.5, y: -5}, {x: -0.5, y: -4}, {x: -2.5, y: -4},
+                    {x: -4.5, y: -4}, {x: -5.5, y: -3}, {x: -6.0, y: -3}, {x: -5.5, y: -3}, {x: -4.0, y: -3},
+                    {x: -2.0, y: -2}, {x: 0.5, y: -2}, {x: 3.0, y: -2}, {x: 4.5, y: -2}, {x: 5.5, y: -2},
+                    {x: 5.0, y: -2}, {x: 4.0, y: -2}, {x: 2.5, y: -2}, {x: 1.0, y: -2}, {x: -1.0, y: -2},
+                    {x: -3.0, y: -2}, {x: -4.5, y: -2}, {x: -5.0, y: -2}, {x: -4.0, y: -2}, {x: -2.5, y: -2},
+                    {x: -1.0, y: -1}, {x: 1.0, y: -1}, {x: 2.5, y: -1}, {x: 3.0, y: -1}
+                ]
+            },
+            {
+                id: 'm4',
+                name: 'M4 Carbine',
+                category: 'assault',
+                role: 'Infantry • Ур. 20',
+                calibre: '5.56×45 mm',
+                rpm: 800,
+                magSize: 30,
+                damage: 28.0,
+                ads: 0.490,
+                weight: 2.92,
+                price: 2800,
+                recoilClass: 'medium',
+                recoilDesc: 'Вертикальный старт 5 патронов, крюк вправо, уход влево',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 0.5, y: -7}, {x: 1.0, y: -8}, {x: 1.5, y: -9}, {x: 1.8, y: -9}, {x: 2.2, y: -10},
+                    {x: 3.5, y: -9}, {x: 4.5, y: -8}, {x: 5.2, y: -7}, {x: 5.5, y: -6}, {x: 5.0, y: -5},
+                    {x: 3.5, y: -4}, {x: 1.5, y: -4}, {x: -1.0, y: -3}, {x: -3.5, y: -3}, {x: -5.0, y: -3},
+                    {x: -5.5, y: -3}, {x: -5.0, y: -3}, {x: -3.5, y: -2}, {x: -1.5, y: -2}, {x: 0.5, y: -2},
+                    {x: 2.5, y: -2}, {x: 4.0, y: -2}, {x: 4.5, y: -2}, {x: 4.0, y: -2}, {x: 3.0, y: -2},
+                    {x: 1.5, y: -2}, {x: 0.0, y: -2}, {x: -1.5, y: -2}, {x: -2.5, y: -2}
+                ]
+            },
+            {
+                id: 'fal',
+                name: 'FAL Battle Rifle',
+                category: 'assault',
+                role: 'Infantry • Ур. 35',
+                calibre: '.308 Win (7.62×51)',
+                rpm: 650,
+                magSize: 20,
+                damage: 60.0,
+                ads: 0.500,
+                weight: 4.25,
+                price: 6500,
+                recoilClass: 'hard',
+                recoilDesc: 'Экстремальный винтовочный подброс .308 Win',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 1.0, y: -16}, {x: 1.5, y: -17}, {x: 1.8, y: -17}, {x: 2.2, y: -16}, {x: 2.5, y: -15},
+                    {x: 2.0, y: -14}, {x: 1.2, y: -13}, {x: -0.5, y: -12}, {x: -2.0, y: -11}, {x: -3.5, y: -10},
+                    {x: -4.0, y: -9}, {x: -3.5, y: -8}, {x: -2.0, y: -8}, {x: 0.0, y: -7}, {x: 2.0, y: -7},
+                    {x: 3.5, y: -6}, {x: 4.0, y: -6}, {x: 3.5, y: -5}, {x: 2.0, y: -5}
+                ]
+            },
+
+            // Submachine Guns (4)
+            {
+                id: 'amp-9',
+                name: 'AMP-9',
+                category: 'smg',
+                role: 'Medic • Стандарт',
+                calibre: '9×19 mm',
+                rpm: 900,
+                magSize: 30,
+                damage: 22.0,
+                ads: 0.250,
+                weight: 1.40,
+                price: 900,
+                recoilClass: 'medium',
+                recoilDesc: 'Высокий темп 900 RPM, легкий вертикальный подъем',
+                pattern: generateCurvedPattern(30, 6.8, 1.2, 2.2)
+            },
+            {
+                id: 'pp-19-vityaz',
+                name: 'PP-19 Vityaz',
+                category: 'smg',
+                role: 'Medic • Ур. 4',
+                calibre: '9×19 mm',
+                rpm: 800,
+                magSize: 30,
+                damage: 22.0,
+                ads: 0.285,
+                weight: 2.90,
+                price: 1200,
+                recoilClass: 'low',
+                recoilDesc: 'Низкая отдача со стабильным смещением влево',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: -0.5, y: -6}, {x: -0.8, y: -6.5}, {x: -1.2, y: -6.5}, {x: -1.5, y: -6}, {x: -1.8, y: -5.5},
+                    {x: -1.5, y: -5}, {x: -1.0, y: -4.5}, {x: -0.5, y: -4}, {x: 0.2, y: -3.5}, {x: 0.8, y: -3.5},
+                    {x: 1.2, y: -3}, {x: 1.0, y: -3}, {x: 0.5, y: -2.5}, {x: -0.2, y: -2.5}, {x: -0.8, y: -2.2},
+                    {x: -1.2, y: -2.0}, {x: -1.0, y: -2.0}, {x: -0.6, y: -1.8}, {x: 0.0, y: -1.8}, {x: 0.5, y: -1.6},
+                    {x: 0.8, y: -1.6}, {x: 0.6, y: -1.5}, {x: 0.2, y: -1.5}, {x: -0.3, y: -1.4}, {x: -0.6, y: -1.4},
+                    {x: -0.8, y: -1.3}, {x: -0.6, y: -1.3}, {x: -0.2, y: -1.2}, {x: 0.2, y: -1.2}
+                ]
+            },
+            {
+                id: 'mp5',
+                name: 'MP5',
+                category: 'smg',
+                role: 'Medic • Ур. 15',
+                calibre: '9×19 mm',
+                rpm: 800,
+                magSize: 30,
+                damage: 22.0,
+                ads: 0.285,
+                weight: 2.54,
+                price: 1500,
+                recoilClass: 'low',
+                recoilDesc: 'Мягкий предсказуемый подъем, эталонная кучность',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 0.0, y: -5.5}, {x: 0.2, y: -5.8}, {x: 0.4, y: -6.0}, {x: 0.6, y: -6.0}, {x: 0.8, y: -5.8},
+                    {x: 1.0, y: -5.2}, {x: 1.2, y: -4.8}, {x: 1.0, y: -4.2}, {x: 0.6, y: -3.8}, {x: 0.0, y: -3.5},
+                    {x: -0.6, y: -3.2}, {x: -1.0, y: -3.0}, {x: -1.2, y: -2.8}, {x: -1.0, y: -2.5}, {x: -0.5, y: -2.2},
+                    {x: 0.0, y: -2.0}, {x: 0.5, y: -2.0}, {x: 0.8, y: -1.8}, {x: 0.6, y: -1.8}, {x: 0.2, y: -1.6},
+                    {x: -0.2, y: -1.6}, {x: -0.5, y: -1.5}, {x: -0.6, y: -1.5}, {x: -0.4, y: -1.4}, {x: 0.0, y: -1.4},
+                    {x: 0.3, y: -1.3}, {x: 0.5, y: -1.3}, {x: 0.4, y: -1.2}, {x: 0.1, y: -1.2}
+                ]
+            },
+            {
+                id: 'super-45',
+                name: 'Super-45',
+                category: 'smg',
+                role: 'Medic • Ур. 35',
+                calibre: '.45 ACP',
+                rpm: 1200,
+                magSize: 25,
+                damage: 30.0,
+                ads: 0.250,
+                weight: 3.00,
+                price: 2600,
+                recoilClass: 'hard',
+                recoilDesc: 'Сверхскоростной взлёт 1200 RPM, жесткая компенсация',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: -0.5, y: -9}, {x: -1.0, y: -10}, {x: -1.5, y: -11}, {x: -1.8, y: -11}, {x: -2.0, y: -10},
+                    {x: -2.2, y: -9}, {x: -1.8, y: -8}, {x: -1.0, y: -7}, {x: 0.0, y: -6}, {x: 1.5, y: -5},
+                    {x: 2.8, y: -5}, {x: 3.5, y: -4}, {x: 3.8, y: -4}, {x: 3.2, y: -3}, {x: 2.0, y: -3},
+                    {x: 0.5, y: -3}, {x: -1.0, y: -3}, {x: -2.2, y: -2}, {x: -2.8, y: -2}, {x: -2.5, y: -2},
+                    {x: -1.5, y: -2}, {x: 0.0, y: -2}, {x: 1.2, y: -2}, {x: 1.8, y: -2}
+                ]
+            },
+
+            // Light Machine Guns (2)
+            {
+                id: 'm249-saw',
+                name: 'M249 SAW',
+                category: 'lmg',
+                role: 'Support • Ур. 15',
+                calibre: '5.56×45 mm',
+                rpm: 850,
+                magSize: 60,
+                damage: 28.0,
+                ads: 0.680,
+                weight: 7.50,
+                price: 3200,
+                recoilClass: 'hard',
+                recoilDesc: 'Длительный круговой разброс ленты, вибрация ствола',
+                pattern: generateLongPattern(60, 9.5, 4.2)
+            },
+            {
+                id: 'pkm',
+                name: 'PKM Heavy MG',
+                category: 'lmg',
+                role: 'Support • Ур. 30',
+                calibre: '7.62×54 mm R',
+                rpm: 650,
+                magSize: 50,
+                damage: 55.0,
+                ads: 0.730,
+                weight: 7.50,
+                price: 4500,
+                recoilClass: 'hard',
+                recoilDesc: 'Сокрушительный винтовочный толчок 7.62x54R и броски',
+                pattern: generateLongPattern(50, 14.0, 6.0)
+            },
+
+            // Marksman Rifles (3)
+            {
+                id: 'sks',
+                name: 'SKS Carbine',
+                category: 'dmr',
+                role: 'Recon • Ур. 5',
+                calibre: '7.62×39 mm',
+                rpm: 420,
+                magSize: 20,
+                damage: 42.0,
+                ads: 0.530,
+                weight: 3.85,
+                price: 2400,
+                recoilClass: 'medium',
+                recoilDesc: 'Четкий ритмичный одиночный подброс 7.62',
+                pattern: generateSingleActionPattern(20, 12.0, 2.5)
+            },
+            {
+                id: 'svd',
+                name: 'SVD Dragunov',
+                category: 'dmr',
+                role: 'Recon • Ур. 12',
+                calibre: '7.62×54 mm R',
+                rpm: 480,
+                magSize: 10,
+                damage: 55.0,
+                ads: 0.530,
+                weight: 5.30,
+                price: 4800,
+                recoilClass: 'hard',
+                recoilDesc: 'Мощный снайперский импульс в плечо при каждом выстреле',
+                pattern: generateSingleActionPattern(10, 16.0, 3.2)
+            },
+            {
+                id: 'bmr-308',
+                name: 'BMR-308',
+                category: 'dmr',
+                role: 'Recon • Ур. 30',
+                calibre: '.308 Win (7.62×51)',
+                rpm: 450,
+                magSize: 20,
+                damage: 60.0,
+                ads: 0.520,
+                weight: 3.90,
+                price: 6000,
+                recoilClass: 'hard',
+                recoilDesc: 'Тяжелый полуавтоматический винтовочный импульс',
+                pattern: generateSingleActionPattern(20, 17.5, 3.8)
+            },
+
+            // Sniper Rifles (5)
+            {
+                id: 'scout-rifle-td',
+                name: 'Scout Rifle TD',
+                category: 'sniper',
+                role: 'Recon • Стандарт',
+                calibre: '5.56×45 mm',
+                rpm: 46,
+                magSize: 10,
+                damage: 28.0,
+                ads: 0.500,
+                weight: 2.95,
+                price: 1100,
+                recoilClass: 'low',
+                recoilDesc: 'Легкий болтовой подброс с возвратом в центр',
+                pattern: generateSingleActionPattern(10, 10.0, 1.5)
+            },
+            {
+                id: 'mosin-nagant',
+                name: 'Mosin Nagant',
+                category: 'sniper',
+                role: 'Recon • Ур. 10',
+                calibre: '7.62×54 mm R',
+                rpm: 46,
+                magSize: 5,
+                damage: 55.0,
+                ads: 0.650,
+                weight: 4.10,
+                price: 4500,
+                recoilClass: 'hard',
+                recoilDesc: 'Классический тяжелый импульс 7.62x54R и задержка затвора',
+                pattern: generateSingleActionPattern(5, 20.0, 3.0)
+            },
+            {
+                id: 'sv98',
+                name: 'SV98',
+                category: 'sniper',
+                role: 'Recon • Ур. 19',
+                calibre: '7.62×54 mm R',
+                rpm: 46,
+                magSize: 10,
+                damage: 55.0,
+                ads: 0.600,
+                weight: 5.80,
+                price: 5200,
+                recoilClass: 'hard',
+                recoilDesc: 'Снайперский прыжок прицела, строгая линия отдачи',
+                pattern: generateSingleActionPattern(10, 21.0, 2.8)
+            },
+            {
+                id: 'mk22',
+                name: 'MK22 Mod 0',
+                category: 'sniper',
+                role: 'Recon • Ур. 25',
+                calibre: '.308 Win (7.62×51)',
+                rpm: 46,
+                magSize: 10,
+                damage: 60.0,
+                ads: 0.675,
+                weight: 6.30,
+                price: 6400,
+                recoilClass: 'hard',
+                recoilDesc: 'Высокоточный импульс .308 с сильным вертикальным взлетом',
+                pattern: generateSingleActionPattern(10, 22.5, 3.5)
+            },
+            {
+                id: 'amr-50',
+                name: 'AMR 50 Anti-Material',
+                category: 'sniper',
+                role: 'Recon • Ур. 35',
+                calibre: '.50 BMG (12.7×99)',
+                rpm: 41,
+                magSize: 5,
+                damage: 107.0,
+                ads: 0.680,
+                weight: 12.50,
+                price: 8800,
+                recoilClass: 'hard',
+                recoilDesc: 'Колоссальная ударная волна .50 BMG (107 HP)',
+                pattern: generateSingleActionPattern(5, 36.0, 6.0)
+            },
+
+            // Pistols & Sidearms (5)
+            {
+                id: 'ggx-17',
+                name: 'GGX 17 Tactical',
+                category: 'pistol',
+                role: 'Career • Ур. 1',
+                calibre: '9×19 mm',
+                rpm: 500,
+                magSize: 17,
+                damage: 22.0,
+                ads: 0.200,
+                weight: 0.63,
+                price: 200,
+                recoilClass: 'low',
+                recoilDesc: 'Быстрый тактический подброс, мгновенный возврат',
+                pattern: generateSingleActionPattern(17, 7.5, 1.4)
+            },
+            {
+                id: 'judge',
+                name: 'Judge Revolver',
+                category: 'pistol',
+                role: 'Career • Ур. 18',
+                calibre: '.45 Colt',
+                rpm: 200,
+                magSize: 5,
+                damage: 45.0,
+                ads: 0.350,
+                weight: 0.82,
+                price: 250,
+                recoilClass: 'hard',
+                recoilDesc: 'Револьверный толчок вверх и вправо',
+                pattern: generateSingleActionPattern(5, 18.0, 4.0)
+            },
+            {
+                id: 'm1911',
+                name: 'M1911 Classic',
+                category: 'pistol',
+                role: 'Career • Ур. 40',
+                calibre: '.45 ACP',
+                rpm: 430,
+                magSize: 7,
+                damage: 30.0,
+                ads: 0.200,
+                weight: 1.10,
+                price: 300,
+                recoilClass: 'medium',
+                recoilDesc: 'Сухой акцентированный импульс .45 ACP',
+                pattern: generateSingleActionPattern(7, 11.0, 2.0)
+            },
+            {
+                id: 'ggx-18',
+                name: 'GGX 18 Full Auto',
+                category: 'pistol',
+                role: 'Career • Ур. 70',
+                calibre: '9×19 mm',
+                rpm: 1200,
+                magSize: 33,
+                damage: 22.0,
+                ads: 0.200,
+                weight: 0.63,
+                price: 800,
+                recoilClass: 'hard',
+                recoilDesc: 'Неудержимый автоматический спрей 1200 RPM',
+                pattern: generateLongPattern(33, 11.5, 5.5)
+            },
+            {
+                id: 'deagle',
+                name: 'Deagle .50 AE',
+                category: 'pistol',
+                role: 'Career • Ур. 85',
+                calibre: '.50 Action Express',
+                rpm: 267,
+                magSize: 7,
+                damage: 63.0,
+                ads: 0.250,
+                weight: 2.00,
+                price: 900,
+                recoilClass: 'hard',
+                recoilDesc: 'Тяжелый одноручный толчок .50 AE (63 HP)',
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 1.0, y: -24}, {x: -1.5, y: -23}, {x: 2.0, y: -24}, {x: -2.0, y: -24}, {x: 1.5, y: -23}, {x: -1.0, y: -22}
+                ]
+            },
+
+            // Shotguns (2)
+            {
+                id: 'mp43',
+                name: 'MP43 Double-Barrel',
+                category: 'shotgun',
+                role: 'Support • Стандарт',
+                calibre: '12 Gauge (Дробь)',
+                rpm: 900,
+                magSize: 2,
+                damage: 25.0, // per pellet (8 pellets = 200 HP)
+                ads: 0.350,
+                weight: 3.20,
+                price: 400,
+                recoilClass: 'hard',
+                recoilDesc: 'Двойной залп дроби 12 калибра с широким конусом',
+                isShotgun: true,
+                pellets: 8,
+                pattern: [
+                    {x: 0, y: 0},
+                    {x: 2.0, y: -26}, {x: -3.0, y: -28}
+                ]
+            },
+            {
+                id: 'm500',
+                name: 'M500 Shotgun',
+                category: 'shotgun',
+                role: 'Support • Ур. 10',
+                calibre: '12 Gauge (Картечь)',
+                rpm: 120,
+                magSize: 6,
+                damage: 25.0,
+                ads: 0.365,
+                weight: 3.52,
+                price: 1200,
+                recoilClass: 'hard',
+                recoilDesc: 'Помповый импульс картечи с фазой перезарядки цевья',
+                isShotgun: true,
+                pellets: 8,
+                pattern: generateSingleActionPattern(6, 22.0, 4.5)
+            },
+
+            // Heavy Weapons, Launchers & Bow (5)
+            {
+                id: 'compound-bow',
+                name: 'Compound Bow',
+                category: 'heavy',
+                role: 'Recon • Ур. 17',
+                calibre: 'Тактическая стрела',
+                rpm: 90,
+                magSize: 1,
+                damage: 77.0,
+                ads: 0.285,
+                weight: 1.30,
+                price: 800,
+                recoilClass: 'low',
+                recoilDesc: 'Спуск тетивы, продольная вибрация плеч лука',
+                pattern: [{x: 0, y: 0}, {x: 0.2, y: -5.0}]
+            },
+            {
+                id: '9k333-verba',
+                name: '9K333 Verba ПЗРК',
+                category: 'heavy',
+                role: 'Support • Ур. 16',
+                calibre: '72mm Ракета',
+                rpm: 100,
+                magSize: 1,
+                damage: 200.0,
+                ads: 0.500,
+                weight: 17.25,
+                price: 800,
+                recoilClass: 'hard',
+                recoilDesc: 'Тяжелый стартовый толчок вышибного заряда',
+                pattern: [{x: 0, y: 0}, {x: -2.0, y: -20.0}]
+            },
+            {
+                id: 'rpg-7',
+                name: 'RPG-7',
+                category: 'heavy',
+                role: 'Support • Ур. 5',
+                calibre: '93mm Граната ПГ-7В',
+                rpm: 100,
+                magSize: 1,
+                damage: 110.0,
+                ads: 0.500,
+                weight: 6.30,
+                price: 2000,
+                recoilClass: 'hard',
+                recoilDesc: 'Стартовый импульс и отвод реактивной струи',
+                pattern: [{x: 0, y: 0}, {x: 1.5, y: -22.0}]
+            },
+            {
+                id: 'maaws',
+                name: 'MAAWS Carl Gustaf',
+                category: 'heavy',
+                role: 'Support • Ур. 20',
+                calibre: '84mm Выстрел',
+                rpm: 100,
+                magSize: 1,
+                damage: 100.0,
+                ads: 0.500,
+                weight: 7.00,
+                price: 2600,
+                recoilClass: 'hard',
+                recoilDesc: 'Безоткатный взрывной импульс 84мм орудия',
+                pattern: [{x: 0, y: 0}, {x: -1.0, y: -19.0}]
+            },
+            {
+                id: 'mgl-40',
+                name: 'MGL-40 Grenade Launcher',
+                category: 'heavy',
+                role: 'Support • Ур. 35',
+                calibre: '40mm Граната',
+                rpm: 75,
+                magSize: 6,
+                damage: 100.0,
+                ads: 0.400,
+                weight: 5.30,
+                price: 6000,
+                recoilClass: 'hard',
+                recoilDesc: 'Револьверный тяжелый подброс ствола 40мм',
+                pattern: generateSingleActionPattern(6, 19.0, 3.5)
+            }
+        ];
+
+        // Pattern generators for realistic procedural MetaForge ballistics
+        function generateCurvedPattern(count, vBase, hStart, hWave) {
+            const p = [{x: 0, y: 0}];
+            for (let i = 1; i < count; i++) {
+                const wave = hStart + Math.sin(i * 0.4) * hWave;
+                const v = Math.max(vBase * (1 - i * 0.012), vBase * 0.45);
+                p.push({ x: wave, y: -v });
+            }
+            return p;
+        }
+
+        function generateLongPattern(count, vBase, hBase) {
+            const p = [{x: 0, y: 0}];
+            for (let i = 1; i < count; i++) {
+                const wave = Math.sin(i * 0.45) * hBase;
+                const vDecay = Math.max(vBase * (1 - i * 0.012), vBase * 0.5);
+                p.push({ x: wave, y: -vDecay });
+            }
+            return p;
+        }
+
+        function generateSingleActionPattern(count, kickV, kickH) {
+            const p = [{x: 0, y: 0}];
+            for (let i = 1; i < count; i++) {
+                const drift = (i % 2 === 0 ? 1 : -1) * (kickH * 0.6);
+                p.push({ x: drift, y: -kickV });
+            }
+            return p;
+        }
+
+        // --- 2. GLOBAL STATE ---
+        let currentWeapon = WEAPONS_DB.find(w => w.id === 'm4') || WEAPONS_DB[0];
+        let sensitivity = 1.0;
+        let isGuideEnabled = true;
+        let isAudioEnabled = true;
+
+        let ammoRemaining = currentWeapon.magSize;
+        let isFiring = false;
+        let fireInterval = null;
+        let currentShotIndex = 0;
+
+        // Visual Crosshair & Decals
+        let crosshairX = 340;
+        let crosshairY = 300;
+        const TARGET_CENTER_X = 340;
+        const TARGET_CENTER_Y = 300;
+        let bulletDecals = [];
+        let muzzleFlashAlpha = 0;
+
+        // Score Tracking
+        let totalFiredInSession = 0;
+        let totalScoreSum = 0;
+        let bullseyeHits = 0;
+        let inTargetHits = 0;
+        let totalOffsetDistances = 0;
+
+        // Pointer Lock & Canvas
+        let isPointerLocked = false;
+        const canvas = document.getElementById('range-canvas');
+        const ctx = canvas.getContext('2d');
+        const patternCanvas = document.getElementById('pattern-canvas');
+        const pCtx = patternCanvas.getContext('2d');
+
+        // --- 3. PROCEDURAL WEBAUDIO GUNSHOT SYNTHESIZER ---
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSynthesizedShot(weapon) {
+            if (!isAudioEnabled) return;
+            initAudio();
+            if (!audioCtx) return;
+
+            const t = audioCtx.currentTime;
+            const calibre = weapon.calibre;
+
+            // Handle special bow / rocket audio
+            if (weapon.category === 'heavy' && weapon.id === 'compound-bow') {
+                // Bow twang
+                const bowOsc = audioCtx.createOscillator();
+                const bowGain = audioCtx.createGain();
+                bowOsc.type = 'triangle';
+                bowOsc.frequency.setValueAtTime(260, t);
+                bowOsc.frequency.exponentialRampToValueAtTime(70, t + 0.15);
+                bowGain.gain.setValueAtTime(0.4, t);
+                bowGain.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+                bowOsc.connect(bowGain);
+                bowGain.connect(audioCtx.destination);
+                bowOsc.start(t);
+                bowOsc.stop(t + 0.18);
+                return;
+            }
+
+            // 1. Sub-bass kick (Thump)
+            const osc = audioCtx.createOscillator();
+            const oscGain = audioCtx.createGain();
+            osc.type = 'sine';
+
+            let baseFreq = 160;
+            let decayTime = 0.12;
+            let kickGain = 0.75;
+
+            if (calibre.includes('7.62') || calibre.includes('.308')) {
+                baseFreq = 120;
+                decayTime = 0.18;
+                kickGain = 0.9;
+            } else if (calibre.includes('.50') || calibre.includes('12.7') || weapon.category === 'heavy') {
+                baseFreq = 85;
+                decayTime = 0.28;
+                kickGain = 1.0;
+            } else if (calibre.includes('12 Gauge')) {
+                baseFreq = 100;
+                decayTime = 0.22;
+                kickGain = 0.95;
+            } else if (calibre.includes('9×19')) {
+                baseFreq = 190;
+                decayTime = 0.09;
+                kickGain = 0.6;
+            }
+
+            osc.frequency.setValueAtTime(baseFreq, t);
+            osc.frequency.exponentialRampToValueAtTime(30, t + decayTime);
+
+            oscGain.gain.setValueAtTime(kickGain, t);
+            oscGain.gain.exponentialRampToValueAtTime(0.001, t + decayTime + 0.02);
+
+            osc.connect(oscGain);
+            oscGain.connect(audioCtx.destination);
+            osc.start(t);
+            osc.stop(t + decayTime + 0.03);
+
+            // 2. White noise gunshot crack & blast
+            const bufferDuration = (calibre.includes('.50') || weapon.category === 'heavy') ? 0.2 : 0.1;
+            const bufferSize = Math.floor(audioCtx.sampleRate * bufferDuration);
+            const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const output = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) {
+                output[i] = Math.random() * 2 - 1;
+            }
+
+            const whiteNoise = audioCtx.createBufferSource();
+            whiteNoise.buffer = noiseBuffer;
+
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'lowpass';
+            const filterCutoff = calibre.includes('9×19') ? 4500 : (calibre.includes('.50') ? 2200 : 3500);
+            filter.frequency.setValueAtTime(filterCutoff, t);
+            filter.frequency.exponentialRampToValueAtTime(350, t + bufferDuration * 0.8);
+
+            const noiseGain = audioCtx.createGain();
+            noiseGain.gain.setValueAtTime(0.85, t);
+            noiseGain.gain.exponentialRampToValueAtTime(0.001, t + bufferDuration);
+
+            whiteNoise.connect(filter);
+            filter.connect(noiseGain);
+            noiseGain.connect(audioCtx.destination);
+
+            whiteNoise.start(t);
+            whiteNoise.stop(t + bufferDuration + 0.02);
+
+            // 3. Metallic mechanical bolt click (for firearms)
+            setTimeout(() => {
+                if (!audioCtx) return;
+                const clickOsc = audioCtx.createOscillator();
+                const clickGain = audioCtx.createGain();
+                clickOsc.type = 'triangle';
+                clickOsc.frequency.setValueAtTime(750, audioCtx.currentTime);
+                clickOsc.frequency.exponentialRampToValueAtTime(180, audioCtx.currentTime + 0.025);
+                clickGain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+                clickGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.025);
+                clickOsc.connect(clickGain);
+                clickGain.connect(audioCtx.destination);
+                clickOsc.start();
+                clickOsc.stop(audioCtx.currentTime + 0.03);
+            }, 40);
+        }
+
+        // --- 4. FIRING & RECOIL LOGIC ---
+        function startFiring() {
+            if (isFiring) return;
+            if (ammoRemaining <= 0) {
+                reloadWeapon();
+                return;
+            }
+
+            isFiring = true;
+            fireOneShot();
+
+            // Calculate cycle interval based on RPM
+            const intervalMs = Math.max(50, Math.round(60000 / currentWeapon.rpm));
+
+            // Semi-auto or single shot weapons (Bolt snipers, Bow, Launchers)
+            const isSingleShot = (currentWeapon.rpm <= 150) || (currentWeapon.category === 'heavy') || (currentWeapon.category === 'sniper');
+
+            if (!isSingleShot) {
+                fireInterval = setInterval(() => {
+                    if (ammoRemaining > 0) {
+                        fireOneShot();
+                    } else {
+                        stopFiring();
+                        reloadWeapon();
+                    }
+                }, intervalMs);
+            }
+        }
+
+        function stopFiring() {
+            isFiring = false;
+            if (fireInterval) {
+                clearInterval(fireInterval);
+                fireInterval = null;
+            }
+        }
+
+        function fireOneShot() {
+            if (ammoRemaining <= 0) return;
+
+            ammoRemaining--;
+            currentShotIndex++;
+
+            // Play gunshot audio
+            playSynthesizedShot(currentWeapon);
+
+            // Trigger muzzle flash visual
+            muzzleFlashAlpha = 0.9;
+
+            // Recoil kick computation
+            const patternStep = currentWeapon.pattern[Math.min(currentShotIndex, currentWeapon.pattern.length - 1)];
+            
+            // Random horizontal/vertical jitter
+            const jitterRange = (currentWeapon.recoilClass === 'hard') ? 1.8 : 1.0;
+            const kickX = (patternStep.x + (Math.random() * jitterRange - jitterRange / 2)) * sensitivity;
+            const kickY = (patternStep.y + (Math.random() * jitterRange - jitterRange / 2)) * sensitivity;
+
+            crosshairX += kickX;
+            crosshairY += kickY;
+
+            // Constrain inside canvas
+            crosshairX = Math.max(25, Math.min(canvas.width - 25, crosshairX));
+            crosshairY = Math.max(25, Math.min(canvas.height - 25, crosshairY));
+
+            // Record bullet impacts
+            if (currentWeapon.isShotgun) {
+                // Multi-pellet cone
+                for (let p = 0; p < currentWeapon.pellets; p++) {
+                    const spreadRadius = Math.random() * 28;
+                    const spreadAngle = Math.random() * Math.PI * 2;
+                    const px = crosshairX + Math.cos(spreadAngle) * spreadRadius;
+                    const py = crosshairY + Math.sin(spreadAngle) * spreadRadius;
+                    recordImpact(px, py, true);
+                }
+            } else {
+                recordImpact(crosshairX, crosshairY, false);
+            }
+
+            // Update UI
+            updateAmmoHUD();
+        }
+
+        function recordImpact(x, y, isPellet) {
+            const distFromCenter = Math.hypot(x - TARGET_CENTER_X, y - TARGET_CENTER_Y);
+            
+            // Score calculation: 100 at center (radius <= 14px), decaying to 0 at radius 160px
+            let shotScore = 0;
+            if (distFromCenter <= 14) {
+                shotScore = 100;
+                bullseyeHits++;
+                inTargetHits++;
+            } else if (distFromCenter <= 160) {
+                shotScore = Math.max(10, Math.round(100 - (distFromCenter / 160) * 90));
+                inTargetHits++;
+            }
+
+            bulletDecals.push({
+                x,
+                y,
+                score: shotScore,
+                dist: distFromCenter,
+                shotNum: currentShotIndex,
+                time: Date.now()
+            });
+
+            totalFiredInSession++;
+            totalScoreSum += shotScore;
+            totalOffsetDistances += distFromCenter;
+
+            updateScorecard();
+        }
+
+        function reloadWeapon() {
+            stopFiring();
+            const btn = document.getElementById('hud-ammo-count');
+            if (btn) btn.textContent = 'RELOADING...';
+            
+            const reloadTime = Math.max(500, Math.round(currentWeapon.ads * 1200));
+
+            setTimeout(() => {
+                ammoRemaining = currentWeapon.magSize;
+                currentShotIndex = 0;
+                // Soft center return after reload
+                crosshairX = TARGET_CENTER_X;
+                crosshairY = TARGET_CENTER_Y;
+                updateAmmoHUD();
+            }, reloadTime);
+        }
+
+        // --- 5. RENDER LOOPS ---
+        function renderRange() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Draw Target Background & Mannequin Hit Zones
+            drawTacticalTarget();
+
+            // 2. Draw Bullet Decals
+            bulletDecals.forEach(b => {
+                ctx.save();
+                // Decal outer crater
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+                ctx.fillStyle = '#0a0a0a';
+                ctx.fill();
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = '#333333';
+                ctx.stroke();
+
+                // Impact core (Colored by accuracy score)
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = b.score >= 90 ? '#FF5E1F' : (b.score >= 50 ? '#fbbf24' : '#ef4444');
+                ctx.fill();
+                ctx.restore();
+            });
+
+            // 3. Draw Muzzle Flash / Vignette
+            if (muzzleFlashAlpha > 0.01) {
+                ctx.save();
+                ctx.fillStyle = `rgba(255, 110, 35, ${muzzleFlashAlpha * 0.12})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                muzzleFlashAlpha *= 0.72; // Fast decay
+                ctx.restore();
+            }
+
+            // 4. Draw Ideal Compensation Path (if enabled)
+            if (isGuideEnabled) {
+                drawCompensationGuide();
+            }
+
+            // 5. Draw Dynamic Crosshair
+            drawCrosshair(crosshairX, crosshairY);
+
+            requestAnimationFrame(renderRange);
+        }
+
+        function drawTacticalTarget() {
+            const cx = TARGET_CENTER_X;
+            const cy = TARGET_CENTER_Y;
+
+            ctx.save();
+
+            // Tactical Grid lines
+            ctx.strokeStyle = '#1b1b1b';
+            ctx.lineWidth = 1;
+            for (let x = 40; x < canvas.width; x += 40) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 40; y < canvas.height; y += 40) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            // Mannequin Head & Torso Silhouette (MetaForge Hit Zones)
+            ctx.strokeStyle = '#242424';
+            ctx.lineWidth = 1.5;
+            
+            // Head (2.0x Lethal)
+            ctx.beginPath();
+            ctx.arc(cx, cy - 145, 34, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(255, 94, 31, 0.03)';
+            ctx.fill();
+
+            // Neck & Upper Chest (1.16x MetaForge zone)
+            ctx.strokeRect(cx - 55, cy - 105, 110, 45);
+
+            // Lower Torso (1.0x zone)
+            ctx.strokeRect(cx - 75, cy - 60, 150, 160);
+
+            // Concentric Scoring Rings
+            const rings = [
+                {r: 160, score: '5', color: '#1f1f1f'},
+                {r: 120, score: '7', color: '#252525'},
+                {r: 80,  score: '8', color: '#2d2d2d'},
+                {r: 45,  score: '9', color: '#383838'},
+                {r: 14,  score: '10', color: '#FF5E1F'}
+            ];
+
+            rings.forEach(ring => {
+                ctx.beginPath();
+                ctx.arc(cx, cy, ring.r, 0, Math.PI * 2);
+                ctx.strokeStyle = ring.color;
+                ctx.lineWidth = ring.r === 14 ? 2 : 1;
+                ctx.stroke();
+
+                if (ring.r > 14) {
+                    ctx.fillStyle = '#444444';
+                    ctx.font = '10px monospace';
+                    ctx.fillText(ring.score, cx + 4, cy - ring.r + 12);
+                }
+            });
+
+            // Center Bullseye Dot
+            ctx.beginPath();
+            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+            ctx.fillStyle = '#FF5E1F';
+            ctx.fill();
+
+            // Crosshair axes
+            ctx.strokeStyle = '#282828';
+            ctx.beginPath();
+            ctx.moveTo(cx - 180, cy);
+            ctx.lineTo(cx + 180, cy);
+            ctx.moveTo(cx, cy - 180);
+            ctx.lineTo(cx, cy + 180);
+            ctx.stroke();
+
+            // Hit zone tags
+            ctx.fillStyle = '#444444';
+            ctx.font = '9px monospace';
+            ctx.fillText('HEAD (2.0x)', cx + 40, cy - 140);
+            ctx.fillText('UPPER CHEST (1.16x)', cx + 60, cy - 80);
+            ctx.fillText('TORSO (1.0x)', cx + 80, cy + 20);
+
+            ctx.restore();
+        }
+
+        function drawCrosshair(x, y) {
+            ctx.save();
+            ctx.strokeStyle = '#00FF66';
+            ctx.lineWidth = 1.5;
+
+            // Reticle circle
+            ctx.beginPath();
+            ctx.arc(x, y, 9, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Center dot
+            ctx.beginPath();
+            ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+            ctx.fillStyle = '#00FF66';
+            ctx.fill();
+
+            // Cross notches
+            const len = 7;
+            const gap = 12;
+            ctx.beginPath();
+            ctx.moveTo(x - gap - len, y); ctx.lineTo(x - gap, y);
+            ctx.moveTo(x + gap, y); ctx.lineTo(x + gap + len, y);
+            ctx.moveTo(x, y - gap - len); ctx.lineTo(x, y - gap);
+            ctx.moveTo(x, y + gap); ctx.lineTo(x, y + gap + len);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        function drawCompensationGuide() {
+            // Draw inverted trajectory path showing where the player must pull
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 94, 31, 0.45)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 4]);
+
+            ctx.beginPath();
+            let currX = TARGET_CENTER_X;
+            let currY = TARGET_CENTER_Y;
+            ctx.moveTo(currX, currY);
+
+            // Invert the recoil pattern steps (pull opposite direction)
+            currentWeapon.pattern.forEach((step, idx) => {
+                if (idx === 0) return;
+                currX -= step.x * sensitivity * 1.5;
+                currY -= step.y * sensitivity * 1.5;
+                ctx.lineTo(currX, currY);
+            });
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+
+        // --- 6. PATTERN INSPECTOR TELEMETRY ---
+        function renderPatternInspector() {
+            pCtx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
+
+            const startX = patternCanvas.width / 2;
+            const startY = patternCanvas.height - 20;
+
+            // Axes
+            pCtx.strokeStyle = '#222222';
+            pCtx.lineWidth = 1;
+            pCtx.beginPath();
+            pCtx.moveTo(startX, 10);
+            pCtx.lineTo(startX, patternCanvas.height);
+            pCtx.stroke();
+
+            // 1. Raw Recoil (Red climb)
+            pCtx.save();
+            pCtx.strokeStyle = '#ef4444';
+            pCtx.lineWidth = 1.5;
+            pCtx.beginPath();
+            let rx = startX;
+            let ry = startY;
+            pCtx.moveTo(rx, ry);
+
+            currentWeapon.pattern.forEach((step, i) => {
+                if (i === 0) return;
+                rx += step.x * 2.0;
+                ry += step.y * 2.0;
+                pCtx.lineTo(rx, ry);
+            });
+            pCtx.stroke();
+
+            // 2. Ideal Compensation Vector (Orange inversion)
+            pCtx.strokeStyle = '#FF5E1F';
+            pCtx.setLineDash([3, 3]);
+            pCtx.beginPath();
+            let cx = startX;
+            let cy = startY;
+            pCtx.moveTo(cx, cy);
+
+            currentWeapon.pattern.forEach((step, i) => {
+                if (i === 0) return;
+                cx -= step.x * 2.0;
+                cy -= step.y * 2.0;
+                pCtx.lineTo(cx, cy);
+            });
+            pCtx.stroke();
+            pCtx.setLineDash([]);
+
+            // Starting origin dot
+            pCtx.beginPath();
+            pCtx.arc(startX, startY, 3, 0, Math.PI * 2);
+            pCtx.fillStyle = '#ffffff';
+            pCtx.fill();
+
+            pCtx.restore();
+        }
+
+        // --- 7. UI SYNC & EVENT HANDLERS ---
+        function selectWeapon(wId) {
+            const found = WEAPONS_DB.find(w => w.id === wId);
+            if (!found) return;
+
+            currentWeapon = found;
+            ammoRemaining = currentWeapon.magSize;
+            currentShotIndex = 0;
+            crosshairX = TARGET_CENTER_X;
+            crosshairY = TARGET_CENTER_Y;
+
+            // HUD
+            document.getElementById('hud-weapon-name').textContent = currentWeapon.name;
+            document.getElementById('hud-fire-rate').textContent = `${currentWeapon.rpm} RPM`;
+            document.getElementById('telemetry-class').textContent = currentWeapon.category.toUpperCase();
+            
+            // Hero
+            document.getElementById('hero-weapon-img').src = `guides/images/${currentWeapon.id}.png`;
+            document.getElementById('hero-weapon-role').textContent = currentWeapon.role;
+
+            // Specs
+            document.getElementById('spec-calibre').textContent = currentWeapon.calibre;
+            document.getElementById('spec-rpm').textContent = `${currentWeapon.rpm} RPM`;
+            document.getElementById('spec-damage').textContent = `${currentWeapon.damage.toFixed(1)} HP`;
+            document.getElementById('spec-ads').textContent = `${currentWeapon.ads.toFixed(3)} с`;
+            document.getElementById('spec-recoil-type').textContent = currentWeapon.recoilDesc;
+
+            // TTK Matrix Calculation
+            const dmgChest = currentWeapon.damage * 1.16;
+            const rpm = Math.max(1, currentWeapon.rpm);
+            const shotIntervalSec = 60 / rpm;
+
+            const calcTTK = (hp) => {
+                const shotsNeeded = Math.ceil(hp / dmgChest);
+                const time = ((shotsNeeded - 1) * shotIntervalSec).toFixed(3);
+                return { shots: shotsNeeded, time: `${time} с` };
+            };
+
+            const ttkNoArmor = calcTTK(100);
+            const ttkL2 = calcTTK(150);
+            const ttkL4 = calcTTK(220);
+
+            document.getElementById('ttk-body').innerHTML = `
+                <tr>
+                    <td>Без брони (100 HP)</td>
+                    <td>${ttkNoArmor.shots} шт.</td>
+                    <td><strong>${ttkNoArmor.time}</strong></td>
+                </tr>
+                <tr>
+                    <td>Броня L2 (150 HP)</td>
+                    <td>${ttkL2.shots} шт.</td>
+                    <td><strong>${ttkL2.time}</strong></td>
+                </tr>
+                <tr>
+                    <td>Броня L4 (220 HP)</td>
+                    <td>${ttkL4.shots} шт.</td>
+                    <td><strong>${ttkL4.time}</strong></td>
+                </tr>
+            `;
+
+            // Highlight in list
+            document.querySelectorAll('.weapon-card').forEach(c => {
+                c.classList.toggle('active', c.dataset.weaponId === wId);
+            });
+
+            updateAmmoHUD();
+            renderPatternInspector();
+            resetRange();
+        }
+
+        function updateAmmoHUD() {
+            document.getElementById('hud-ammo-count').textContent = `${ammoRemaining} / ${currentWeapon.magSize}`;
+            document.getElementById('ammo-text').textContent = `${ammoRemaining} / ${currentWeapon.magSize}`;
+
+            const pipsContainer = document.getElementById('ammo-pips');
+            pipsContainer.innerHTML = '';
+            const displayPips = Math.min(60, currentWeapon.magSize);
+            for (let i = 0; i < displayPips; i++) {
+                const pip = document.createElement('div');
+                pip.className = `bullet-pip ${i >= ammoRemaining ? 'spent' : ''}`;
+                pipsContainer.appendChild(pip);
+            }
+        }
+
+        function updateScorecard() {
+            if (totalFiredInSession === 0) {
+                document.getElementById('stat-score-num').textContent = '0%';
+                document.getElementById('shot-count-stat').textContent = '0 выстрелов';
+                document.getElementById('stat-bullseye').textContent = '0';
+                document.getElementById('stat-on-target').textContent = '0';
+                document.getElementById('stat-dispersion').textContent = '0.0 px';
+                return;
+            }
+
+            const avgScore = Math.round(totalScoreSum / totalFiredInSession);
+            const avgDisp = (totalOffsetDistances / totalFiredInSession).toFixed(1);
+
+            document.getElementById('stat-score-num').textContent = `${avgScore}%`;
+            document.getElementById('shot-count-stat').textContent = `${totalFiredInSession} выстрелов`;
+            document.getElementById('stat-bullseye').textContent = `${bullseyeHits} (${Math.round((bullseyeHits / totalFiredInSession) * 100)}%)`;
+            document.getElementById('stat-on-target').textContent = `${inTargetHits} (${Math.round((inTargetHits / totalFiredInSession) * 100)}%)`;
+            document.getElementById('stat-dispersion').textContent = `${avgDisp} px`;
+
+            document.getElementById('bar-bullseye').style.width = `${Math.round((bullseyeHits / totalFiredInSession) * 100)}%`;
+            document.getElementById('bar-target').style.width = `${Math.round((inTargetHits / totalFiredInSession) * 100)}%`;
+
+            // Calculate tactical rank
+            const rankEl = document.getElementById('stat-rank');
+            rankEl.className = 'score-rank';
+            if (avgScore >= 85) {
+                rankEl.textContent = 'МАСТЕР [S]';
+                rankEl.classList.add('rank-s');
+            } else if (avgScore >= 70) {
+                rankEl.textContent = 'ЭКСПЕРТ [A]';
+                rankEl.classList.add('rank-a');
+            } else if (avgScore >= 50) {
+                rankEl.textContent = 'ОПЕРАТОР [B]';
+                rankEl.classList.add('rank-b');
+            } else {
+                rankEl.textContent = 'РЕКРУТ [C]';
+                rankEl.classList.add('rank-c');
+            }
+        }
+
+        function resetRange() {
+            stopFiring();
+            bulletDecals = [];
+            totalFiredInSession = 0;
+            totalScoreSum = 0;
+            bullseyeHits = 0;
+            inTargetHits = 0;
+            totalOffsetDistances = 0;
+            crosshairX = TARGET_CENTER_X;
+            crosshairY = TARGET_CENTER_Y;
+            updateScorecard();
+        }
+
+        function togglePatternGuide() {
+            isGuideEnabled = !isGuideEnabled;
+            document.getElementById('btn-toggle-guide').classList.toggle('active', isGuideEnabled);
+        }
+
+        function toggleAudio() {
+            isAudioEnabled = !isAudioEnabled;
+            document.getElementById('btn-toggle-sound').classList.toggle('active', isAudioEnabled);
+            document.getElementById('sound-label').textContent = isAudioEnabled ? 'Звук вкл' : 'Звук выкл';
+        }
+
+        function onSensitivityChange(val) {
+            sensitivity = parseFloat(val);
+            document.getElementById('sens-val').textContent = sensitivity.toFixed(1);
+        }
+
+        function filterCategory(cat, btn) {
+            document.querySelectorAll('.cat-chip').forEach(c => c.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+
+            const filtered = (cat === 'all') ? WEAPONS_DB : WEAPONS_DB.filter(w => w.category === cat);
+            renderWeaponList(filtered);
+        }
+
+        function onSearchWeapon(query) {
+            const q = query.toLowerCase().trim();
+            const filtered = WEAPONS_DB.filter(w => 
+                w.name.toLowerCase().includes(q) || 
+                w.calibre.toLowerCase().includes(q) ||
+                w.category.toLowerCase().includes(q)
+            );
+            renderWeaponList(filtered);
+        }
+
+        function renderWeaponList(list) {
+            const container = document.getElementById('weapon-list');
+            container.innerHTML = '';
+
+            list.forEach(w => {
+                const card = document.createElement('div');
+                card.className = `weapon-card ${w.id === currentWeapon.id ? 'active' : ''}`;
+                card.dataset.weaponId = w.id;
+                card.onclick = () => selectWeapon(w.id);
+
+                let badgeClass = 'recoil-medium';
+                if (w.recoilClass === 'hard') badgeClass = 'recoil-hard';
+                if (w.recoilClass === 'low') badgeClass = 'recoil-low';
+
+                card.innerHTML = `
+                    <div class="weapon-card-thumb">
+                        <img src="guides/images/${w.id}.png" alt="${w.name}" loading="lazy">
+                    </div>
+                    <div class="weapon-card-body">
+                        <div class="weapon-name">${w.name}</div>
+                        <div class="weapon-meta">${w.calibre} • ${w.rpm} RPM</div>
+                    </div>
+                    <span class="recoil-badge ${badgeClass}">${w.recoilClass}</span>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // --- 8. METAFORGE TABLE MODAL ---
+        function openMetaForgeTableModal() {
+            const modal = document.getElementById('table-modal');
+            const img = document.getElementById('modal-table-img');
+            const title = document.getElementById('modal-table-title');
+            
+            title.textContent = `METAFORGE // ${currentWeapon.name} (БАЛЛИСТИЧЕСКАЯ ТАБЛИЦА)`;
+            img.src = `guides/images/${currentWeapon.id}_tables.png`;
+            modal.classList.add('active');
+        }
+
+        function closeMetaForgeTableModal() {
+            document.getElementById('table-modal').classList.remove('active');
+        }
+
+        // --- 9. MOUSE & POINTER LOCK EVENT LISTENERS ---
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) { // Left click
+                if (!isPointerLocked && canvas.requestPointerLock) {
+                    canvas.requestPointerLock();
+                }
+                startFiring();
+            }
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (e.button === 0) {
+                stopFiring();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isPointerLocked = (document.pointerLockElement === canvas);
+            document.getElementById('pointer-lock-banner').style.display = isPointerLocked ? 'flex' : 'none';
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (isPointerLocked) {
+                crosshairX += e.movementX * sensitivity;
+                crosshairY += e.movementY * sensitivity;
+                crosshairX = Math.max(20, Math.min(canvas.width - 20, crosshairX));
+                crosshairY = Math.max(20, Math.min(canvas.height - 20, crosshairY));
+            } else if (isFiring) {
+                crosshairX += e.movementX * sensitivity;
+                crosshairY += e.movementY * sensitivity;
+                crosshairX = Math.max(20, Math.min(canvas.width - 20, crosshairX));
+                crosshairY = Math.max(20, Math.min(canvas.height - 20, crosshairY));
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') {
+                reloadWeapon();
+            }
+            if (e.key === 'Escape') {
+                closeMetaForgeTableModal();
+            }
+        });
+
+        // --- 10. BOOT ---
+        window.addEventListener('DOMContentLoaded', () => {
+            renderWeaponList(WEAPONS_DB);
+            selectWeapon('m4');
+            renderRange();
+        });
+    </script>
+</body>
+</html>

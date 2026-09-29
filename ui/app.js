@@ -45,6 +45,12 @@ async function loadPartials() {
             console.error('Failed loading partial:', url, e);
         }
     }));
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialView = urlParams.get('view');
+    if (initialView) {
+        switchView(initialView);
+    }
 }
 
 // --- Skeletons & Shimmer Generators (Zero Layout Shift) ---
@@ -91,30 +97,46 @@ function handleClose(e) {
 }
 
 function switchView(targetViewId) {
-    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account'];
+    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account', 'view-progression'];
     const showcase = document.getElementById('view-showcase');
     const targetEl = targetViewId ? document.getElementById(targetViewId) : null;
-    const isAlreadyOpen = targetEl && targetEl.style.display === 'flex';
+    const isAlreadyOpen = targetEl && targetEl.classList.contains('active');
 
-    // Hide all sub-views atomically
+    // Deactivate all sub-views atomically
     for (const vId of allViews) {
         const el = document.getElementById(vId);
-        if (el) el.style.display = 'none';
+        if (el) {
+            el.classList.remove('active');
+            el.style.display = '';
+        }
+    }
+    if (window.ProgressionController && typeof window.ProgressionController.onClose === 'function') {
+        window.ProgressionController.onClose();
     }
 
     const nextActiveId = (!targetViewId || isAlreadyOpen) ? null : targetViewId;
 
     if (!nextActiveId) {
         // Return to showcase
-        if (showcase) showcase.style.display = 'flex';
+        if (showcase) {
+            showcase.classList.add('active');
+            showcase.style.display = '';
+        }
     } else {
-        if (showcase) showcase.style.display = 'none';
-        if (targetEl) targetEl.style.display = 'flex';
+        if (showcase) {
+            showcase.classList.remove('active');
+            showcase.style.display = '';
+        }
+        if (targetEl) {
+            targetEl.classList.add('active');
+            targetEl.style.display = '';
+        }
 
         // Trigger cached/background data refreshes without wiping DOM
-        if (nextActiveId === 'view-sponsors') fetchSponsors();
-        if (nextActiveId === 'view-account') fetchAccountProfile();
-        if (nextActiveId === 'view-notifications') fetchNotifications();
+        if (nextActiveId === 'view-sponsors' && typeof fetchSponsors === 'function') fetchSponsors();
+        if (nextActiveId === 'view-account' && typeof fetchAccountProfile === 'function') fetchAccountProfile();
+        if (nextActiveId === 'view-notifications' && typeof fetchNotifications === 'function') fetchNotifications();
+        if (nextActiveId === 'view-progression' && window.ProgressionController) window.ProgressionController.onOpen();
     }
 
     updateTitlebarActiveState(nextActiveId);
@@ -125,6 +147,7 @@ function updateTitlebarActiveState(activeViewId) {
         'view-account': 'btn-account-toggle',
         'view-sponsors': 'btn-sponsors-toggle',
         'view-notifications': 'btn-notif-toggle',
+        'view-progression': 'btn-progression-toggle',
         'view-details': 'btn-settings-toggle'
     };
     for (const [vId, btnId] of Object.entries(btnMap)) {
@@ -133,6 +156,11 @@ function updateTitlebarActiveState(activeViewId) {
             btn.classList.toggle('is-active', vId === activeViewId);
         }
     }
+}
+
+function toggleProgression(e) {
+    if (e) e.stopPropagation();
+    switchView('view-progression');
 }
 
 function toggleDetails(e) {
@@ -144,7 +172,17 @@ function closeDetails() {
     switchView(null);
 }
 
-// --- Free Internet Toggle (Titlebar) ---
+function togglePrivacyInfo(e) {
+    if (e) e.stopPropagation();
+    const box = document.getElementById('privacy-info-box');
+    const btn = document.getElementById('btn-privacy-info');
+    if (!box) return;
+    const isHidden = (box.style.display === 'none' || !box.style.display);
+    box.style.display = isHidden ? 'block' : 'none';
+    if (btn) btn.classList.toggle('is-active', isHidden);
+}
+
+// --- Complex Mode Toggle (Titlebar) ---
 let isTogglingFreeNet = false;
 
 async function toggleFreeInternet(e) {
@@ -179,7 +217,7 @@ async function toggleFreeInternet(e) {
             updateFreeInternetUI(freeInternetEnabled);
         }
     } catch (err) {
-        console.error('Free internet toggle error:', err);
+        console.error('Ошибка переключения комплексного режима:', err);
         freeInternetEnabled = !newTarget;
         updateFreeInternetUI(freeInternetEnabled);
     } finally {
@@ -918,6 +956,54 @@ function closeNotifications() {
 }
 
 async function fetchNotifications() {
+    if (typeof UIStore !== 'undefined' && typeof UIStore.requestSWR === 'function') {
+        await UIStore.requestSWR(
+            '/api/notifications',
+            async () => {
+                const resp = await fetch('/api/notifications');
+                if (!resp.ok) return null;
+                return await resp.json();
+            },
+            (data, isFresh) => {
+                if (!data) return;
+                const incoming = data.notifications || [];
+                if (isFirstNotifFetch) {
+                    incoming.forEach(n => seenNotifIds.add(n.id));
+                    isFirstNotifFetch = false;
+                } else if (isFresh) {
+                    let maxSeverity = null;
+                    let newestUnread = null;
+                    for (const n of incoming) {
+                        if (!seenNotifIds.has(n.id) && !n.is_read) {
+                            seenNotifIds.add(n.id);
+                            if (!newestUnread) newestUnread = n;
+                            if (n.severity === 'urgent' || (n.severity === 'warning' && maxSeverity !== 'urgent')) {
+                                maxSeverity = n.severity;
+                            } else if (!maxSeverity) {
+                                maxSeverity = n.severity || 'info';
+                            }
+                        }
+                    }
+                    if (newestUnread) {
+                        showToast(`${newestUnread.title}: ${newestUnread.message}`);
+                        if (window.WarLinkAudio && typeof window.WarLinkAudio.playNotification === 'function') {
+                            window.WarLinkAudio.playNotification(maxSeverity || newestUnread.severity);
+                        }
+                    }
+                }
+                cachedNotifications = incoming;
+                updateNotificationsUI(cachedNotifications, data.unread_count || 0);
+            },
+            () => {
+                const listEl = document.getElementById('notifications-list');
+                if (listEl && listEl.children.length === 0) {
+                    listEl.innerHTML = getNotificationsSkeletonHtml(2);
+                }
+            }
+        );
+        return;
+    }
+
     const listEl = document.getElementById('notifications-list');
     if (cachedNotifications && cachedNotifications.length > 0) {
         updateNotificationsUI(cachedNotifications);
@@ -930,32 +1016,10 @@ async function fetchNotifications() {
         if (!resp.ok) return;
         const data = await resp.json();
         const incoming = data.notifications || [];
-
         if (isFirstNotifFetch) {
             incoming.forEach(n => seenNotifIds.add(n.id));
             isFirstNotifFetch = false;
-        } else {
-            let maxSeverity = null;
-            let newestUnread = null;
-            for (const n of incoming) {
-                if (!seenNotifIds.has(n.id) && !n.is_read) {
-                    seenNotifIds.add(n.id);
-                    if (!newestUnread) newestUnread = n;
-                    if (n.severity === 'urgent' || (n.severity === 'warning' && maxSeverity !== 'urgent')) {
-                        maxSeverity = n.severity;
-                    } else if (!maxSeverity) {
-                        maxSeverity = n.severity || 'info';
-                    }
-                }
-            }
-            if (newestUnread) {
-                showToast(`${newestUnread.title}: ${newestUnread.message}`);
-                if (window.WarLinkAudio && typeof window.WarLinkAudio.playNotification === 'function') {
-                    window.WarLinkAudio.playNotification(maxSeverity || newestUnread.severity);
-                }
-            }
         }
-
         cachedNotifications = incoming;
         updateNotificationsUI(cachedNotifications, data.unread_count || 0);
     } catch (e) {
@@ -1041,20 +1105,46 @@ function updateNotificationsUI(notifs, unreadCount) {
         return;
     }
 
-    listEl.innerHTML = list.map(n => {
+    // Keyed reconciliation: preserve existing DOM elements if present
+    const existingCards = new Map();
+    Array.from(listEl.querySelectorAll('.notification-card[data-notif-id]')).forEach(el => {
+        existingCards.set(el.dataset.notifId, el);
+    });
+
+    if (existingCards.size === 0 && (listEl.querySelector('.skeleton-card') || listEl.querySelector('div:not(.notification-card)'))) {
+        listEl.innerHTML = '';
+    }
+
+    const currentIds = new Set();
+
+    list.forEach(n => {
+        const nId = String(n.id);
+        currentIds.add(nId);
         let pillClass = 'pill-info';
         let pillText = 'Инфо';
         if (n.severity === 'update') { pillClass = 'pill-update'; pillText = 'Обновление'; }
         else if (n.severity === 'warning') { pillClass = 'pill-warning'; pillText = 'Важно'; }
         else if (n.severity === 'urgent') { pillClass = 'pill-urgent'; pillText = 'Срочно'; }
 
-        const unreadClass = n.is_read ? '' : 'notif-unread';
-        const actionBtn = n.action_label && n.action_url ? `
+        const actionBtnHtml = n.action_label && n.action_url ? `
             <button class="notif-action-btn" onclick="openNotifAction('${encodeURIComponent(n.action_url)}')">${escapeHtml(n.action_label)}</button>
         ` : '';
 
-        return `
-            <div class="notification-card ${unreadClass}" onclick="markNotifRead(${n.id})">
+        const existing = existingCards.get(nId);
+        if (existing) {
+            existing.classList.toggle('notif-unread', !n.is_read);
+            const timeEl = existing.querySelector('.notif-time');
+            if (timeEl) {
+                timeEl.textContent = formatNotificationTime(n.created_at);
+                timeEl.title = formatNotificationTooltip(n.created_at);
+            }
+            listEl.appendChild(existing);
+        } else {
+            const card = document.createElement('div');
+            card.className = `notification-card ${n.is_read ? '' : 'notif-unread'}`;
+            card.dataset.notifId = nId;
+            card.onclick = () => markNotifRead(n.id);
+            card.innerHTML = `
                 <div class="notif-header">
                     <div class="notif-title-row">
                         <span class="notif-pill ${pillClass}">${pillText}</span>
@@ -1063,10 +1153,17 @@ function updateNotificationsUI(notifs, unreadCount) {
                     <span class="notif-time" title="${escapeHtml(formatNotificationTooltip(n.created_at))}">${escapeHtml(formatNotificationTime(n.created_at))}</span>
                 </div>
                 <div class="notif-msg">${escapeHtml(n.message)}</div>
-                ${actionBtn}
-            </div>
-        `;
-    }).join('');
+                ${actionBtnHtml}
+            `;
+            listEl.appendChild(card);
+        }
+    });
+
+    existingCards.forEach((el, id) => {
+        if (!currentIds.has(id) && el.parentNode === listEl) {
+            listEl.removeChild(el);
+        }
+    });
 }
 
 async function markNotifRead(id) {
@@ -1076,6 +1173,9 @@ async function markNotifRead(id) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ notification_id: id })
         });
+        if (typeof UIStore !== 'undefined') {
+            UIStore.invalidate('/api/notifications');
+        }
         if (Array.isArray(cachedNotifications)) {
             const n = cachedNotifications.find(x => x.id === id);
             if (n) n.is_read = true;
@@ -1096,6 +1196,21 @@ async function markAllNotificationsRead() {
 
 async function openNotifAction(encodedURL) {
     const rawURL = decodeURIComponent(encodedURL);
+    if (rawURL === '#view-progression' || rawURL === 'view-progression' || rawURL === '#progression' || rawURL === 'progression' || rawURL.includes('view-progression') || rawURL.includes('#progression')) {
+        if (typeof toggleProgression === 'function') {
+            toggleProgression();
+        } else if (typeof switchView === 'function') {
+            switchView('view-progression');
+        }
+        return;
+    }
+    if (rawURL.startsWith('#view-')) {
+        const viewId = rawURL.slice(1);
+        if (typeof switchView === 'function') {
+            switchView(viewId);
+        }
+        return;
+    }
     if (rawURL.startsWith('http://') || rawURL.startsWith('https://')) {
         try {
             await fetch('/api/open-external-url', {
@@ -1117,6 +1232,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadPartials();
     if (typeof window.revealWindow === 'function') {
         window.revealWindow();
+    }
+    if (typeof UIStore !== 'undefined' && typeof UIStore.prefetchAll === 'function') {
+        UIStore.prefetchAll();
     }
     fetchStatus();
     fetchNotifications();

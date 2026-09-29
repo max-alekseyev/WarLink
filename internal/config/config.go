@@ -48,7 +48,18 @@ type Config struct {
 	Motto               string        `json:"motto,omitempty"`
 	HideDonationAmount  bool          `json:"hide_donation_amount,omitempty"`
 	LastReadNotifID     int64         `json:"last_read_notif_id,omitempty"`
-	EnableSoundEffects  *bool         `json:"enable_sound_effects,omitempty"`
+	EnableSoundEffects  *bool              `json:"enable_sound_effects,omitempty"`
+	Progression         *PlayerProgression `json:"progression,omitempty"`
+}
+
+type PlayerProgression struct {
+	CareerLevel   int                `json:"career_level"`
+	Roles         map[string]int     `json:"roles"`
+	XPProgress    map[string]float64 `json:"xp_progress"`
+	WishlistID     string             `json:"wishlist_id,omitempty"`
+	UnlockedItems  []string           `json:"unlocked_items,omitempty"`
+	GuideDismissed bool               `json:"guide_dismissed,omitempty"`
+	LastUpdated    int64              `json:"last_updated,omitempty"`
 }
 
 func (c *Config) IsSoundEffectsEnabled() bool {
@@ -173,6 +184,34 @@ func Load() *Config {
 	if cfg.AccountNumber == "" {
 		cfg.AccountNumber = GenerateAccountNumber()
 		_ = cfg.saveLocked()
+	}
+
+	if cfg.Nickname == "" || strings.HasPrefix(cfg.Nickname, "Игрок #") || strings.Contains(cfg.Nickname, "****") {
+		cfg.Nickname = GenerateDeterministicNobelCallsign(cfg.AccountNumber)
+		_ = cfg.saveLocked()
+	}
+
+	if cfg.Progression == nil {
+		cfg.Progression = &PlayerProgression{
+			CareerLevel: 1,
+			Roles: map[string]int{
+				"assault": 1,
+				"medic":   0,
+				"recon":   0,
+				"support": 0,
+				"driver":  0,
+				"pilot":   0,
+			},
+			XPProgress: map[string]float64{
+				"assault": 0,
+				"medic":   0,
+				"recon":   0,
+				"support": 0,
+				"driver":  0,
+				"pilot":   0,
+			},
+			LastUpdated: time.Now().Unix(),
+		}
 	}
 
 	return cfg

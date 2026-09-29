@@ -37,6 +37,11 @@ config.json
 *.pem
 .env
 .env.*
+*SECRET*
+*SECRETS*
+WARLINK_ADMIN_SECRETS.txt
+port.txt
+scripts/capture_*.py
 
 # Network Captures, Crash Dumps and Logs
 *.pcap

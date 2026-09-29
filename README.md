@@ -5,10 +5,11 @@
   <a href="https://store.steampowered.com/app/1867240/"><img src="https://img.shields.io/badge/Game-WARDOGS_(Steam)-orange?style=flat-square&logo=steam&logoColor=white" alt="Steam WARDOGS"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/Лицензия-MIT-FF5E1F?style=flat-square" alt="Лицензия MIT"></a>
   <a href="https://github.com/max-alekseyev/WarLink/discussions"><img src="https://img.shields.io/badge/Сообщество-Discussions-purple?style=flat-square" alt="Discussions"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/stargazers"><img src="https://img.shields.io/github/stars/max-alekseyev/WarLink?style=flat-square&logo=github&color=FF5E1F&label=%D0%97%D0%B2%D0%B5%D0%B7%D0%B4%D1%8B" alt="Звезды GitHub"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.1.6"><img src="https://img.shields.io/badge/Релиз-v2.1.6-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.1.6"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.1.7"><img src="https://img.shields.io/badge/Релиз-v2.1.7-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.1.7"></a>
   <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe"><img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe"></a>
   <img src="https://img.shields.io/badge/Размер-~32_МБ-2d333b?style=for-the-badge" alt="Size">
   <a href="https://github.com/max-alekseyev/WarLink/releases"><img src="https://img.shields.io/github/downloads/max-alekseyev/WarLink/total?style=for-the-badge&color=0969da&label=Downloads" alt="Downloads"></a>
@@ -27,7 +28,7 @@
 - Ошибки «Connection lost / Server unreachable» при загрузке карты
 - Высокий пинг, подергивания и внезапная потеря пакетов (packet loss)
 
-**WarLink v2.1.6** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
+**WarLink v2.1.7** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
 
 ---
 
@@ -40,7 +41,7 @@
 
 ---
 
-## Ключевые возможности WarLink v2.1.6
+## Ключевые возможности WarLink v2.1.7
 
 - **Анонимная учетная запись (Mullvad-style):** 16-значный криптографический номер аккаунта без почты, паролей и сбора персональных данных. Поддержка связывания нескольких устройств (ПК и ноутбук).
 - **Встроенный центр уведомлений:** прямое получение важных новостей шлюза, технических оповещений и подтверждений внутри приложения с историей и индикатором непрочитанных сообщений.
@@ -49,7 +50,7 @@
 - **Полная автономность (Zero Downloads):** все необходимые сетевые компоненты (`sing-box` и `wintun.dll`) встроены напрямую в исполняемый файл — приложение запускается мгновенно даже при блокировках внешних сайтов.
 - **Выделенный игровой шлюз в Стокгольме:** собственный высокоскоростной сервер Hysteria 2 (QUIC/UDP) на прямых магистральных линиях в непосредственной близости к европейским серверам игр, устраняющий потери пакетов и ошибки входа в лобби.
 - **Селективная маршрутизация процессов:** через шлюз направляется <u>исключительно</u> трафик WARDOGS. Все остальные программы, браузеры и игры работают напрямую на полной скорости вашего тарифа.
-- **Режим «Свободный интернет»:** встроенный переключатель в шапке окна для стабильной работы Discord, голосового чата и мессенджеров без сторонних VPN.
+- **Комплексный режим:** встроенный переключатель в шапке окна для стабильной работы Discord, голосового чата и мессенджеров без сторонних VPN.
 - **Витрина ярлыков и голосование:** мгновенный запуск WARDOGS в один клик и удобное голосование сообщества за добавление новых игр.
 - **Блокирующее автообновление:** автоматическая проверка и бесшовное обновление приложения при старте со 100% сохранением всех пользовательских настроек (`config.json`).
 - **Автозапуск в Steam:** запуск игры автоматически сразу после оптимизации сети.
@@ -117,17 +118,7 @@
 ## Лицензия
 
 Проект распространяется под свободной лицензией [MIT](LICENSE).
-Авторские права и лицензии всех используемых сторонних компонентов (zapret, WinDivert, sing-box, Wintun, Cygwin, Lucide Icons, go-webview2) приведены в файле [LICENSE](LICENSE).
-
----
-
-## График популярности (Star History)
-
-<p align="center">
-  <a href="https://star-history.com/#max-alekseyev/WarLink&Date">
-    <img src="https://api.star-history.com/svg?repos=max-alekseyev/WarLink&type=Date&theme=dark" alt="Star History Chart" width="100%">
-  </a>
-</p>
+Авторские права и лицензии всех используемых сторонних компонентов (zapret, WinDivert, sing-box, Wintun, Cygwin, Lucide Icons, go-webview2, Foley) приведены в файле [LICENSE](LICENSE).
 
 ---
 

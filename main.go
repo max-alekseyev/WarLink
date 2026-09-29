@@ -29,6 +29,7 @@ import (
 	"warlink/internal/config"
 	"warlink/internal/deps"
 	"warlink/internal/engine"
+	"warlink/internal/progression"
 	"warlink/internal/scanner"
 	"warlink/internal/singbox"
 	"warlink/internal/tray"
@@ -36,7 +37,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.1.6"
+var AppVersion = "v2.1.7"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -629,9 +630,9 @@ func getTrayStatusInfo(state *AppState) (bool, string) {
 	}
 
 	if title == "" && freeNet {
-		title = "Свободный интернет"
+		title = "Комплексный режим"
 	} else if title != "" && freeNet {
-		title = title + " + Свободный интернет"
+		title = title + " + Комплексный режим"
 	} else if title == "" && connected {
 		title = "Игровой профиль"
 	}
@@ -1015,7 +1016,7 @@ func main() {
 		if cfg.FreeInternetEnabled {
 			time.Sleep(300 * time.Millisecond)
 			if err := state.eng.ToggleFreeInternet(true); err != nil {
-				appendLog(fmt.Sprintf("[ERROR] Ошибка запуска режима «Свободный интернет»: %v", err))
+				appendLog(fmt.Sprintf("[ERROR] Ошибка запуска режима «Комплексный режим»: %v", err))
 			}
 		}
 	}()
@@ -1111,6 +1112,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.Handle("/", http.FileServer(http.FS(subFS)))
+	mux.Handle("/guides/", http.StripPrefix("/guides/", http.FileServer(http.Dir("guides"))))
 
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.Lock()
@@ -1394,21 +1396,21 @@ func main() {
 		// Proxy from gateway server and cache locally
 		serverAPI := singbox.GetServerAPI()
 		if serverAPI != "" {
-			resp, err := http.Get(fmt.Sprintf("%s/avatars/%s", serverAPI, filename))
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Get(fmt.Sprintf("%s/avatars/%s", serverAPI, filename))
 			if err == nil && resp.StatusCode == http.StatusOK {
 				defer resp.Body.Close()
-				data, err := io.ReadAll(resp.Body)
-				if err == nil && len(data) > 0 {
-					_ = os.WriteFile(localPath, data, 0644)
-					ct := resp.Header.Get("Content-Type")
-					if ct == "" {
-						ct = "image/jpeg"
+				ct := resp.Header.Get("Content-Type")
+				if strings.HasPrefix(ct, "image/") {
+					data, err := io.ReadAll(resp.Body)
+					if err == nil && len(data) > 0 {
+						_ = os.WriteFile(localPath, data, 0644)
+						w.Header().Set("Content-Type", ct)
+						w.Header().Set("Cache-Control", "public, max-age=86400")
+						w.WriteHeader(http.StatusOK)
+						_, _ = w.Write(data)
+						return
 					}
-					w.Header().Set("Content-Type", ct)
-					w.Header().Set("Cache-Control", "public, max-age=86400")
-					w.WriteHeader(http.StatusOK)
-					_, _ = w.Write(data)
-					return
 				}
 			}
 		}
@@ -1562,6 +1564,14 @@ func main() {
 			if remoteProfile.Donations != nil {
 				respData["donations"] = remoteProfile.Donations
 			}
+			state.mu.Lock()
+			if state.cfg.Progression != nil && (state.cfg.Progression.CareerLevel > 0 || len(state.cfg.Progression.Roles) > 0) {
+				progCopy := *state.cfg.Progression
+				go func(accNum string, p config.PlayerProgression) {
+					_ = singbox.SyncProgression(accNum, singbox.GetMachineGUID(), &p)
+				}(acc, progCopy)
+			}
+			state.mu.Unlock()
 		}
 
 		_ = json.NewEncoder(w).Encode(respData)
@@ -1824,7 +1834,7 @@ func main() {
 			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 				err := state.eng.ToggleFreeInternet(body.Enabled)
 				if err != nil {
-					appendLog(fmt.Sprintf("[ERROR] Ошибка режима «Свободный интернет»: %v", err))
+					appendLog(fmt.Sprintf("[ERROR] Ошибка режима «Комплексный режим»: %v", err))
 				}
 			}
 		}
@@ -2109,6 +2119,191 @@ func main() {
 		}
 		defer resp.Body.Close()
 		_, _ = io.Copy(w, resp.Body)
+	})
+
+	mux.HandleFunc("/api/progression", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		db := progression.GetDatabase()
+
+		if r.Method == http.MethodPost {
+			var body struct {
+				CareerLevel    *int               `json:"career_level"`
+				Roles          map[string]int     `json:"roles"`
+				XPProgress     map[string]float64 `json:"xp_progress"`
+				WishlistID     *string            `json:"wishlist_id"`
+				UnlockedItems  []string           `json:"unlocked_items"`
+				GuideDismissed *bool              `json:"guide_dismissed"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				state.mu.Lock()
+				if state.cfg.Progression == nil {
+					state.cfg.Progression = &config.PlayerProgression{
+						Roles:         make(map[string]int),
+						XPProgress:    make(map[string]float64),
+						UnlockedItems: make([]string, 0),
+					}
+				}
+				if body.GuideDismissed != nil {
+					state.cfg.Progression.GuideDismissed = *body.GuideDismissed
+				}
+				if body.Roles != nil {
+					state.cfg.Progression.Roles = body.Roles
+				}
+				if body.XPProgress != nil {
+					state.cfg.Progression.XPProgress = body.XPProgress
+				}
+				if body.CareerLevel != nil {
+					state.cfg.Progression.CareerLevel = *body.CareerLevel
+				} else if body.Roles != nil {
+					sum := 0
+					for _, lvl := range body.Roles {
+						sum += lvl
+					}
+					state.cfg.Progression.CareerLevel = sum
+				}
+				if body.WishlistID != nil {
+					state.cfg.Progression.WishlistID = *body.WishlistID
+				}
+				if body.UnlockedItems != nil {
+					state.cfg.Progression.UnlockedItems = body.UnlockedItems
+				}
+				state.cfg.Progression.LastUpdated = time.Now().Unix()
+				_ = state.cfg.Save()
+				acc := state.cfg.AccountNumber
+				progCopy := *state.cfg.Progression
+				state.mu.Unlock()
+
+				if acc != "" {
+					go func() {
+						_ = singbox.SyncProgression(acc, singbox.GetMachineGUID(), &progCopy)
+					}()
+				}
+			}
+		}
+
+		state.mu.Lock()
+		prog := state.cfg.Progression
+		state.mu.Unlock()
+
+		rolesMap := make(map[string]int)
+		if prog != nil && prog.Roles != nil {
+			for k, v := range prog.Roles {
+				rolesMap[k] = v
+			}
+		}
+		if prog != nil {
+			rolesMap["career"] = prog.CareerLevel
+		}
+		nextUnlocks := db.GetNextUnlocksForAllRoles(rolesMap)
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"progression":  prog,
+			"next_unlocks": nextUnlocks,
+		})
+	})
+
+	mux.HandleFunc("/api/progression/parse", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var data []byte
+		if err := r.ParseMultipartForm(32 << 20); err == nil && r.MultipartForm != nil {
+			for _, headers := range r.MultipartForm.File {
+				if len(headers) > 0 {
+					file, fErr := headers[0].Open()
+					if fErr == nil {
+						data, _ = io.ReadAll(file)
+						file.Close()
+						break
+					}
+				}
+			}
+		}
+		if len(data) == 0 {
+			raw, rErr := io.ReadAll(r.Body)
+			if rErr == nil && len(raw) > 0 {
+				data = raw
+			}
+		}
+
+		if len(data) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Изображение не получено",
+			})
+			return
+		}
+
+		parsed, err := progression.ParseScreenshotBytes(data)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+			})
+			return
+		}
+
+		if !parsed.Valid {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Скриншот не распознан как экран прогрессии WARDOGS (не сошлась контрольная сумма: Карьера != Сумма уровней ролей)",
+			})
+			return
+		}
+
+		// Update config with parsed progression
+		state.mu.Lock()
+		if state.cfg.Progression == nil {
+			state.cfg.Progression = &config.PlayerProgression{
+				Roles:      make(map[string]int),
+				XPProgress: make(map[string]float64),
+			}
+		}
+		state.cfg.Progression.CareerLevel = parsed.CareerLevel
+		rolesMap := make(map[string]int, len(parsed.Roles))
+		xpMap := make(map[string]float64, len(parsed.Roles))
+		for rName, rp := range parsed.Roles {
+			rolesMap[rName] = rp.Level
+			xpMap[rName] = rp.XPProgress
+		}
+		state.cfg.Progression.Roles = rolesMap
+		state.cfg.Progression.XPProgress = xpMap
+		state.cfg.Progression.LastUpdated = time.Now().Unix()
+		_ = state.cfg.Save()
+		acc := state.cfg.AccountNumber
+		progCopy := *state.cfg.Progression
+		state.mu.Unlock()
+
+		if acc != "" {
+			go func() {
+				_ = singbox.SyncProgression(acc, singbox.GetMachineGUID(), &progCopy)
+			}()
+		}
+
+		db := progression.GetDatabase()
+		rolesMap["career"] = parsed.CareerLevel
+		nextUnlocks := db.GetNextUnlocksForAllRoles(rolesMap)
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":      true,
+			"parsed":       parsed,
+			"progression":  state.cfg.Progression,
+			"next_unlocks": nextUnlocks,
+		})
+	})
+
+	mux.HandleFunc("/api/progression/database", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		db := progression.GetDatabase()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"unlocks": db.GetAllUnlocks(),
+		})
 	})
 
 	// Bind loopback port

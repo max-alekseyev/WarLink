@@ -30,6 +30,12 @@ jobs:
       - name: Verify Go modules
         run: go mod tidy
 
+      - name: Generate Windows Resources (VersionInfo)
+        shell: pwsh
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest
+          goversioninfo -o rsrc_windows_amd64.syso versioninfo.json
+
       - name: Compile WarLink.exe
         shell: pwsh
         env:

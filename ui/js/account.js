@@ -30,6 +30,29 @@ function closeAccount() {
 
 async function fetchAccountProfile() {
     const list = document.getElementById('account-donations-list');
+
+    if (typeof UIStore !== 'undefined' && typeof UIStore.requestSWR === 'function') {
+        await UIStore.requestSWR(
+            '/api/user-profile',
+            async () => {
+                const resp = await fetch('/api/user-profile');
+                if (!resp.ok) return null;
+                return await resp.json();
+            },
+            (p, isFresh) => {
+                if (!p) return;
+                cachedAccountProfile = p;
+                renderAccountData(p);
+            },
+            () => {
+                if (list && list.children.length === 0) {
+                    list.innerHTML = getDonationsSkeletonHtml(2);
+                }
+            }
+        );
+        return;
+    }
+
     if (cachedAccountProfile !== null) {
         renderAccountData(cachedAccountProfile);
     } else if (list && (list.children.length === 0 || !list.querySelector('.donation-row'))) {
@@ -199,22 +222,62 @@ function renderDonations(donations) {
         return;
     }
 
-    let html = '';
-    for (const d of donations) {
+    // Keyed reconciliation: preserve existing DOM elements if present
+    const existingRows = new Map();
+    Array.from(list.querySelectorAll('.donation-row[data-donation-id]')).forEach(el => {
+        existingRows.set(el.dataset.donationId, el);
+    });
+
+    if (existingRows.size === 0 && (list.querySelector('.skeleton-card') || list.querySelector('.account-donations-empty'))) {
+        list.innerHTML = '';
+    }
+
+    const currentIds = new Set();
+
+    donations.forEach(d => {
+        const rowId = d.id ? String(d.id) : `${d.created_at}_${d.amount_rub}`;
+        currentIds.add(rowId);
+
         const isPaid = d.status === 'paid';
         const statusClass = isPaid ? 'status-paid' : 'status-pending';
         const statusText = isPaid ? 'Зачислено' : 'Ожидает оплаты';
-        html += `
-            <div class="donation-row">
+        const dateText = formatDonationDateTime(d.created_at);
+        const amountText = `${d.amount_rub} ₽`;
+
+        const existing = existingRows.get(rowId);
+        if (existing) {
+            const dateEl = existing.querySelector('.donation-date');
+            if (dateEl && dateEl.textContent !== dateText) dateEl.textContent = dateText;
+
+            const amtEl = existing.querySelector('.donation-amount');
+            if (amtEl && amtEl.textContent !== amountText) amtEl.textContent = amountText;
+
+            const statusEl = existing.querySelector('.donation-status');
+            if (statusEl) {
+                statusEl.className = `donation-status ${statusClass}`;
+                statusEl.textContent = statusText;
+            }
+            list.appendChild(existing);
+        } else {
+            const row = document.createElement('div');
+            row.className = 'donation-row';
+            row.dataset.donationId = rowId;
+            row.innerHTML = `
                 <div class="donation-left">
-                    <span class="donation-date font-mono">${escapeHtml(formatDonationDateTime(d.created_at))}</span>
-                    <span class="donation-amount font-mono">${d.amount_rub} ₽</span>
+                    <span class="donation-date font-mono">${escapeHtml(dateText)}</span>
+                    <span class="donation-amount font-mono">${amountText}</span>
                 </div>
                 <span class="donation-status ${statusClass}">${statusText}</span>
-            </div>
-        `;
-    }
-    list.innerHTML = html;
+            `;
+            list.appendChild(row);
+        }
+    });
+
+    existingRows.forEach((el, id) => {
+        if (!currentIds.has(id) && el.parentNode === list) {
+            list.removeChild(el);
+        }
+    });
 }
 
 // --- Custom SBP Donation Modal ---
@@ -421,6 +484,10 @@ async function saveNickname() {
         const data = await resp.json();
         if (resp.ok && data.success) {
             showToast('Никнейм успешно проверен и сохранен');
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+                UIStore.invalidate('/api/sponsors');
+            }
             fetchStatus();
             fetchAccountProfile();
         } else {
@@ -452,6 +519,10 @@ async function linkAccountNumber() {
         if (resp.ok && data.success) {
             showToast('Аккаунт успешно привязан к этому ПК');
             input.value = '';
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+                UIStore.invalidate('/api/sponsors');
+            }
             fetchStatus();
             fetchAccountProfile();
         } else {
@@ -483,6 +554,10 @@ async function handleAvatarFileSelected(e) {
         const data = await resp.json();
         if (resp.ok && data.success) {
             showToast('Аватарка успешно обновлена');
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+                UIStore.invalidate('/api/sponsors');
+            }
             fetchStatus();
             fetchAccountProfile();
         } else {
@@ -506,6 +581,10 @@ async function toggleHideDonationAmount(hideVal) {
         const data = await resp.json();
         if (resp.ok && data.success) {
             showToast(hideVal ? 'Сумма взноса засекречена' : 'Сумма взноса открыта');
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+                UIStore.invalidate('/api/sponsors');
+            }
             fetchAccountProfile();
         } else {
             showToast(data.message || data.error || 'Ошибка изменения статуса');
@@ -542,6 +621,10 @@ async function saveDossierSettings() {
         const data = await resp.json();
         if (resp.ok && data.success) {
             showToast('Описание досье сохранено');
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+                UIStore.invalidate('/api/sponsors');
+            }
             fetchAccountProfile();
         } else {
             showToast(data.message || data.error || 'Ошибка сохранения настроек');
@@ -565,6 +648,9 @@ async function resetOtherDevices() {
         const data = await resp.json();
         if (resp.ok && data.success) {
             showToast('Все лишние устройства отвязаны (активен 1 ПК)');
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+            }
             fetchAccountProfile();
         } else {
             showToast(data.error || 'Ошибка сброса устройств');
