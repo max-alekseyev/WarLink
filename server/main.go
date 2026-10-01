@@ -647,7 +647,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
 	publicMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.9"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.10"})
 	})
 	publicMux.HandleFunc("/metrics", state.handleMetrics)
 	publicMux.HandleFunc("/dashboard", state.handleDashboard)
@@ -1599,9 +1599,18 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 		AccountNumber string `json:"account_number"`
 		DeviceID      string `json:"device_id"`
 		AmountRub     int    `json:"amount_rub"`
+		PaymentMethod string `json:"payment_method"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&reqBody)
+		bodyBytes, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			log.Printf("[DONATE] Error reading body: %v", readErr)
+		} else {
+			log.Printf("[DONATE] Raw body (%d bytes): %s", len(bodyBytes), string(bodyBytes))
+			if err := json.Unmarshal(bodyBytes, &reqBody); err != nil {
+				log.Printf("[DONATE] JSON decode error: %v", err)
+			}
+		}
 	}
 
 	s.mu.RLock()
@@ -1609,19 +1618,34 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	if apiKey != "" {
+		aezaMethod := "yookassa:sbp"
+		minRub := 100
+		minCents := 50
+
+		switch reqBody.PaymentMethod {
+		case "card", "bank_card", "yookassa:bank_card":
+			aezaMethod = "yookassa:bank_card"
+			minRub = 100
+			minCents = 50
+		default:
+			aezaMethod = "yookassa:sbp"
+			minRub = 100
+			minCents = 50
+		}
+
 		amount := s.cfg.DonateAmountRub
-		if reqBody.AmountRub >= 100 {
+		if reqBody.AmountRub >= minRub {
 			amount = reqBody.AmountRub
-		} else if amount <= 0 {
-			amount = 100
+		} else if amount < minRub {
+			amount = minRub
 		}
 		// Aeza API v2 uses minor currency units (cents). 1 EUR ≈ 130.66 RUB.
 		aezaCents := int(float64(amount) / 1.3066)
-		if aezaCents < 50 {
-			aezaCents = 50
+		if aezaCents < minCents {
+			aezaCents = minCents
 		}
 		payload := map[string]interface{}{
-			"method": "yookassa:sbp",
+			"method": aezaMethod,
 			"amount": aezaCents,
 		}
 		body, _ := json.Marshal(payload)
@@ -1632,54 +1656,85 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 
 			client := &http.Client{Timeout: 10 * time.Second}
 			resp, err := client.Do(aezaReq)
-			if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated) {
+			if err != nil {
+				log.Printf("[DONATE] Warning: Aeza API request failed: %v", err)
+			} else if resp != nil {
 				defer resp.Body.Close()
-				var invResp struct {
-					ID      int    `json:"id"`
-					Amount  int    `json:"amount"`
-					Status  string `json:"status"`
-					Payload struct {
-						URL string `json:"url"`
-					} `json:"payload"`
-				}
-				if err := json.NewDecoder(resp.Body).Decode(&invResp); err == nil && invResp.Payload.URL != "" {
-					actualRub := amount
-					if actualRub <= 0 {
-						actualRub = 100
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+					var invResp struct {
+						ID      int    `json:"id"`
+						Amount  int    `json:"amount"`
+						Status  string `json:"status"`
+						Payload struct {
+							URL      string  `json:"url"`
+							Address  string  `json:"address"`
+							Amount   float64 `json:"amount"`
+							Currency string  `json:"currency"`
+							QR       string  `json:"qr"`
+						} `json:"payload"`
 					}
+					if err := json.NewDecoder(resp.Body).Decode(&invResp); err == nil && invResp.ID > 0 {
+						payURL := invResp.Payload.URL
+						if payURL == "" {
+							payURL = fmt.Sprintf("https://my.aeza.net/billing/invoices/%d", invResp.ID)
+						}
+						actualRub := amount
+						if actualRub <= 0 {
+							actualRub = minRub
+						}
 
-					atomic.AddUint64(&s.metricInvoicesCreated, 1)
-					s.recordCounterAsync("invoices_created")
+						atomic.AddUint64(&s.metricInvoicesCreated, 1)
+						s.recordCounterAsync("invoices_created")
 
-					if s.db != nil && invResp.ID > 0 {
-						_, _ = s.db.Exec(`
-							INSERT INTO pending_donations (invoice_id, account_number, device_id, amount_rub, status, created_at)
-							VALUES ($1, $2, $3, $4, 'pending', NOW())
-							ON CONFLICT (invoice_id) DO UPDATE SET amount_rub = EXCLUDED.amount_rub, account_number = EXCLUDED.account_number, device_id = EXCLUDED.device_id
-						`, invResp.ID, reqBody.AccountNumber, reqBody.DeviceID, actualRub)
+						if s.db != nil && invResp.ID > 0 {
+							_, _ = s.db.Exec(`
+								INSERT INTO pending_donations (invoice_id, account_number, device_id, amount_rub, status, created_at)
+								VALUES ($1, $2, $3, $4, 'pending', NOW())
+								ON CONFLICT (invoice_id) DO UPDATE SET amount_rub = EXCLUDED.amount_rub, account_number = EXCLUDED.account_number, device_id = EXCLUDED.device_id
+							`, invResp.ID, reqBody.AccountNumber, reqBody.DeviceID, actualRub)
+						}
+
+						// Trigger background reconciliation after user has time to scan and pay
+						go func() {
+							time.Sleep(30 * time.Second)
+							s.syncAezaDonations()
+							time.Sleep(60 * time.Second)
+							s.syncAezaDonations()
+						}()
+
+						log.Printf("[DONATE] Created Aeza %s invoice #%d for %d RUB (charged %d cents) for acc %s: %s",
+							aezaMethod, invResp.ID, actualRub, aezaCents, reqBody.AccountNumber, payURL)
+						w.Header().Set("Content-Type", "application/json")
+						respMap := map[string]interface{}{
+							"success":     true,
+							"pay_url":     payURL,
+							"payment_url": payURL,
+							"url":         payURL,
+							"invoice_id":  invResp.ID,
+						}
+						if invResp.Payload.Address != "" {
+							respMap["crypto_address"] = invResp.Payload.Address
+							respMap["crypto_amount"] = invResp.Payload.Amount
+							respMap["crypto_currency"] = invResp.Payload.Currency
+							respMap["crypto_qr"] = invResp.Payload.QR
+						}
+						_ = json.NewEncoder(w).Encode(respMap)
+						return
+					} else {
+						log.Printf("[DONATE] Error decoding Aeza invoice response: %v", err)
 					}
-
-					// Trigger background reconciliation after user has time to scan and pay via SBP
-					go func() {
-						time.Sleep(30 * time.Second)
-						s.syncAezaDonations()
-						time.Sleep(60 * time.Second)
-						s.syncAezaDonations()
-					}()
-
-					log.Printf("[DONATE] Created Aeza SBP invoice #%d for %d RUB (charged %d cents) for acc %s: %s",
-						invResp.ID, actualRub, aezaCents, reqBody.AccountNumber, invResp.Payload.URL)
+				} else {
+					respBytes, _ := io.ReadAll(resp.Body)
+					log.Printf("[DONATE] Aeza API returned HTTP %d: %s", resp.StatusCode, string(respBytes))
 					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(resp.StatusCode)
 					_ = json.NewEncoder(w).Encode(map[string]interface{}{
-						"success":     true,
-						"pay_url":     invResp.Payload.URL,
-						"payment_url": invResp.Payload.URL,
-						"url":         invResp.Payload.URL,
+						"success": false,
+						"error":   fmt.Sprintf("Ошибка шлюза платежей Aeza (%d)", resp.StatusCode),
+						"details": string(respBytes),
 					})
 					return
 				}
-			} else if err != nil {
-				log.Printf("[DONATE] Warning: Aeza API request failed: %v", err)
 			}
 		}
 	}
@@ -3829,7 +3884,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_client_version_online Connected active clients broken down by version\n")
 	sb.WriteString("# TYPE warlink_client_version_online gauge\n")
 	if len(clientVersions) == 0 {
-		sb.WriteString("warlink_client_version_online{version=\"v2.1.9\"} 0\n\n")
+		sb.WriteString("warlink_client_version_online{version=\"v2.1.10\"} 0\n\n")
 	} else {
 		for v, cnt := range clientVersions {
 			sb.WriteString(fmt.Sprintf("warlink_client_version_online{version=\"%s\"} %d\n", v, cnt))
@@ -4048,6 +4103,17 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			SELECT COUNT(*), COALESCE(AVG((progression->>'career_level')::int), 0), COALESCE(MAX((progression->>'career_level')::int), 0)
 			FROM accounts
 			WHERE progression IS NOT NULL AND progression::text != '{}' AND progression::text != 'null'
+			  AND NOT (
+				(progression->>'career_level')::int <= 1 
+				AND COALESCE((progression->'roles'->>'assault')::int, 0) <= 1
+				AND COALESCE((progression->'roles'->>'medic')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'recon')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'support')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'driver')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'pilot')::int, 0) = 0
+				AND progression->>'wishlist_id' IS NULL
+				AND (progression->'unlocked_items' IS NULL OR jsonb_array_length(progression->'unlocked_items') = 0)
+			  )
 		`).Scan(&pCount, &cAvg, &cMax)
 
 		sb.WriteString("# HELP warlink_progression_players_total Total players with saved progression\n")
@@ -4073,6 +4139,17 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 				COALESCE(SUM((progression->'roles'->>'pilot')::int), 0)
 			FROM accounts
 			WHERE progression IS NOT NULL AND progression::text != '{}' AND progression::text != 'null'
+			  AND NOT (
+				(progression->>'career_level')::int <= 1 
+				AND COALESCE((progression->'roles'->>'assault')::int, 0) <= 1
+				AND COALESCE((progression->'roles'->>'medic')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'recon')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'support')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'driver')::int, 0) = 0
+				AND COALESCE((progression->'roles'->>'pilot')::int, 0) = 0
+				AND progression->>'wishlist_id' IS NULL
+				AND (progression->'unlocked_items' IS NULL OR jsonb_array_length(progression->'unlocked_items') = 0)
+			  )
 		`).Scan(&sumAssault, &sumMedic, &sumRecon, &sumSupport, &sumDriver, &sumPilot)
 
 		sb.WriteString("# HELP warlink_progression_role_level_sum Total accumulated levels across all players for this role\n")
@@ -5186,6 +5263,17 @@ func (s *AppState) handleProgressionAnalytics(w http.ResponseWriter, r *http.Req
 		SELECT COALESCE(progression::text, '') 
 		FROM accounts 
 		WHERE progression IS NOT NULL AND progression::text != '{}' AND progression::text != 'null'
+		  AND NOT (
+			(progression->>'career_level')::int <= 1 
+			AND COALESCE((progression->'roles'->>'assault')::int, 0) <= 1
+			AND COALESCE((progression->'roles'->>'medic')::int, 0) = 0
+			AND COALESCE((progression->'roles'->>'recon')::int, 0) = 0
+			AND COALESCE((progression->'roles'->>'support')::int, 0) = 0
+			AND COALESCE((progression->'roles'->>'driver')::int, 0) = 0
+			AND COALESCE((progression->'roles'->>'pilot')::int, 0) = 0
+			AND progression->>'wishlist_id' IS NULL
+			AND (progression->'unlocked_items' IS NULL OR jsonb_array_length(progression->'unlocked_items') = 0)
+		  )
 	`)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -5652,7 +5740,30 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 		`, acc, nick, steamID, motto)
 
 		if len(req.Progression) > 0 && string(req.Progression) != "null" && string(req.Progression) != "{}" {
-			_, _ = s.db.Exec(`UPDATE accounts SET progression = $1, updated_at = NOW() WHERE account_number = $2`, req.Progression, acc)
+			var progCheck struct {
+				CareerLevel int            `json:"career_level"`
+				WishlistID  string         `json:"wishlist_id"`
+				Unlocked    []string       `json:"unlocked_items"`
+				Roles       map[string]int `json:"roles"`
+			}
+			isDummy := false
+			if err := json.Unmarshal(req.Progression, &progCheck); err == nil {
+				if progCheck.CareerLevel <= 1 && progCheck.WishlistID == "" && len(progCheck.Unlocked) == 0 {
+					allZero := true
+					for rK, rLvl := range progCheck.Roles {
+						if (rK == "assault" && rLvl > 1) || (rK != "assault" && rLvl > 0) {
+							allZero = false
+							break
+						}
+					}
+					if allZero {
+						isDummy = true
+					}
+				}
+			}
+			if !isDummy {
+				_, _ = s.db.Exec(`UPDATE accounts SET progression = $1, updated_at = NOW() WHERE account_number = $2`, req.Progression, acc)
+			}
 		}
 
 		if req.HideDonationAmount != nil {

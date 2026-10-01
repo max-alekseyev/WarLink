@@ -590,21 +590,21 @@ if (panelsById[41]) {
     {
       datasource: { type: "prometheus", uid: "VictoriaMetrics" },
       editorMode: "code",
-      expr: "warlink_udp_rcvbuf_errors_total",
+      expr: "rate(warlink_udp_rcvbuf_errors_total[$__rate_interval])",
       legendFormat: "Переполнение буфера приема (RcvbufErrors)",
       refId: "A"
     },
     {
       datasource: { type: "prometheus", uid: "VictoriaMetrics" },
       editorMode: "code",
-      expr: "warlink_udp_sndbuf_errors_total",
+      expr: "rate(warlink_udp_sndbuf_errors_total[$__rate_interval])",
       legendFormat: "Переполнение буфера отправки (SndbufErrors)",
       refId: "B"
     },
     {
       datasource: { type: "prometheus", uid: "VictoriaMetrics" },
       editorMode: "code",
-      expr: "warlink_udp_in_errors_total",
+      expr: "rate(warlink_udp_in_errors_total[$__rate_interval])",
       legendFormat: "Ошибочные входящие пакеты (InErrors)",
       refId: "C"
     }

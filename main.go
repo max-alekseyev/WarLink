@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -43,7 +44,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.1.9"
+var AppVersion = "v2.1.10"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -1546,39 +1547,47 @@ func main() {
 
 	mux.HandleFunc("/api/server-donate", func(w http.ResponseWriter, r *http.Request) {
 		amount := 100
+		method := "sbp"
 		if r.Method == http.MethodPost {
 			var body struct {
-				AmountRub int `json:"amount_rub"`
+				AmountRub     int    `json:"amount_rub"`
+				PaymentMethod string `json:"payment_method"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.AmountRub >= 100 {
-				amount = body.AmountRub
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				if body.AmountRub >= 100 {
+					amount = body.AmountRub
+				}
+				if body.PaymentMethod != "" {
+					method = body.PaymentMethod
+				}
 			}
 		} else if qAmount := r.URL.Query().Get("amount"); qAmount != "" {
 			if a, err := strconv.Atoi(qAmount); err == nil && a >= 100 {
 				amount = a
 			}
+			if qm := r.URL.Query().Get("method"); qm != "" {
+				method = qm
+			}
 		}
 
-		go func(amt int) {
+		go func(amt int, payMethod string) {
 			state.mu.Lock()
 			acc := state.cfg.AccountNumber
 			state.mu.Unlock()
 
-			payURL, err := singbox.CreateCustomDonation(acc, singbox.GetMachineGUID(), amt)
+			payURL, err := singbox.CreateCustomDonationWithMethod(acc, singbox.GetMachineGUID(), amt, payMethod)
 			if err != nil || payURL == "" {
-				payURL, err = singbox.RequestServerDonate()
-				if err != nil || payURL == "" {
-					payURL = "https://my.aeza.net/"
-				}
+				appendLog(fmt.Sprintf("[DONATE] Ошибка создания счета %s (%d руб): %v. Переход на биллинг Aeza", payMethod, amt, err))
+				payURL = "https://my.aeza.net/billing/invoices"
 			}
-			appendLog(fmt.Sprintf("[DONATE] Открытие страницы пожертвования СБП (%d руб, аккаунт %s): %s", amt, acc, payURL))
+			appendLog(fmt.Sprintf("[DONATE] Открытие страницы пожертвования (%s, %d руб, аккаунт %s): %s", payMethod, amt, acc, payURL))
 			pURL, _ := syscall.UTF16PtrFromString(payURL)
 			pOpen, _ := syscall.UTF16PtrFromString("open")
 			procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pURL)), 0, 0, uintptr(SW_SHOWNORMAL))
-		}(amount)
+		}(amount, method)
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"opened": true, "amount_rub": amount})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"opened": true, "amount_rub": amount, "payment_method": method})
 	})
 
 	mux.HandleFunc("/api/notifications", func(w http.ResponseWriter, r *http.Request) {
@@ -1811,7 +1820,7 @@ func main() {
 				respData["donations"] = remoteProfile.Donations
 			}
 			state.mu.Lock()
-			if state.cfg.Progression != nil && (state.cfg.Progression.CareerLevel > 0 || len(state.cfg.Progression.Roles) > 0) {
+			if state.cfg.Progression != nil && state.cfg.Progression.IsConfigured() {
 				progCopy := *state.cfg.Progression
 				go func(accNum string, p config.PlayerProgression) {
 					_ = singbox.SyncProgression(accNum, singbox.GetMachineGUID(), &p)
@@ -2678,19 +2687,39 @@ func main() {
 			lower := strings.ToLower(name)
 			if strings.Contains(lower, "launcher") || strings.Contains(lower, "setup") || strings.Contains(lower, "update") {
 				appendLog(fmt.Sprintf("[GAME] Лаунчер %s завершил работу, ожидание запуска игрового клиента...", name))
-				// Debounce: if user simply closed the launcher without starting the game client,
-				// check after 12 seconds if any game process is active. If not, restore window and disconnect cleanly!
+				// Active polling: wait up to 60 seconds for the UE5/game client to initialize from storage (HDD/SSD).
+				// If the game process appears at any time during this window, cancel the disconnect cleanly.
 				go func() {
-					time.Sleep(12 * time.Second)
-					state.mu.Lock()
-					g := state.cfg.GetSelectedGame()
-					state.mu.Unlock()
-					running, _ := watcher.IsAnyProcessRunning(g.ProcessNames, watcher.NormalizeGameToken(g.Title))
-					if !running && state.eng.IsConnected() {
-						appendLog("[GAME] Игровой клиент не был запущен после закрытия лаунчера. Завершение сессии...")
-						restoreFromTray(appTray, globalWV)
-						_ = state.eng.Disconnect()
-						updateTrayStatus(appTray, state)
+					ticker := time.NewTicker(1 * time.Second)
+					defer ticker.Stop()
+					timeout := time.After(60 * time.Second)
+
+					for {
+						select {
+						case <-timeout:
+							if state.eng.IsConnected() {
+								appendLog("[GAME] Игровой клиент не был запущен в течение 60 секунд после закрытия лаунчера. Завершение сессии...")
+								restoreFromTray(appTray, globalWV)
+								_ = state.eng.Disconnect()
+								updateTrayStatus(appTray, state)
+							}
+							return
+						case <-ticker.C:
+							if !state.eng.IsConnected() {
+								return // Session already ended or manually disconnected
+							}
+							state.mu.Lock()
+							g := state.cfg.GetSelectedGame()
+							state.mu.Unlock()
+							running, foundProc := watcher.IsAnyProcessRunning(g.ProcessNames, watcher.NormalizeGameToken(g.Title))
+							if running {
+								fLower := strings.ToLower(foundProc)
+								if !strings.Contains(fLower, "launcher") && !strings.Contains(fLower, "setup") && !strings.Contains(fLower, "update") {
+									appendLog(fmt.Sprintf("[GAME] Игровой клиент %s успешно обнаружен. Сессия продолжается в активном режиме.", foundProc))
+									return
+								}
+							}
+						}
 					}
 				}()
 				return
@@ -2719,6 +2748,51 @@ func main() {
 	)
 	gameWatcher.Start()
 	defer gameWatcher.Stop()
+
+	// 6b. Steam F12 Screenshot Watcher for zero-click WARDOGS progression auto-sync
+	steamWatcherCtx, cancelSteamWatcher := context.WithCancel(context.Background())
+	defer cancelSteamWatcher()
+	steamWatcher := progression.NewSteamWatcher(
+		func(res *progression.ProgressionResult, fPath string) {
+			state.mu.Lock()
+			if state.cfg.Progression == nil {
+				state.cfg.Progression = &config.PlayerProgression{
+					Roles:      make(map[string]int),
+					XPProgress: make(map[string]float64),
+				}
+			}
+			state.cfg.Progression.CareerLevel = res.CareerLevel
+			for rK, rP := range res.Roles {
+				state.cfg.Progression.Roles[rK] = rP.Level
+				state.cfg.Progression.XPProgress[rK] = rP.XPProgress
+			}
+			state.cfg.Progression.GuideDismissed = true
+			state.cfg.Progression.LastUpdated = time.Now().Unix()
+			_ = state.cfg.Save()
+			acc := state.cfg.AccountNumber
+			progCopy := *state.cfg.Progression
+			state.mu.Unlock()
+
+			if acc != "" {
+				go func() {
+					_ = singbox.SyncProgression(acc, singbox.GetMachineGUID(), &progCopy)
+				}()
+			}
+
+			// Notify UI WebView2 so it updates reactively without reloading
+			if globalWV != nil {
+				progJSON, _ := json.Marshal(progCopy)
+				globalWV.Dispatch(func() {
+					js := fmt.Sprintf(`if (window.ProgressionController && typeof window.ProgressionController.onSteamScreenshotSync === 'function') { window.ProgressionController.onSteamScreenshotSync(%s); }`, string(progJSON))
+					globalWV.Eval(js)
+				})
+			}
+		},
+		func(format string, args ...interface{}) {
+			appendLog(fmt.Sprintf(format, args...))
+		},
+	)
+	go steamWatcher.Start(steamWatcherCtx)
 
 	// 7. Initialize Native WebView2 Window (Embedded directly in WarLink.exe process)
 	// Create dark background brush (#161616) to eliminate white background flash

@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	ClientVersion       = "v2.1.9"
+	ClientVersion       = "v2.1.10"
 	DefaultServerIP     = "138.124.103.99"
 	DefaultServerAPI    = "http://138.124.103.99"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -1099,10 +1099,9 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	// Steam Datagram Relay (SDR) ping relays stay direct.
 	rules = append(rules,
 		RouteRule{
-			Network:     "udp",
-			PortRange:   []string{"4000:4500"},
-			ProcessName: WardogsGameProcesses,
-			Outbound:    "hy2-stockholm",
+			Network:   "udp",
+			PortRange: []string{"4000:4500"},
+			Outbound:  "hy2-stockholm",
 		},
 		RouteRule{
 			Network:   "udp",
@@ -1243,6 +1242,17 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		}
 	}
 
+	routeExclude := []string{
+		"162.159.0.0/16",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+	}
+	if targetServer != "" && !strings.Contains(targetServer, ":") {
+		routeExclude = append(routeExclude, targetServer+"/32")
+	}
+
 	cfg := Config{
 		Log: LogConfig{
 			Level:     "info",
@@ -1260,7 +1270,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				AutoRoute:           true,
 				StrictRoute:         false,
 				Stack:               "mixed",
-				RouteExcludeAddress: []string{"162.159.0.0/16"},
+				RouteExcludeAddress: routeExclude,
 			},
 		},
 		Outbounds: []Outbound{

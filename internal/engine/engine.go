@@ -616,7 +616,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	}
 
 	e.setProgress(92, 0, 0, bestAlt, "Игровой туннель активен. Стабилизация сетевого адаптера...", true)
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	e.mu.Lock()
 	e.isConnected = true

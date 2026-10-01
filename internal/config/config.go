@@ -62,6 +62,25 @@ type PlayerProgression struct {
 	LastUpdated    int64              `json:"last_updated,omitempty"`
 }
 
+// IsConfigured returns true if the player has actually configured or imported real progression.
+func (p *PlayerProgression) IsConfigured() bool {
+	if p == nil {
+		return false
+	}
+	if p.CareerLevel > 1 || p.WishlistID != "" || len(p.UnlockedItems) > 0 {
+		return true
+	}
+	for role, lvl := range p.Roles {
+		if role == "assault" && lvl > 1 {
+			return true
+		}
+		if role != "assault" && lvl > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Config) IsSoundEffectsEnabled() bool {
 	if c.EnableSoundEffects == nil {
 		return true
@@ -191,27 +210,8 @@ func Load() *Config {
 		_ = cfg.saveLocked()
 	}
 
-	if cfg.Progression == nil {
-		cfg.Progression = &PlayerProgression{
-			CareerLevel: 1,
-			Roles: map[string]int{
-				"assault": 1,
-				"medic":   0,
-				"recon":   0,
-				"support": 0,
-				"driver":  0,
-				"pilot":   0,
-			},
-			XPProgress: map[string]float64{
-				"assault": 0,
-				"medic":   0,
-				"recon":   0,
-				"support": 0,
-				"driver":  0,
-				"pilot":   0,
-			},
-			LastUpdated: time.Now().Unix(),
-		}
+	if cfg.Progression != nil && !cfg.Progression.IsConfigured() {
+		cfg.Progression = nil
 	}
 
 	return cfg

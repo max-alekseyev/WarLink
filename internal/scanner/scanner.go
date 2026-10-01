@@ -72,6 +72,18 @@ func FindConflicts() ([]string, error) {
 
 // KillProcess kills all instances of a process by executable name.
 func KillProcess(name string) error {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "warp-svc.exe" || lower == "warp-cli.exe" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		stopCmd := exec.CommandContext(ctx, "net.exe", "stop", "CloudflareWARP", "/y")
+		stopCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = stopCmd.Run()
+		scCmd := exec.CommandContext(ctx, "sc.exe", "stop", "CloudflareWARP")
+		scCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = scCmd.Run()
+	}
+
 	cmd := exec.Command("taskkill", "/F", "/T", "/IM", name)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,

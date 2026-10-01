@@ -28,6 +28,16 @@
                 </svg>
                 <span>Импорт (Ctrl+V)</span>
             </button>
+            <button id="btn-prog-share" class="btn-prog-action font-mono" onclick="ProgressionController.openShareModal()" title="Сгенерировать карточку «Уровень WARDOGS» с QR-кодом">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="18" cy="5" r="3"></circle>
+                    <circle cx="6" cy="12" r="3"></circle>
+                    <circle cx="18" cy="19" r="3"></circle>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                </svg>
+                <span>Поделиться</span>
+            </button>
             <button class="details-close" onclick="toggleProgression(event)">Закрыть</button>
         </div>
     </div>
@@ -355,12 +365,12 @@
                 <div class="prog-guide-step-row">
                     <div class="prog-step-badge font-mono">1</div>
                     <div class="prog-step-info">
-                        <div class="prog-step-header font-mono">ПОЛНЫЙ СКРИНШОТ В ИГРЕ</div>
+                        <div class="prog-step-header font-mono">АВТОМАТИЧЕСКАЯ СИНХРОНИЗАЦИЯ ИЛИ СКРИНШОТ</div>
                         <div class="prog-step-text">
-                            В меню WARDOGS откройте вкладку <strong>«Разблокировать»</strong> или в матче нажмите <strong>Tab</strong> (вкладка «Прогресс»).
+                            <strong>Steam F12 (Автоматически):</strong> в матче или меню игры откройте вкладку <strong>«Разблокировать»</strong> (или Tab) и нажмите <strong>F12</strong> в Steam. WarLink автоматически считает уровни классов и карьеры.
                         </div>
                         <div class="prog-step-callout">
-                            <strong>Важно:</strong> делайте <strong>полный снимок экрана</strong> (PrintScreen, Win+Shift+S на весь экран или F12 в Steam). Не обрезайте края.
+                            <strong>Ручной снимок:</strong> сделайте полный снимок экрана (PrintScreen или Win+Shift+S во весь экран). Не обрезайте края.
                         </div>
                     </div>
                 </div>
@@ -371,7 +381,10 @@
                     <div class="prog-step-info">
                         <div class="prog-step-header font-mono">ИМПОРТ В ПРИЛОЖЕНИЕ</div>
                         <div class="prog-step-text">
-                            Нажмите <strong>Ctrl+V</strong> в окне программы или кнопку <strong>«Импорт»</strong>.
+                            Нажмите <strong>Ctrl+V</strong> в окне программы, перетащите файл мышью (Drag & Drop) или нажмите кнопку <strong>«Импорт»</strong>.
+                        </div>
+                        <div class="prog-step-callout">
+                            <strong>Калибровка:</strong> значение уровня можно также настроить вручную стрелочками <strong>&#9650; / &#9660;</strong> прямо на циферблатах классов.
                         </div>
                     </div>
                 </div>
@@ -380,9 +393,23 @@
                 <div class="prog-guide-step-row">
                     <div class="prog-step-badge font-mono">3</div>
                     <div class="prog-step-info">
-                        <div class="prog-step-header font-mono">ВЫБОР ЦЕЛИ</div>
+                        <div class="prog-step-header font-mono">ВЫБОР ЦЕЛИ И БЮДЖЕТ ВЕТКИ</div>
                         <div class="prog-step-text">
-                            В каталоге нажмите на иконку прицела, чтобы закрепить предмет и отслеживать прогресс.
+                            В каталоге наград нажмите на <strong>иконку прицела</strong> у желаемого оружия или модуля, чтобы закрепить персональную цель.
+                        </div>
+                        <div class="prog-step-callout">
+                            Интерфейс рассчитает оставшиеся уровни, цену цели ($) и суммарный бюджет на покупку промежуточных наград всей ветки.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">4</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">КАРТОЧКА ДЛЯ ДРУЗЕЙ И DISCORD</div>
+                        <div class="prog-step-text">
+                            Нажмите кнопку со стрелкой <strong>«Поделиться»</strong> в верхней панели — сгенерируется карточка прогресса в высоком разрешении для отправки в Discord, Telegram и Steam.
                         </div>
                     </div>
                 </div>
@@ -392,6 +419,45 @@
         <div class="prog-guide-footer-btn">
             <button class="btn btn-action font-mono" onclick="ProgressionController.dismissGuide()">
                 <span>ПОНЯТНО</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Карточка прогресса WARDOGS для шеринга -->
+<div id="prog-share-modal" class="modal-backdrop" style="display: none;" onclick="if (event.target === this) ProgressionController.closeShareModal()">
+    <div class="modal-card prog-share-modal-card" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span class="modal-title font-mono">КАРТОЧКА ПРОГРЕССИИ // ПОДЕЛИТЬСЯ</span>
+            <button class="btn-icon" onclick="ProgressionController.closeShareModal()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        
+        <div class="prog-share-modal-body">
+            <div class="prog-share-preview-wrap">
+                <canvas id="prog-share-canvas" width="1200" height="675" class="prog-share-canvas"></canvas>
+            </div>
+            <div class="prog-share-hint font-mono">
+                Изображение для публикации в Discord, Telegram и Steam со встроенным QR-кодом
+            </div>
+        </div>
+
+        <div class="prog-share-footer">
+            <button id="btn-prog-copy-card" class="btn btn-primary font-mono" onclick="ProgressionController.copyShareCard()" title="Скопировать изображение в буфер обмена">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>Скопировать</span>
+            </button>
+            <button id="btn-prog-save-card" class="btn btn-secondary font-mono" onclick="ProgressionController.saveShareCard()" title="Сохранить файл на диск">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Сохранить PNG</span>
             </button>
         </div>
     </div>

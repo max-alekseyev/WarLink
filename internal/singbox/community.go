@@ -339,10 +339,20 @@ func UploadAvatar(account string, imgBytes []byte, filename string) (string, err
 	return result.AvatarURL, nil
 }
 
-// CreateCustomDonation creates an SBP payment invoice for a custom amount (min 100 RUB).
+// CreateCustomDonation creates a donation payment invoice for a custom amount (default SBP).
 func CreateCustomDonation(account, device string, amountRub int) (string, error) {
-	if amountRub < 100 {
-		amountRub = 100
+	return CreateCustomDonationWithMethod(account, device, amountRub, "sbp")
+}
+
+// CreateCustomDonationWithMethod creates a payment invoice for a specified payment method.
+func CreateCustomDonationWithMethod(account, device string, amountRub int, paymentMethod string) (string, error) {
+	minRub := 100
+	if paymentMethod == "pawnow:usdt_trc20" || paymentMethod == "pawnow:usdt_ton" || paymentMethod == "pawnow:ton_ton" ||
+		paymentMethod == "usdt_trc20" || paymentMethod == "usdt_ton" || paymentMethod == "ton" {
+		minRub = 650
+	}
+	if amountRub < minRub {
+		amountRub = minRub
 	}
 	serverAPI := GetServerAPI()
 	if serverAPI == "" {
@@ -350,11 +360,15 @@ func CreateCustomDonation(account, device string, amountRub int) (string, error)
 	}
 
 	client := &http.Client{Timeout: 8 * time.Second}
-	body, _ := json.Marshal(map[string]interface{}{
+	payload := map[string]interface{}{
 		"account_number": account,
 		"device_id":      device,
 		"amount_rub":     amountRub,
-	})
+	}
+	if paymentMethod != "" {
+		payload["payment_method"] = paymentMethod
+	}
+	body, _ := json.Marshal(payload)
 
 	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/donate", serverAPI), bytes.NewReader(body))
 	if err != nil {

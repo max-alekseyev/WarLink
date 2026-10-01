@@ -65,9 +65,9 @@ func TestBuildFilteredArgs(t *testing.T) {
 		t.Errorf("expected list-general.txt to be included when freeInternet is true")
 	}
 
-	// 3. When freeInternet == false: TCP hook must be omitted, no artifact port 12, exclude-user files present
-	if strings.Contains(joinedGame, "--wf-tcp-out") {
-		t.Errorf("expected --wf-tcp-out to be omitted when freeInternet is false")
+	// 3. When freeInternet == false: TCP 443 is selectively hooked for game auth, no artifact port 12, exclude-user files present
+	if !strings.Contains(joinedGame, "--wf-tcp-out=443") {
+		t.Errorf("expected --wf-tcp-out=443 for game auth when freeInternet is false")
 	}
 	if strings.Contains(joinedGame, ",12") {
 		t.Errorf("expected artifact port 12 to be removed")

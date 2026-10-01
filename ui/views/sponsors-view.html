@@ -22,27 +22,62 @@
             </div>
             
             <div class="goal-nodes-grid">
-                <div class="goal-node-item covered">
+                <!-- 1. Stockholm Node -->
+                <div id="goal-node-stockholm" class="goal-node-item">
                     <div class="node-item-top">
-                        <span class="node-name">Стокгольм (Активный узел)</span>
-                        <span class="node-cost">2 € / мес</span>
-                    </div>
-                    <div class="node-item-status">
-                        <span id="stockholm-goal-badge" class="badge-covered">АКТИВЕН</span>
-                    </div>
-                </div>
-                <div class="goal-node-item target">
-                    <div class="node-item-top">
-                        <span class="node-name">Франкфурт (Цель: Новая нода)</span>
-                        <span class="node-cost">12 € / мес</span>
+                        <div class="node-identity">
+                            <svg class="node-flag" width="16" height="11" viewBox="0 0 16 11" fill="none">
+                                <rect width="16" height="11" rx="1" fill="#005293"/>
+                                <rect x="5" width="2" height="11" fill="#FFCD00"/>
+                                <rect y="4.5" width="16" height="2" fill="#FFCD00"/>
+                            </svg>
+                            <div class="node-name-wrap">
+                                <span class="node-name">Стокгольм</span>
+                                <span class="node-role font-mono">ОСНОВНОЙ ШЛЮЗ</span>
+                            </div>
+                        </div>
+                        <div class="node-cost-wrap font-mono">
+                            <span class="node-cost">2 €</span>
+                            <span class="node-period">/ мес</span>
+                        </div>
                     </div>
                     <div class="node-progress-wrap">
                         <div class="node-progress-bar">
-                            <div id="frankfurt-progress-fill" class="node-progress-fill" style="width: 25%;"></div>
+                            <div id="stockholm-progress-fill" class="node-progress-fill" style="width: 0%;"></div>
                         </div>
-                        <div class="node-progress-labels">
-                            <span id="frankfurt-progress-text">Собрано: 3 € из 12 €</span>
-                            <span id="frankfurt-progress-pct">25%</span>
+                        <div class="node-progress-labels font-mono">
+                            <span id="stockholm-progress-text">Собрано: 0 € из 2 €</span>
+                            <span id="stockholm-progress-pct">0%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Frankfurt Node -->
+                <div id="goal-node-frankfurt" class="goal-node-item">
+                    <div class="node-item-top">
+                        <div class="node-identity">
+                            <svg class="node-flag" width="16" height="11" viewBox="0 0 16 11" fill="none">
+                                <rect width="16" height="3.67" rx="1" fill="#202020"/>
+                                <rect y="3.67" width="16" height="3.67" fill="#DD1111"/>
+                                <rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>
+                            </svg>
+                            <div class="node-name-wrap">
+                                <span class="node-name">Франкфурт</span>
+                                <span class="node-role font-mono">РЕЗЕРВНЫЙ УЗЕЛ</span>
+                            </div>
+                        </div>
+                        <div class="node-cost-wrap font-mono">
+                            <span class="node-cost">12 €</span>
+                            <span class="node-period">/ мес</span>
+                        </div>
+                    </div>
+                    <div class="node-progress-wrap">
+                        <div class="node-progress-bar">
+                            <div id="frankfurt-progress-fill" class="node-progress-fill" style="width: 0%;"></div>
+                        </div>
+                        <div class="node-progress-labels font-mono">
+                            <span id="frankfurt-progress-text">Собрано: 0 € из 12 €</span>
+                            <span id="frankfurt-progress-pct">0%</span>
                         </div>
                     </div>
                 </div>

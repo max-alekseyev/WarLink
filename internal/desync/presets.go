@@ -504,15 +504,30 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 	// Game-Only Selective Filtering (Free Internet disabled):
 	// 1. Unblocks UDP 443 QUIC so Hysteria 2 connects smoothly through ISP.
 	// 2. Unblocks voice UDP ports (Discord voice and RTP).
-	// WinDivert does NOT hook TCP 80/443, so browser and system traffic remain 100% direct!
+	// 3. Selectively unblocks game auth & backend HTTPS (TCP 443) via list-general.txt.
+	// Browser, banking, and general web traffic remain 100% direct and untouched!
 	const udpPortsStr = "19294-19344,50000-50100"
 
 	return []string{
 		"--blob=fake_discord:@" + binSep + "ACTIVE_DISCORD_UDP.bin",
+		"--wf-tcp-out=443",
 		"--wf-udp-out=443," + udpPortsStr,
 		"--ctrack-timeouts=60:300:60:3600",
 		"--lua-init=@" + luaSep + "zapret-lib.lua",
 		"--lua-init=@" + luaSep + "zapret-antidpi.lua",
+		"--filter-tcp=443",
+		"--filter-l7=tls",
+		"--hostlist=" + listsSep + "list-general.txt",
+		"--hostlist=" + listsSep + "list-general-user.txt",
+		"--hostlist=" + listsSep + "list-auto.txt",
+		"--hostlist-exclude=" + listsSep + "list-exclude.txt",
+		"--hostlist-exclude=" + listsSep + "list-exclude-user.txt",
+		"--ipset-exclude=" + listsSep + "ipset-exclude.txt",
+		"--ipset-exclude=" + listsSep + "ipset-exclude-user.txt",
+		"--payload=tls_client_hello",
+		"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
+		"--lua-desync=multisplit:pos=1,midsld",
+		"--new",
 		"--filter-udp=443",
 		"--filter-l7=quic",
 		"--hostlist=" + listsSep + "list-general.txt",

@@ -429,10 +429,9 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	// Steam Datagram Relay (SDR) ping relays stay direct.
 	rules = append(rules,
 		SingBoxRouteRule{
-			Network:     "udp",
-			PortRange:   []string{"4000:4500"},
-			ProcessName: WardogsGameProcesses,
-			Outbound:    "hy2-stockholm",
+			Network:   "udp",
+			PortRange: []string{"4000:4500"},
+			Outbound:  "hy2-stockholm",
 		},
 		SingBoxRouteRule{
 			Network:   "udp",

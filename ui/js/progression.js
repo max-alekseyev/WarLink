@@ -871,9 +871,735 @@
         };
     }
 
-    function onClose() {
-        const modal = document.getElementById('prog-guide-modal');
+    function drawRoundRect(ctx, x, y, w, h, r, fill, stroke) {
+        if (typeof r === 'number') r = [r, r, r, r];
+        ctx.beginPath();
+        if (ctx.roundRect) {
+            ctx.roundRect(x, y, w, h, r);
+        } else {
+            ctx.moveTo(x + r[0], y);
+            ctx.lineTo(x + w - r[1], y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r[1]);
+            ctx.lineTo(x + w, y + h - r[2]);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r[2], y + h);
+            ctx.lineTo(x + r[3], y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r[3]);
+            ctx.lineTo(x, y + r[0]);
+            ctx.quadraticCurveTo(x, y, x + r[0], y);
+            ctx.closePath();
+        }
+        if (fill) ctx.fill();
+        if (stroke) ctx.stroke();
+    }
+
+    function fillTextEllipsis(ctx, text, x, y, maxW) {
+        if (!text) return;
+        if (ctx.measureText(text).width <= maxW) {
+            ctx.fillText(text, x, y);
+            return;
+        }
+        let truncated = text;
+        while (truncated.length > 1 && ctx.measureText(truncated + '...').width > maxW) {
+            truncated = truncated.slice(0, -1);
+        }
+        ctx.fillText(truncated + '...', x, y);
+    }
+
+    function drawImageContain(ctx, img, x, y, maxW, maxH) {
+        if (!img || !img.complete || !img.naturalWidth || !img.naturalHeight) return;
+        const nw = img.naturalWidth;
+        const nh = img.naturalHeight;
+        const scale = Math.min(maxW / nw, maxH / nh);
+        const w = Math.round(nw * scale);
+        const h = Math.round(nh * scale);
+        const dx = Math.round(x + (maxW - w) / 2);
+        const dy = Math.round(y + (maxH - h) / 2);
+        ctx.drawImage(img, dx, dy, w, h);
+    }
+
+    function drawQRCode(ctx, text, x, y, size, darkColor = '#111111', lightColor = '#FFFFFF', quietZone = 1.5) {
+        if (typeof qrcode === 'undefined') return;
+        try {
+            const qr = qrcode(0, 'M');
+            qr.addData(text);
+            qr.make();
+            const count = qr.getModuleCount();
+            const totalCount = count + quietZone * 2;
+            const cellSize = size / totalCount;
+
+            if (lightColor) {
+                ctx.fillStyle = lightColor;
+                ctx.fillRect(x, y, size, size);
+            }
+
+            ctx.fillStyle = darkColor;
+            for (let r = 0; r < count; r++) {
+                for (let c = 0; c < count; c++) {
+                    if (qr.isDark(r, c)) {
+                        const cellX = x + (c + quietZone) * cellSize;
+                        const cellY = y + (r + quietZone) * cellSize;
+                        ctx.fillRect(cellX, cellY, cellSize + 0.05, cellSize + 0.05);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed drawing QR code:', e);
+        }
+    }
+
+    const ROLE_MAX_LEVELS = {
+        assault: 20,
+        medic: 35,
+        recon: 20,
+        support: 40,
+        driver: 30,
+        pilot: 25
+    };
+
+    const shareRoleImgCache = {};
+    const SHARE_ROLE_KEYS = ['assault', 'medic', 'recon', 'support', 'driver', 'pilot'];
+    SHARE_ROLE_KEYS.forEach(k => {
+        const img = new Image();
+        img.src = 'assets/roles/' + k + '.webp';
+        img.onload = () => {
+            const modal = document.getElementById('prog-share-modal');
+            if (modal && modal.style.display !== 'none') {
+                renderShareCard();
+            }
+        };
+        shareRoleImgCache[k] = img;
+    });
+
+    let careerBadgeImgCache = null;
+    let lastCareerBadgePath = '';
+    let targetWeaponImgCache = null;
+    let lastTargetWeaponPath = '';
+
+    function renderShareCard() {
+        const canvas = document.getElementById('prog-share-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        try {
+            const roles = (currentProgression && currentProgression.roles) || {};
+            const sum = (roles.assault || 0) + (roles.medic || 0) + (roles.recon || 0) +
+                        (roles.support || 0) + (roles.driver || 0) + (roles.pilot || 0);
+
+            // Target Item (Wishlist)
+            let targetItem = null;
+            if (currentProgression && currentProgression.wishlist_id && allUnlocks && allUnlocks.length > 0) {
+                targetItem = allUnlocks.find(x => x.unlock_id === currentProgression.wishlist_id);
+            }
+
+            const hasTarget = !!targetItem;
+
+            // Safe zones & Layout Dimensions
+            const safePadX = 16;
+            const safePadY = 16;
+            const cardW = 672;
+            const card1H = 186;
+            const card2H = 70;
+            const gap = 10;
+
+            const baseW = cardW + safePadX * 2;
+            const baseH = hasTarget ? (safePadY + card1H + gap + card2H + safePadY) : (safePadY + card1H + safePadY);
+
+            // 2.5x Retina Scale for ultra-crisp high-resolution output
+            const SCALE = 2.5;
+            const totalW = Math.round(baseW * SCALE);
+            const totalH = Math.round(baseH * SCALE);
+
+            canvas.width = totalW;
+            canvas.height = totalH;
+
+            ctx.save();
+            ctx.scale(SCALE, SCALE);
+
+            // 1. Solid Outer Framing Canvas Background (Safe Zone)
+            ctx.fillStyle = '#0d0d0d';
+            ctx.fillRect(0, 0, baseW, baseH);
+
+            // ==========================================
+            // CARD 1: MAIN METAFORGE WIDGET CARD
+            // ==========================================
+            const cardX = safePadX;
+            const cardY = safePadY;
+
+            // Background & Border
+            ctx.fillStyle = '#141414';
+            ctx.strokeStyle = '#222222';
+            ctx.lineWidth = 1;
+            drawRoundRect(ctx, cardX + 0.5, cardY + 0.5, cardW - 1, card1H - 1, 3, true, true);
+
+            // --- CAREER ROW ---
+            const crestX = cardX + 16;
+            const crestY = cardY + 14;
+            const crestSize = 34;
+
+            // Crest Box
+            ctx.fillStyle = '#181818';
+            ctx.strokeStyle = '#2a2a2a';
+            ctx.lineWidth = 1;
+            drawRoundRect(ctx, crestX + 0.5, crestY + 0.5, crestSize - 1, crestSize - 1, 2, true, true);
+
+            // Career Badge Icon inside Box
+            const careerBadgePath = getCareerBadgePath(sum);
+            if (!careerBadgeImgCache || lastCareerBadgePath !== careerBadgePath) {
+                careerBadgeImgCache = new Image();
+                lastCareerBadgePath = careerBadgePath;
+                careerBadgeImgCache.onload = () => {
+                    const modal = document.getElementById('prog-share-modal');
+                    if (modal && modal.style.display !== 'none') renderShareCard();
+                };
+                careerBadgeImgCache.src = careerBadgePath;
+            }
+
+            if (careerBadgeImgCache && careerBadgeImgCache.complete && careerBadgeImgCache.naturalWidth > 0) {
+                drawImageContain(ctx, careerBadgeImgCache, crestX + 2, crestY + 2, crestSize - 4, crestSize - 4);
+            }
+
+            // Big Career Level Number
+            const lvlNumX = crestX + crestSize + 12;
+            ctx.font = '800 22px "Segoe UI", sans-serif';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'alphabetic';
+            ctx.fillText(String(sum), lvlNumX, crestY + 25);
+            const sumW = ctx.measureText(String(sum)).width;
+
+            // Career Next Reward Info (Inline)
+            let nextCareerItem = null;
+            if (nextUnlocks && nextUnlocks['career'] && nextUnlocks['career'].next_item) {
+                nextCareerItem = nextUnlocks['career'].next_item;
+            } else if (allUnlocks && allUnlocks.length > 0) {
+                nextCareerItem = allUnlocks.find(x => x.role === 'career' && x.level > sum);
+            }
+
+            let inlineX = lvlNumX + sumW + 12;
+            const textY = crestY + 22;
+
+            ctx.font = '11px "Segoe UI", sans-serif';
+            ctx.fillStyle = '#8a8a8a';
+            ctx.fillText('Следующая награда: ', inlineX, textY);
+            inlineX += ctx.measureText('Следующая награда: ').width;
+
+            if (nextCareerItem) {
+                const rewardName = nextCareerItem.name_ru || nextCareerItem.name;
+                ctx.font = '600 11px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillText(rewardName, inlineX, textY);
+                inlineX += ctx.measureText(rewardName).width;
+
+                ctx.font = '11px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#333333';
+                ctx.fillText('  |  ', inlineX, textY);
+                inlineX += ctx.measureText('  |  ').width;
+
+                ctx.font = '700 11px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#f0b820';
+                ctx.fillText('Ур. ' + nextCareerItem.level, inlineX, textY);
+                inlineX += ctx.measureText('Ур. ' + nextCareerItem.level).width;
+
+                ctx.font = '11px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#333333';
+                ctx.fillText('  |  ', inlineX, textY);
+                inlineX += ctx.measureText('  |  ').width;
+
+                const priceStr = nextCareerItem.price ? '$' + nextCareerItem.price.toLocaleString('en-US') : '$0';
+                ctx.font = '500 11px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#a3a3a3';
+                ctx.fillText(priceStr, inlineX, textY);
+            } else {
+                ctx.font = '600 11px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#4ade80';
+                ctx.fillText('Все награды получены', inlineX, textY);
+            }
+
+            // --- GITHUB REPOSITORY QR CODE & BRAND BADGE ---
+            const qrSize = 34;
+            const qrX = cardX + cardW - 16 - qrSize;
+            const qrY = cardY + 14;
+
+            // Draw QR Code pointing to WarLink GitHub
+            drawQRCode(ctx, 'https://github.com/max-alekseyev/WarLink', qrX, qrY, qrSize, '#111111', '#FFFFFF', 1.5);
+
+            // Border around QR Code Box
+            ctx.strokeStyle = '#282828';
+            ctx.lineWidth = 1;
+            drawRoundRect(ctx, qrX - 0.5, qrY - 0.5, qrSize + 1, qrSize + 1, 2, false, true);
+
+            // Brand Text to the left of QR Code
+            const qrTextRight = qrX - 8;
+            ctx.textAlign = 'right';
+            ctx.font = '700 9px "Segoe UI", sans-serif';
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillText('WarLink', qrTextRight, qrY + 13);
+
+            ctx.font = '600 8px "Segoe UI", sans-serif';
+            ctx.fillStyle = '#FF5E1F';
+            ctx.fillText('GitHub', qrTextRight, qrY + 25);
+            ctx.textAlign = 'left';
+
+            // Subline Divider under career row
+            const divY = cardY + 58;
+            ctx.strokeStyle = '#1e1e1e';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cardX + 16, divY + 0.5);
+            ctx.lineTo(cardX + cardW - 16, divY + 0.5);
+            ctx.stroke();
+
+            // --- 6 CIRCULAR DIALS ROW ---
+            const roleOrder = ['assault', 'medic', 'recon', 'support', 'driver', 'pilot'];
+            const colW = (cardW - 32 - 5 * 8) / 6; // 100px per column
+            const dialCenterY = divY + 44; // Perfectly positioned inside Card 1
+            const radius = 24;
+            const startAngle = 130 * Math.PI / 180;
+            const totalSweep = 280 * Math.PI / 180;
+
+            roleOrder.forEach((r, idx) => {
+                const colX = cardX + 16 + idx * (colW + 8);
+                const colCenterX = colX + colW / 2;
+                const lvl = roles[r] || 0;
+                const maxLvl = ROLE_MAX_LEVELS[r] || 30;
+
+                const roleInfo = (nextUnlocks && nextUnlocks[r]) || null;
+                let roleItem = (roleInfo && (roleInfo.item || roleInfo.next_item)) || null;
+                if (!roleItem && allUnlocks && allUnlocks.length > 0) {
+                    roleItem = allUnlocks.find(it => it.role === r && it.level > lvl) || null;
+                }
+
+                let xp = (currentProgression && currentProgression.xp_progress && currentProgression.xp_progress[r]) || 0;
+                if (xp === 0 && lvl > 0) {
+                    xp = Math.min(100, Math.round((lvl / maxLvl) * 100));
+                }
+                const clampedXp = Math.min(100, Math.max(0, xp));
+
+                // 1. Dark Track Arc (280 degrees from 130 deg)
+                ctx.beginPath();
+                ctx.arc(colCenterX, dialCenterY, radius, startAngle, startAngle + totalSweep);
+                ctx.strokeStyle = '#222222';
+                ctx.lineWidth = 2.8;
+                ctx.lineCap = 'butt';
+                ctx.stroke();
+
+                // 2. Progress Fill Arc
+                if (clampedXp > 0) {
+                    const fillSweep = (clampedXp / 100) * totalSweep;
+                    const endAngle = startAngle + fillSweep;
+
+                    ctx.beginPath();
+                    ctx.arc(colCenterX, dialCenterY, radius, startAngle, endAngle);
+                    ctx.strokeStyle = '#f0b820';
+                    ctx.lineWidth = 2.8;
+                    ctx.lineCap = 'round';
+                    ctx.stroke();
+
+                    // Glowing Dot at perimeter
+                    const dotX = colCenterX + radius * Math.cos(endAngle);
+                    const dotY = dialCenterY + radius * Math.sin(endAngle);
+                    ctx.beginPath();
+                    ctx.arc(dotX, dotY, 2.5, 0, Math.PI * 2);
+                    ctx.fillStyle = '#f0b820';
+                    ctx.shadowColor = 'rgba(240, 184, 32, 0.7)';
+                    ctx.shadowBlur = 5;
+                    ctx.fill();
+                    ctx.shadowBlur = 0;
+                }
+
+                // 3. Inside Dial Center: Role Icon + Level (Clean non-overlapping layout, zero steppers)
+                const rImg = shareRoleImgCache[r];
+                if (rImg && rImg.complete && rImg.naturalWidth > 0) {
+                    drawImageContain(ctx, rImg, colCenterX - 6, dialCenterY - 14, 12, 12);
+                }
+
+                // Level Number (Positioned cleanly below icon with 3px safe gap)
+                ctx.textAlign = 'center';
+                ctx.font = '700 13px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillText(String(lvl), colCenterX, dialCenterY + 11);
+
+                // 4. Dial Meta Below Circle
+                const metaTopY = dialCenterY + radius + 7;
+
+                // Role Title (e.g. ШТУРМОВИК)
+                ctx.font = '700 8.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#8a8a8a';
+                ctx.fillText(ROLE_LABELS[r] || r.toUpperCase(), colCenterX, metaTopY + 8);
+
+                // Next Item Name (truncated with ellipsis if needed)
+                let itemName = '—';
+                let reqLvlStr = 'MAX';
+                let reqXpOrPrice = '';
+
+                if (roleItem) {
+                    itemName = roleItem.name_ru || roleItem.name;
+                    reqLvlStr = 'Ур. ' + roleItem.level;
+                    if (roleItem.total_xp) {
+                        reqXpOrPrice = roleItem.total_xp.toLocaleString('en-US') + ' XP';
+                    } else if (roleItem.price) {
+                        reqXpOrPrice = '$' + roleItem.price.toLocaleString('en-US');
+                    }
+                }
+
+                ctx.font = '600 8.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                fillTextEllipsis(ctx, itemName, colCenterX, metaTopY + 20, colW - 6);
+
+                // Requirement line (e.g. Ур. 12 | 58,500 XP)
+                const reqY = metaTopY + 32;
+                if (reqXpOrPrice) {
+                    ctx.font = '700 8px "Segoe UI", sans-serif';
+                    const lvlW = ctx.measureText(reqLvlStr).width;
+                    ctx.font = '8px "Segoe UI", sans-serif';
+                    const sepW = ctx.measureText(' | ').width;
+                    const xpW = ctx.measureText(reqXpOrPrice).width;
+                    const totalReqW = lvlW + sepW + xpW;
+
+                    let startReqX = colCenterX - totalReqW / 2;
+                    ctx.textAlign = 'left';
+
+                    ctx.font = '700 8px "Segoe UI", sans-serif';
+                    ctx.fillStyle = '#f0b820';
+                    ctx.fillText(reqLvlStr, startReqX, reqY);
+                    startReqX += lvlW;
+
+                    ctx.font = '8px "Segoe UI", sans-serif';
+                    ctx.fillStyle = '#444444';
+                    ctx.fillText(' | ', startReqX, reqY);
+                    startReqX += sepW;
+
+                    ctx.fillStyle = '#888888';
+                    ctx.fillText(reqXpOrPrice, startReqX, reqY);
+                } else {
+                    ctx.textAlign = 'center';
+                    ctx.font = '700 8px "Segoe UI", sans-serif';
+                    ctx.fillStyle = '#f0b820';
+                    ctx.fillText(reqLvlStr, colCenterX, reqY);
+                }
+            });
+
+            // ==========================================
+            // CARD 2: ACTIVE TARGET ROADMAP BANNER
+            // ==========================================
+            if (hasTarget) {
+                const targetY = cardY + card1H + gap;
+                const tH = card2H;
+
+                // Background & Border
+                ctx.fillStyle = '#141414';
+                ctx.strokeStyle = 'rgba(255, 94, 31, 0.4)';
+                ctx.lineWidth = 1;
+                drawRoundRect(ctx, cardX + 0.5, targetY + 0.5, cardW - 1, tH - 1, 3, true, true);
+
+                // Left Orange Accent Line (3px solid #FF5E1F)
+                ctx.fillStyle = '#FF5E1F';
+                ctx.fillRect(cardX, targetY, 3, tH);
+
+                // Weapon Preview Box (54 x 44)
+                const boxX = cardX + 16;
+                const boxY = targetY + 13;
+                const boxW = 54;
+                const boxH = 44;
+
+                ctx.fillStyle = '#1a1a1a';
+                ctx.strokeStyle = '#282828';
+                ctx.lineWidth = 1;
+                drawRoundRect(ctx, boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1, 2, true, true);
+
+                // Load Weapon Image
+                const weaponIconPath = targetItem.icon || '';
+                if (weaponIconPath && (!targetWeaponImgCache || lastTargetWeaponPath !== weaponIconPath)) {
+                    targetWeaponImgCache = new Image();
+                    lastTargetWeaponPath = weaponIconPath;
+                    targetWeaponImgCache.onload = () => {
+                        const modal = document.getElementById('prog-share-modal');
+                        if (modal && modal.style.display !== 'none') renderShareCard();
+                    };
+                    targetWeaponImgCache.src = weaponIconPath;
+                }
+
+                if (targetWeaponImgCache && targetWeaponImgCache.complete && targetWeaponImgCache.naturalWidth > 0) {
+                    drawImageContain(ctx, targetWeaponImgCache, boxX + 3, boxY + 3, boxW - 6, boxH - 6);
+                }
+
+                // Target Data Calculations
+                const tRole = targetItem.role || 'assault';
+                const tCurLvl = tRole === 'career' ? sum : (roles[tRole] || 0);
+                const tReqLvl = targetItem.level || 0;
+                const tRem = Math.max(0, tReqLvl - tCurLvl);
+                const isReached = tCurLvl >= tReqLvl;
+                const pct = tReqLvl > 0 ? Math.min(100, Math.round((tCurLvl / tReqLvl) * 100)) : 100;
+                const targetPrice = targetItem.price || 0;
+
+                let pathBudget = 0;
+                if (allUnlocks && allUnlocks.length > 0) {
+                    for (const it of allUnlocks) {
+                        if (it.role === tRole && it.level > tCurLvl && it.level <= tReqLvl) {
+                            pathBudget += (it.price || 0);
+                        }
+                    }
+                }
+                if (pathBudget === 0) pathBudget = targetPrice;
+
+                const tCat = targetItem.category_ru || SUBCAT_RU[targetItem.subcategory] || targetItem.subcategory || 'Предмет';
+                const tName = targetItem.name_ru || targetItem.name;
+
+                // Content Left of Banner
+                const metaX = boxX + boxW + 12;
+                ctx.textAlign = 'left';
+
+                // Row 1: Badge + Name + Category (Y = targetY + 22)
+                const r1Y = targetY + 22;
+
+                // Badge "ЦЕЛЬ"
+                ctx.fillStyle = 'rgba(255, 94, 31, 0.12)';
+                ctx.strokeStyle = 'rgba(255, 94, 31, 0.3)';
+                ctx.lineWidth = 1;
+                drawRoundRect(ctx, metaX, targetY + 11, 28, 13, 2, true, true);
+
+                ctx.font = '700 8px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#FF5E1F';
+                ctx.textAlign = 'center';
+                ctx.fillText('ЦЕЛЬ', metaX + 14, targetY + 20.5);
+                ctx.textAlign = 'left';
+
+                // Weapon Name
+                ctx.font = '700 11.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillText(tName, metaX + 34, r1Y);
+                const nameW = ctx.measureText(tName).width;
+
+                // Category
+                ctx.font = '9.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#888888';
+                ctx.fillText(tCat, metaX + 34 + nameW + 6, r1Y);
+
+                // Row 2: Role + Required + Remaining (Y = targetY + 37)
+                const r2Y = targetY + 37;
+                let r2X = metaX;
+
+                ctx.font = '600 9.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#f0b820';
+                const roleRu = ROLE_LABELS[tRole] || tRole.toUpperCase();
+                ctx.fillText(roleRu, r2X, r2Y);
+                r2X += ctx.measureText(roleRu).width;
+
+                ctx.font = '9.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#444444';
+                ctx.fillText('  •  ', r2X, r2Y);
+                r2X += ctx.measureText('  •  ').width;
+
+                ctx.fillStyle = '#a3a3a3';
+                ctx.fillText('Требуется: ', r2X, r2Y);
+                r2X += ctx.measureText('Требуется: ').width;
+
+                ctx.font = '700 9.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#f0b820';
+                ctx.fillText('Ур. ' + tReqLvl, r2X, r2Y);
+                r2X += ctx.measureText('Ур. ' + tReqLvl).width;
+
+                ctx.font = '9.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#444444';
+                ctx.fillText('  •  ', r2X, r2Y);
+                r2X += ctx.measureText('  •  ').width;
+
+                if (isReached) {
+                    ctx.fillStyle = '#00e676';
+                    ctx.fillText('Цель достигнута', r2X, r2Y);
+                } else {
+                    ctx.fillStyle = '#a3a3a3';
+                    ctx.fillText('Осталось: ' + tRem + ' ур.', r2X, r2Y);
+                }
+
+                // Row 3: Finance Info (Y = targetY + 51)
+                const r3Y = targetY + 51;
+                let r3X = metaX;
+
+                ctx.font = '8.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#777777';
+                ctx.fillText('Цена цели: ', r3X, r3Y);
+                r3X += ctx.measureText('Цена цели: ').width;
+
+                ctx.font = '600 8.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#00e676';
+                const priceTargetStr = '$' + targetPrice.toLocaleString('en-US');
+                ctx.fillText(priceTargetStr, r3X, r3Y);
+                r3X += ctx.measureText(priceTargetStr).width;
+
+                ctx.font = '8.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#444444';
+                ctx.fillText('  •  ', r3X, r3Y);
+                r3X += ctx.measureText('  •  ').width;
+
+                ctx.fillStyle = '#777777';
+                ctx.fillText('Бюджет ветки: ', r3X, r3Y);
+                r3X += ctx.measureText('Бюджет ветки: ').width;
+
+                ctx.font = '600 8.5px "Segoe UI", sans-serif';
+                ctx.fillStyle = '#f0b820';
+                ctx.fillText('$' + pathBudget.toLocaleString('en-US'), r3X, r3Y);
+
+                // Right Side of Target Banner: Progress Bar & Attribution
+                const barW = 150;
+                const barX = cardX + cardW - 16 - barW;
+
+                // Fraction & Percentage Row (Y = targetY + 28)
+                ctx.font = '9px "Consolas", monospace';
+                ctx.fillStyle = '#888888';
+                ctx.textAlign = 'left';
+                ctx.fillText(tCurLvl + ' / ' + tReqLvl, barX, targetY + 28);
+
+                ctx.textAlign = 'right';
+                ctx.fillText(pct + '%', barX + barW, targetY + 28);
+
+                // Progress Bar Track
+                ctx.fillStyle = '#222222';
+                drawRoundRect(ctx, barX, targetY + 34, barW, 5, 2.5, true, false);
+
+                // Progress Bar Fill
+                const fillW = Math.round(barW * (pct / 100));
+                if (fillW > 0) {
+                    ctx.fillStyle = '#FF5E1F';
+                    drawRoundRect(ctx, barX, targetY + 34, fillW, 5, 2.5, true, false);
+                }
+
+                // Clean Attribution under Progress Bar
+                ctx.font = '8px "Consolas", monospace';
+                ctx.fillStyle = '#666666';
+                ctx.textAlign = 'right';
+                ctx.fillText('WarLink // github.com/max-alekseyev/WarLink', barX + barW, targetY + 52);
+                ctx.textAlign = 'left';
+            }
+
+            ctx.restore();
+        } catch (err) {
+            console.error('renderShareCard failed:', err);
+        }
+    }
+
+    function openShareModal() {
+        const modal = document.getElementById('prog-share-modal');
+        if (modal) {
+            modal.style.display = 'flex';
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(() => {
+                    renderShareCard();
+                });
+            }
+            renderShareCard();
+        }
+    }
+
+    function closeShareModal() {
+        const modal = document.getElementById('prog-share-modal');
         if (modal) modal.style.display = 'none';
+    }
+
+    async function copyShareCard() {
+        const canvas = document.getElementById('prog-share-canvas');
+        if (!canvas) return;
+        const copyBtn = document.getElementById('btn-prog-copy-card');
+
+        try {
+            canvas.toBlob(async function(blob) {
+                if (!blob) return;
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ 'image/png': blob })
+                    ]);
+                    if (copyBtn) {
+                        const originalHTML = copyBtn.innerHTML;
+                        copyBtn.classList.add('btn-copy-success');
+                        copyBtn.innerHTML = `
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            <span>Скопировано в буфер!</span>
+                        `;
+                        setTimeout(() => {
+                            copyBtn.classList.remove('btn-copy-success');
+                            copyBtn.innerHTML = originalHTML;
+                        }, 2200);
+                    }
+                    if (typeof showToast === 'function') {
+                        showToast('Карточка прогресса скопирована в буфер обмена');
+                    }
+                } catch (err) {
+                    console.error('Clipboard copy failed:', err);
+                    if (typeof showToast === 'function') {
+                        showToast('Не удалось скопировать. Используйте «Сохранить PNG»');
+                    }
+                }
+            }, 'image/png');
+        } catch (e) {
+            console.error('toBlob failed:', e);
+        }
+    }
+
+    function saveShareCard() {
+        const canvas = document.getElementById('prog-share-canvas');
+        if (!canvas) return;
+        const saveBtn = document.getElementById('btn-prog-save-card');
+
+        try {
+            const dataUrl = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = 'warlink_wardogs_level.png';
+            link.href = dataUrl;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            if (saveBtn) {
+                const originalHTML = saveBtn.innerHTML;
+                saveBtn.classList.add('btn-copy-success');
+                saveBtn.innerHTML = `
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    <span>Сохранено!</span>
+                `;
+                setTimeout(() => {
+                    saveBtn.classList.remove('btn-copy-success');
+                    saveBtn.innerHTML = originalHTML;
+                }, 2200);
+            }
+
+            if (typeof showToast === 'function') {
+                showToast('Карточка сохранена: warlink_wardogs_level.png');
+            }
+        } catch (err) {
+            console.error('Save card failed:', err);
+        }
+    }
+
+    async function onSteamScreenshotSync(data) {
+        try {
+            await loadProgressionData();
+            const shareModal = document.getElementById('prog-share-modal');
+            if (shareModal && shareModal.style.display !== 'none') {
+                renderShareCard();
+            }
+            if (typeof showToast === 'function') {
+                const lvl = (currentProgression && currentProgression.career_level) || (data && data.career_level) || 0;
+                showToast('Снимок Steam F12 синхронизирован. Уровень WARDOGS: ' + lvl);
+            }
+        } catch (e) {
+            console.error('Error in onSteamScreenshotSync:', e);
+            if (data) {
+                currentProgression = data;
+                renderAll();
+            }
+        }
+    }
+
+    function onClose() {
+        const guideModal = document.getElementById('prog-guide-modal');
+        if (guideModal) guideModal.style.display = 'none';
+        const shareModal = document.getElementById('prog-share-modal');
+        if (shareModal) shareModal.style.display = 'none';
     }
 
     // Export ProgressionController to global window
@@ -898,7 +1624,13 @@
         getProgressionSummary: getProgressionSummary,
         getAllUnlocks: function() { return allUnlocks; },
         dismissGuide: dismissGuide,
-        toggleGuide: toggleGuide
+        toggleGuide: toggleGuide,
+        openShareModal: openShareModal,
+        closeShareModal: closeShareModal,
+        renderShareCard: renderShareCard,
+        copyShareCard: copyShareCard,
+        saveShareCard: saveShareCard,
+        onSteamScreenshotSync: onSteamScreenshotSync
     };
 
     // Auto-init on DOMContentLoaded

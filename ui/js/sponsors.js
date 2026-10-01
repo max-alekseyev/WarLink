@@ -131,23 +131,30 @@ function updateCommunityGoal(sponsors) {
         goalCountdownTimer = setInterval(updateCommunityGoalTimer, 1000);
     }
 
-    const fillEl = document.getElementById('frankfurt-progress-fill');
-    const textEl = document.getElementById('frankfurt-progress-text');
-    const pctEl = document.getElementById('frankfurt-progress-pct');
-    const stockholmBadge = document.getElementById('stockholm-goal-badge');
+    const stockFillEl = document.getElementById('stockholm-progress-fill');
+    const stockTextEl = document.getElementById('stockholm-progress-text');
+    const stockPctEl = document.getElementById('stockholm-progress-pct');
+    const stockNode = document.getElementById('goal-node-stockholm');
 
-    if (!fillEl || !textEl || !pctEl) return;
+    const frankFillEl = document.getElementById('frankfurt-progress-fill');
+    const frankTextEl = document.getElementById('frankfurt-progress-text');
+    const frankPctEl = document.getElementById('frankfurt-progress-pct');
+    const frankNode = document.getElementById('goal-node-frankfurt');
+
+    if (!stockFillEl || !frankFillEl) return;
 
     const now = Date.now();
     if (now < OCT_START_MSK) {
         // До 1 октября 00:00 МСК сбор еще не стартовал
-        if (stockholmBadge) {
-            stockholmBadge.className = 'badge-covered';
-            stockholmBadge.textContent = 'АКТИВЕН';
-        }
-        fillEl.style.width = '0%';
-        textEl.textContent = 'Статистика начнется с 1 октября';
-        pctEl.textContent = '0%';
+        stockFillEl.style.width = '0%';
+        if (stockTextEl) stockTextEl.textContent = 'Собрано: 0 € из 2 €';
+        if (stockPctEl) stockPctEl.textContent = '0%';
+        if (stockNode) stockNode.classList.remove('covered', 'target');
+
+        frankFillEl.style.width = '0%';
+        if (frankTextEl) frankTextEl.textContent = 'Собрано: 0 € из 12 €';
+        if (frankPctEl) frankPctEl.textContent = '0%';
+        if (frankNode) frankNode.classList.remove('covered', 'target');
         return;
     }
 
@@ -163,27 +170,49 @@ function updateCommunityGoal(sponsors) {
     }
 
     const stockholmCostRub = 200; // 2 €
+    const frankfurtCostRub = 1200; // 12 €
+
     if (octPoolRub < stockholmCostRub) {
-        if (stockholmBadge) {
-            const stockPct = Math.round((octPoolRub / stockholmCostRub) * 100);
-            stockholmBadge.className = 'badge-covered';
-            stockholmBadge.textContent = `Собрано ${stockPct}%`;
+        const stockEuro = (octPoolRub / 100).toFixed(octPoolRub % 100 === 0 ? 0 : 1);
+        const stockPct = Math.min(99, Math.round((octPoolRub / stockholmCostRub) * 100));
+
+        stockFillEl.style.width = `${stockPct}%`;
+        if (stockTextEl) stockTextEl.textContent = `Собрано: ${stockEuro} € из 2 €`;
+        if (stockPctEl) stockPctEl.textContent = `${stockPct}%`;
+        if (stockNode) {
+            stockNode.classList.remove('covered');
+            stockNode.classList.add('target');
         }
-        fillEl.style.width = '0%';
-        textEl.textContent = 'Собрано: 0 € из 12 €';
-        pctEl.textContent = '0%';
+
+        frankFillEl.style.width = '0%';
+        if (frankTextEl) frankTextEl.textContent = 'Собрано: 0 € из 12 €';
+        if (frankPctEl) frankPctEl.textContent = '0%';
+        if (frankNode) frankNode.classList.remove('covered', 'target');
     } else {
-        if (stockholmBadge) {
-            stockholmBadge.className = 'badge-covered';
-            stockholmBadge.textContent = 'ПОКРЫТО 100%';
+        stockFillEl.style.width = '100%';
+        if (stockTextEl) stockTextEl.textContent = 'Собрано: 2 € из 2 €';
+        if (stockPctEl) stockPctEl.textContent = '100%';
+        if (stockNode) {
+            stockNode.classList.add('covered');
+            stockNode.classList.remove('target');
         }
+
         const extraRub = octPoolRub - stockholmCostRub;
         const frankfurtEuro = Math.min(12, Math.floor(extraRub / 100));
-        const pct = Math.min(100, Math.round((frankfurtEuro / 12) * 100));
+        const frankPct = Math.min(100, Math.round((extraRub / frankfurtCostRub) * 100));
 
-        fillEl.style.width = `${pct}%`;
-        textEl.textContent = `Собрано: ${frankfurtEuro} € из 12 €`;
-        pctEl.textContent = `${pct}%`;
+        frankFillEl.style.width = `${frankPct}%`;
+        if (frankTextEl) frankTextEl.textContent = `Собрано: ${frankfurtEuro} € из 12 €`;
+        if (frankPctEl) frankPctEl.textContent = `${frankPct}%`;
+        if (frankNode) {
+            if (frankPct >= 100) {
+                frankNode.classList.add('covered');
+                frankNode.classList.remove('target');
+            } else {
+                frankNode.classList.remove('covered');
+                frankNode.classList.add('target');
+            }
+        }
     }
 }
 

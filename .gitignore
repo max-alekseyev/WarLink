@@ -86,9 +86,13 @@ check_tunnel.ps1
 *~
 *.code-workspace
 
-# Node.js
+# Node.js & Agent Skills (strictly excluded from repo)
 node_modules/
 package-lock.json
+.agents/
+.skills/
+skills/
+skills-lock.json
 
 # Operating System Metadata
 desktop.ini

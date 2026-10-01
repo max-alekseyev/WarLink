@@ -280,12 +280,15 @@ function renderDonations(donations) {
     });
 }
 
-// --- Custom SBP Donation Modal ---
+// --- Custom Donation Modal (SBP, Bank Cards, Crypto) ---
+let currentDonateMethod = 'sbp';
+
 function openDonateModal(e) {
     if (e) e.stopPropagation();
     const modal = document.getElementById('modal-donate-custom');
     if (modal) {
         modal.style.display = 'flex';
+        selectDonateMethod('sbp');
         selectDonatePreset(100);
     }
 }
@@ -293,6 +296,30 @@ function openDonateModal(e) {
 function closeDonateModal() {
     const modal = document.getElementById('modal-donate-custom');
     if (modal) modal.style.display = 'none';
+}
+
+function selectDonateMethod(method) {
+    currentDonateMethod = (method === 'card') ? 'card' : 'sbp';
+    document.querySelectorAll('.method-chip').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    const chipSbp = document.getElementById('chip-method-sbp');
+    const chipCard = document.getElementById('chip-method-card');
+
+    if (currentDonateMethod === 'card' && chipCard) {
+        chipCard.classList.add('active');
+    } else if (chipSbp) {
+        chipSbp.classList.add('active');
+    }
+
+    const hintEl = document.getElementById('donate-method-hint');
+    if (hintEl) {
+        if (currentDonateMethod === 'card') {
+            hintEl.textContent = 'Банковские карты МИР, Visa, Mastercard РФ (комиссия 5%)';
+        } else {
+            hintEl.textContent = 'Комиссия 1% • Моментальная оплата по QR-коду СБП через любое банковское приложение';
+        }
+    }
 }
 
 function selectDonatePreset(amount) {
@@ -328,15 +355,17 @@ function updateDonateCalc(amt) {
 }
 
 async function submitCustomDonation() {
-    const amt = currentDonateAmount || 100;
+    const amt = Math.max(100, currentDonateAmount || 100);
+    const method = currentDonateMethod === 'card' ? 'card' : 'sbp';
     try {
         await fetch('/api/server-donate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ amount_rub: amt })
+            body: JSON.stringify({ amount_rub: amt, payment_method: method })
         });
         closeDonateModal();
-        showToast(`Создан счет на ${amt} ₽. Страница оплаты открыта в браузере.`);
+        const methodLabel = method === 'card' ? 'банковской картой' : 'СБП';
+        showToast(`Создан счет на ${amt} ₽ (${methodLabel}). Страница оплаты открыта в браузере.`);
     } catch (e) {
         console.error('Submit donation error:', e);
     }
