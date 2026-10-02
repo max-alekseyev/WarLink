@@ -1,7 +1,9 @@
 package progression
 
 import (
+	"bufio"
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +15,7 @@ import (
 
 const WardogsAppID = "1867240"
 
-// FindSteamScreenshotsDirs searches for WARDOGS screenshots directories in Steam userdata.
+// FindSteamScreenshotsDirs searches for WARDOGS screenshots directories in Steam userdata across all disks.
 func FindSteamScreenshotsDirs() []string {
 	var results []string
 	seen := make(map[string]bool)
@@ -36,15 +38,46 @@ func FindSteamScreenshotsDirs() []string {
 		k.Close()
 	}
 
-	// 3. Common fallback directories
-	commonRoots := []string{
-		`C:\Program Files (x86)\Steam`,
-		`C:\Program Files\Steam`,
-		`D:\Steam`,
-		`D:\Games\Steam`,
-		`E:\Steam`,
+	// 3. Scan all logical drive letters C..Z for Steam directories
+	driveLetters := []string{"C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
+	for _, letter := range driveLetters {
+		candidateSteamRoots = append(candidateSteamRoots,
+			letter+`:\Program Files (x86)\Steam`,
+			letter+`:\Program Files\Steam`,
+			letter+`:\Steam`,
+			letter+`:\SteamLibrary`,
+			letter+`:\Games\Steam`,
+			letter+`:\Games\SteamLibrary`,
+		)
 	}
-	candidateSteamRoots = append(candidateSteamRoots, commonRoots...)
+
+	// 4. Also scan libraryfolders.vdf in found Steam roots to discover secondary library disks
+	extraRoots := make(map[string]bool)
+	for _, root := range candidateSteamRoots {
+		for _, vdfRel := range []string{`steamapps\libraryfolders.vdf`, `config\libraryfolders.vdf`} {
+			vdfPath := filepath.Join(root, vdfRel)
+			f, err := os.Open(vdfPath)
+			if err != nil {
+				continue
+			}
+			scanner := bufio.NewScanner(f)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.Contains(line, `"path"`) {
+					parts := strings.Split(line, `"`)
+					if len(parts) >= 4 {
+						p := strings.ReplaceAll(parts[3], `\\`, `\`)
+						p = strings.ReplaceAll(p, `/`, `\`)
+						extraRoots[filepath.Clean(p)] = true
+					}
+				}
+			}
+			f.Close()
+		}
+	}
+	for r := range extraRoots {
+		candidateSteamRoots = append(candidateSteamRoots, r)
+	}
 
 	for _, root := range candidateSteamRoots {
 		userdataDir := filepath.Join(root, "userdata")
@@ -120,13 +153,23 @@ func (w *SteamWatcher) RefreshDirs() {
 // Start begins background polling.
 func (w *SteamWatcher) Start(ctx context.Context) {
 	ticker := time.NewTicker(1500 * time.Millisecond)
+	refreshTicker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	defer refreshTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-refreshTicker.C:
+			w.RefreshDirs()
 		case <-ticker.C:
+			w.mu.Lock()
+			hasDirs := len(w.dirs) > 0
+			w.mu.Unlock()
+			if !hasDirs {
+				w.RefreshDirs()
+			}
 			w.scanOnce()
 		}
 	}
@@ -193,13 +236,16 @@ func (w *SteamWatcher) scanOnce() {
 				continue
 			}
 
-			if res != nil && res.Valid && res.CareerLevel > 0 {
+			isAcceptable := res != nil && (res.Valid || (res.CareerLevel > 0 && res.SumRoles > 0 && math.Abs(float64(res.CareerLevel-res.SumRoles)) <= 2))
+			if isAcceptable && res.CareerLevel > 0 {
 				if w.logger != nil {
 					w.logger("[STEAM-F12] Успешно распознан уровень WARDOGS: %d (ранги ролей: %d). Применяю...", res.CareerLevel, res.SumRoles)
 				}
 				if w.onSuccess != nil {
 					w.onSuccess(res, fPath)
 				}
+			} else if res != nil && w.logger != nil {
+				w.logger("[STEAM-F12] Контрольная сумма не сошлась (Карьера=%d, сумма ролей=%d). Пропуск.", res.CareerLevel, res.SumRoles)
 			}
 		}
 	}

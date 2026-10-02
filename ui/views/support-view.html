@@ -1,0 +1,89 @@
+<!-- VIEW: Conversational Support & Ticket Thread (Dark Cloudflare Utility) -->
+<div id="view-support" class="details-view">
+    <!-- Support Header Bar -->
+    <div class="details-header support-header-bar">
+        <div class="support-header-left">
+            <button class="btn-icon" id="btn-support-back" onclick="onSupportBackClick(event)" title="Назад" style="display: none; padding: 2px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="details-title" id="support-main-title">ПОДДЕРЖКА</span>
+            <span id="support-ticket-id" class="support-ticket-tag font-mono">#—</span>
+            <span id="support-status-badge" class="support-status-pill badge-status-neutral">Загрузка...</span>
+        </div>
+        <div class="support-header-right">
+            <button id="btn-support-history-toggle" class="btn-link support-hdr-btn" onclick="toggleSupportHistoryView()" title="История всех обращений">История</button>
+            <button id="btn-support-new-topic" class="btn-link support-hdr-btn is-action" onclick="startNewSupportTopic()" title="Начать новую тему обращения">+ Новое</button>
+            <button class="details-close" onclick="switchView(null)">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- PANE 1: Chat Stream Pane -->
+    <div id="support-chat-pane" class="support-pane" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+        <!-- Quick Actions Bar (Contextual chips) -->
+        <div class="support-quick-bar" id="support-quick-bar">
+            <button id="btn-quick-send-logs" class="btn-quick-chip" onclick="sendFreshSupportLogs()" title="Собрать и отправить актуальные логи клиента и игры">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <span>Отправить свежие логи</span>
+            </button>
+
+            <button id="btn-quick-ping" class="btn-quick-chip" onclick="sendSupportPingTest()" title="Проверить задержку до шлюза Стокгольм и прикрепить к диалогу">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                <span>Тест шлюза</span>
+            </button>
+
+            <button id="btn-quick-resolve" class="btn-quick-chip" onclick="resolveSupportTicket()" title="Подтвердить успешное решение инцидента">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <span>Вопрос решен</span>
+            </button>
+
+            <span id="support-action-feedback" class="font-mono support-feedback" style="display: none;"></span>
+        </div>
+
+        <!-- Chat Message Stream -->
+        <div id="support-chat-stream" class="support-chat-stream">
+            <div id="support-chat-loading" class="support-chat-empty">
+                <span class="font-mono text-muted" style="font-size: 11px;">Синхронизация истории диалога...</span>
+            </div>
+        </div>
+
+        <!-- Archived Banner (shown when viewing closed/resolved ticket) -->
+        <div id="support-archived-banner" class="support-archived-banner" style="display: none;">
+            <span>Обращение отмечено как решенное и находится в архиве.</span>
+            <button class="btn-link" style="color: var(--action); cursor: pointer; text-decoration: underline;" onclick="startNewSupportTopic()">Создать новое обращение</button>
+        </div>
+
+        <!-- Chat Input Bar -->
+        <div class="support-input-bar" id="support-input-bar">
+            <div style="flex: 1; position: relative;">
+                <textarea id="support-input-message" class="support-input-textarea font-sans" rows="1" placeholder="Напишите сообщение разработчику... (Enter для отправки, Shift+Enter — перенос)" onkeydown="onSupportInputKeyDown(event)"></textarea>
+            </div>
+            <button id="btn-support-send" class="btn btn-primary support-btn-send" onclick="sendSupportMessage()" title="Отправить сообщение">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m22 2-7 20-4-9-9-4Z"/>
+                    <path d="M22 2 11 13"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- PANE 2: History & Archive Pane -->
+    <div id="support-history-pane" class="support-pane" style="display: none; flex-direction: column; flex: 1; min-height: 0;">
+        <div class="support-history-header">
+            <span class="support-history-title font-mono">ВАШИ ОБРАЩЕНИЯ В ПОДДЕРЖКУ</span>
+            <span id="support-history-count" class="font-mono text-muted" style="font-size: 11px;">0 тикетов</span>
+        </div>
+        <div id="support-history-list" class="support-history-list">
+            <div class="support-chat-empty">
+                <span class="font-mono text-muted" style="font-size: 11px;">Загрузка списка обращений...</span>
+            </div>
+        </div>
+    </div>
+</div>

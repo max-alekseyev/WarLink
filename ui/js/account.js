@@ -149,6 +149,50 @@ function renderAccountData(p) {
         }
     }
 
+    // Hero Card Identity updates
+    const heroNick = document.getElementById('hero-display-nickname');
+    if (heroNick) {
+        heroNick.textContent = p.nickname || 'Боец WarLink';
+    }
+
+    const heroTier = document.getElementById('hero-tier-tag');
+    if (heroTier) {
+        if (p.account_tier === 'admin' || p.is_admin) {
+            heroTier.textContent = 'Администратор';
+            heroTier.className = 'profile-hero-badge tier-admin';
+        } else if (p.is_sponsor) {
+            heroTier.textContent = 'Спонсор WarLink';
+            heroTier.className = 'profile-hero-badge tier-sponsor';
+        } else {
+            heroTier.textContent = 'Боец WarLink';
+            heroTier.className = 'profile-hero-badge';
+        }
+    }
+
+    // Discord Status Synchronization
+    const unlinkedCard = document.getElementById('discord-card-unlinked');
+    const linkedCard = document.getElementById('discord-card-linked');
+    const discordTagEl = document.getElementById('discord-linked-tag');
+    const discordDot = document.getElementById('tab-discord-dot');
+    const sponsorRolePill = document.getElementById('role-pill-sponsor');
+
+    if (p.is_discord_linked || (p.discord_tag && p.discord_tag !== '')) {
+        if (unlinkedCard) unlinkedCard.style.display = 'none';
+        if (linkedCard) linkedCard.style.display = 'block';
+        if (discordTagEl) {
+            const cleanTag = p.discord_tag.startsWith('@') ? p.discord_tag : '@' + p.discord_tag;
+            discordTagEl.textContent = cleanTag;
+        }
+        if (discordDot) discordDot.style.display = 'inline-block';
+        if (sponsorRolePill) {
+            sponsorRolePill.style.display = p.is_sponsor ? 'inline-block' : 'none';
+        }
+    } else {
+        if (unlinkedCard) unlinkedCard.style.display = 'block';
+        if (linkedCard) linkedCard.style.display = 'none';
+        if (discordDot) discordDot.style.display = 'none';
+    }
+
     renderDonations(p.donations);
 }
 
@@ -280,17 +324,88 @@ function renderDonations(donations) {
     });
 }
 
-// --- Custom Donation Modal (SBP, Bank Cards, Crypto) ---
+// --- Custom Donation Modal (SBP, Bank Cards, Boosty) ---
 let currentDonateMethod = 'sbp';
+let currentDonateTab = 'server';
+
+function openExternal(url) {
+    if (!url) return;
+    if (window.openExternalUrl) {
+        window.openExternalUrl(url);
+    } else {
+        fetch('/api/open-url?url=' + encodeURIComponent(url)).catch(() => {
+            window.open(url, '_blank');
+        });
+    }
+}
+
+function openBoostyLink(url) {
+    openExternal(url);
+    showToast('Страница Boosty открыта в браузере');
+}
+
+async function loadBoostyGoal() {
+    try {
+        const res = await fetch('/api/boosty-goal');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.success) {
+            const current = data.current_amount || 0;
+            const target = data.target_amount || 100000;
+            const pct = Math.min(100, Math.max(0, (current / target) * 100));
+
+            const titleEl = document.getElementById('boosty-goal-title');
+            if (titleEl && data.title) titleEl.textContent = data.title;
+
+            const targetEl = document.getElementById('boosty-goal-target');
+            if (targetEl) targetEl.textContent = target.toLocaleString('ru-RU') + ' ₽';
+
+            const fillEl = document.getElementById('boosty-goal-fill');
+            if (fillEl) fillEl.style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+
+            const metaEl = document.getElementById('boosty-goal-text');
+            if (metaEl) {
+                metaEl.textContent = `Собрано: ${current.toLocaleString('ru-RU')} ₽ из ${target.toLocaleString('ru-RU')} ₽ (${pct.toFixed(1)}%)`;
+            }
+        }
+    } catch(e) {
+        console.error('loadBoostyGoal error:', e);
+    }
+}
 
 function openDonateModal(e) {
+    if (e) e.stopPropagation();
+    openDonateModalWithTab('boosty');
+}
+
+function openDonateModalWithTab(tab, e) {
     if (e) e.stopPropagation();
     const modal = document.getElementById('modal-donate-custom');
     if (modal) {
         modal.style.display = 'flex';
-        selectDonateMethod('sbp');
-        selectDonatePreset(100);
+        switchDonateTab(tab || 'boosty');
+        loadBoostyGoal();
+        if (tab === 'server') {
+            selectDonateMethod('sbp');
+            selectDonatePreset(100);
+        }
     }
+}
+
+function switchDonateTab(tab) {
+    currentDonateTab = tab === 'server' ? 'server' : 'boosty';
+    const tabServer = document.getElementById('tab-donate-server');
+    const tabBoosty = document.getElementById('tab-donate-boosty');
+    const panelServer = document.getElementById('donate-panel-server');
+    const panelBoosty = document.getElementById('donate-panel-boosty');
+
+    if (tabServer) tabServer.classList.toggle('active', currentDonateTab === 'server');
+    if (tabBoosty) {
+        tabBoosty.classList.toggle('active', currentDonateTab === 'boosty');
+        tabBoosty.classList.toggle('tab-boosty-active', currentDonateTab === 'boosty');
+    }
+    if (panelServer) panelServer.style.display = currentDonateTab === 'server' ? 'block' : 'none';
+    if (panelBoosty) panelBoosty.style.display = currentDonateTab === 'boosty' ? 'block' : 'none';
 }
 
 function closeDonateModal() {
@@ -559,6 +674,110 @@ async function linkAccountNumber() {
         }
     } catch (e) {
         console.error('Link account error:', e);
+    }
+}
+
+function switchAccountTab(tabKey) {
+    const tabs = ['profile', 'discord', 'security', 'billing'];
+    tabs.forEach(t => {
+        const btn = document.getElementById(`tab-btn-${t}`);
+        const panel = document.getElementById(`acc-panel-${t}`);
+        if (btn) btn.classList.toggle('active', t === tabKey);
+        if (panel) {
+            panel.style.display = (t === tabKey) ? 'block' : 'none';
+            panel.classList.toggle('active', t === tabKey);
+        }
+    });
+}
+
+async function requestDiscordLinkCode() {
+    const btn = document.getElementById('btn-discord-link-code');
+    const resBox = document.getElementById('discord-link-code-result');
+    const codeVal = document.getElementById('val-discord-code');
+    const expVal = document.getElementById('val-discord-expires');
+    if (!btn || !resBox || !codeVal) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Генерация...';
+    try {
+        const resp = await fetch('/api/discord-link-code');
+        const data = await resp.json();
+        if (resp.ok && data.success && data.code) {
+            codeVal.textContent = data.code;
+            const mins = Math.max(1, Math.round((data.expires_in || 900) / 60));
+            if (expVal) expVal.textContent = `(${mins} мин)`;
+            resBox.style.display = 'block';
+            btn.textContent = 'Обновить код';
+
+            // Автоматическое копирование кода в буфер обмена
+            if (navigator.clipboard) {
+                try {
+                    await navigator.clipboard.writeText(data.code);
+                    showToast('Код ' + data.code + ' скопирован в буфер обмена');
+                } catch (clipErr) {
+                    showToast('Код получен: ' + data.code);
+                }
+            } else {
+                showToast('Код получен: ' + data.code);
+            }
+        } else {
+            showToast(data.error || 'Ошибка получения кода');
+            btn.textContent = 'Получить код для Discord';
+        }
+    } catch (e) {
+        console.error('Discord link code error:', e);
+        showToast('Ошибка связи с сервером');
+        btn.textContent = 'Получить код для Discord';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function copyDiscordCode() {
+    const codeVal = document.getElementById('val-discord-code');
+    if (!codeVal) return;
+    const code = codeVal.textContent.trim();
+    if (code && code !== '------') {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(code).then(() => {
+                showToast('Код ' + code + ' скопирован в буфер обмена');
+            }).catch(() => {
+                showToast('Код: ' + code);
+            });
+        } else {
+            showToast('Код: ' + code);
+        }
+    }
+}
+
+async function unlinkDiscordAccount() {
+    if (!confirm('Вы действительно хотите отвязать ваш Discord-аккаунт?')) {
+        return;
+    }
+    showToast('Отвязка Discord...');
+    try {
+        const resp = await fetch('/api/discord-unlink', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            showToast('Discord успешно отвязан');
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/user-profile');
+            }
+            await fetchAccountProfile();
+        } else {
+            showToast(data.error || 'Ошибка при отвязке Discord');
+        }
+    } catch (e) {
+        console.error('Unlink discord error:', e);
+        showToast('Ошибка соединения');
+    }
+}
+
+async function openDiscordCommunity() {
+    try {
+        await fetch('/api/open-discord');
+    } catch (e) {
+        window.open('https://discord.gg/2h8nVRUBeT', '_blank');
     }
 }
 

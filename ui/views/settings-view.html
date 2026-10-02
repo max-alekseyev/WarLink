@@ -46,6 +46,22 @@
         </div>
 
         <div class="setting-group">
+            <span class="setting-group-title">МАРШРУТ ПОДКЛЮЧЕНИЯ</span>
+            <div class="setting-row" style="margin-top: 6px;">
+                <span class="setting-label">Выбор маршрута:</span>
+                <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
+                    <option value="transit">1. Клиент — Москва — Стокгольм — Игра</option>
+                    <option value="direct_stockholm">2. Клиент — Стокгольм — Игра</option>
+                    <option value="direct_moscow">3. Клиент — Москва — Игра</option>
+                </select>
+            </div>
+            <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                <span class="info-label">Описание:</span>
+                <span id="route-mode-desc-val" class="info-value">Транзитный маршрут через Европу (~80 мс)</span>
+            </div>
+        </div>
+
+        <div class="setting-group">
             <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
             <div class="setting-row" style="margin-top: 6px;">
                 <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
@@ -61,13 +77,11 @@
         <div class="setting-group">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                <button id="btn-open-bug-report" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openBugReportModal()">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/>
-                        <line x1="12" y1="8" x2="12" y2="12"/>
-                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                <button id="btn-open-bug-report" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="switchView('view-support')">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                     </svg>
-                    Сообщить о проблеме
+                    Поддержка и диалог
                 </button>
             </div>
             <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">

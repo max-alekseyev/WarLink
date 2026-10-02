@@ -1,0 +1,15 @@
+[Unit]
+Description=WarLink Discord Bots Ecosystem (Core & Stockholm Status)
+After=network.target redis-server.service warlink-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/warlink-server/discord
+ExecStart=/opt/warlink-server/discord/venv/bin/python run.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

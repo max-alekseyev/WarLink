@@ -94,6 +94,13 @@ package-lock.json
 skills/
 skills-lock.json
 
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
 # Operating System Metadata
 desktop.ini
 Thumbs.db

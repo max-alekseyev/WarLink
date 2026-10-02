@@ -118,3 +118,22 @@ func TestParseScreenshotEdgeCases(t *testing.T) {
 	}
 }
 
+func TestParseUserScreenshots(t *testing.T) {
+	shotsDir := `C:\Program Files (x86)\Steam\userdata\358788399\760\remote\1867240\screenshots`
+	files, err := filepath.Glob(filepath.Join(shotsDir, "*.jpg"))
+	if err != nil || len(files) == 0 {
+		t.Skip("No screenshots found")
+	}
+	for _, f := range files {
+		res, err := ParseScreenshotFile(f)
+		if err != nil {
+			t.Fatalf("[%s] ERROR: %v", filepath.Base(f), err)
+		}
+		t.Logf("[%s] Valid=%v Career=%d SumRoles=%d Roles=%v", filepath.Base(f), res.Valid, res.CareerLevel, res.SumRoles, res.Roles)
+		if !res.Valid {
+			t.Errorf("[%s] Expected Valid=true, got Career=%d SumRoles=%d", filepath.Base(f), res.CareerLevel, res.SumRoles)
+		}
+	}
+}
+
+

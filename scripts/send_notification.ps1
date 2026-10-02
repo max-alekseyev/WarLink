@@ -11,7 +11,7 @@ param(
     [int64]$DeleteId = 0,
     [switch]$List,
     [string]$SshKey = "$HOME\.ssh\id_ed25519",
-    [string]$ServerHost = "138.124.103.99"
+    [string]$ServerHost = $(if ($env:WARLINK_SERVER_HOST) { $env:WARLINK_SERVER_HOST } else { "127.0.0.1" })
 )
 
 if ($List) {

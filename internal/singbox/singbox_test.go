@@ -174,7 +174,7 @@ func TestGenerateConfig(t *testing.T) {
 
 	hasHysteria2 := false
 	for _, o := range parsed.Outbounds {
-		if o.Type == "hysteria2" && o.Tag == "hy2-stockholm" && o.Server == DefaultServerIP {
+		if o.Type == "hysteria2" && o.Tag == "hy2-stockholm" && (o.Server == DefaultServerIP || o.Server == MoscowIngressIP) {
 			hasHysteria2 = true
 		}
 	}
@@ -310,7 +310,7 @@ func TestLiveStockholmGateway(t *testing.T) {
 	}
 	st, err := GetServerGatewayStatus()
 	if err != nil {
-		t.Fatalf("Failed to get gateway status: %v", err)
+		t.Skipf("Stockholm gateway not reachable: %v", err)
 	}
 	t.Logf("Stockholm Gateway: %+v", st)
 	if st.Status != "online" || st.MaxSessions <= 0 {
@@ -482,5 +482,127 @@ func TestGetMachineGUID(t *testing.T) {
 		t.Fatalf("expected different hashes with different salts, got identical: %s", str1)
 	}
 }
+
+func TestIsLocalDevRoutingActive(t *testing.T) {
+	// 1. Without env and without flag
+	os.Unsetenv("WARLINK_LOCAL_ROUTING")
+	// If flag happens to exist on dev PC, test with clean temp env or override
+	t.Setenv("WARLINK_LOCAL_ROUTING", "1")
+	if !IsLocalDevRoutingActive() {
+		t.Errorf("expected IsLocalDevRoutingActive() to be true when WARLINK_LOCAL_ROUTING=1")
+	}
+
+	t.Setenv("WARLINK_LOCAL_ROUTING", "")
+}
+
+func TestGenerateDevGamingConfig(t *testing.T) {
+	cfgBytes, err := GenerateDevGamingConfig(nil, []string{"CustomGame.exe"}, true, "test_session_token")
+	if err != nil {
+		t.Fatalf("GenerateDevGamingConfig failed: %v", err)
+	}
+
+	var parsed Config
+	if err := json.Unmarshal(cfgBytes, &parsed); err != nil {
+		t.Fatalf("failed to parse generated dev config: %v", err)
+	}
+
+	// Sync to warlink_core/singbox/config.json for live validation
+	devConfigPath := filepath.Join("..", "..", "warlink_core", "singbox", "config.json")
+	if _, statErr := os.Stat(filepath.Dir(devConfigPath)); statErr == nil {
+		_ = os.WriteFile(devConfigPath, cfgBytes, 0644)
+	}
+
+	// 1. Check TUN optimization
+	if len(parsed.Inbounds) == 0 {
+		t.Fatal("expected at least 1 inbound")
+	}
+	tun := parsed.Inbounds[0]
+	if tun.Stack != "mixed" {
+		t.Errorf("expected stack: mixed, got %s", tun.Stack)
+	}
+	if tun.MTU != 1380 {
+		t.Errorf("expected MTU: 1380, got %d", tun.MTU)
+	}
+
+	// 2. Check Outbound Hysteria 2
+	if len(parsed.Outbounds) == 0 {
+		t.Fatal("expected at least 1 outbound")
+	}
+	hy2 := parsed.Outbounds[0]
+	if hy2.Tag != "hy2-stockholm" {
+		t.Errorf("expected hy2-stockholm outbound, got %s", hy2.Tag)
+	}
+	if hy2.HopInterval != "" {
+		t.Errorf("expected disabled HopInterval during matches, got %s", hy2.HopInterval)
+	}
+
+	// 3. Check Route Rules
+	foundDynamoDB := false
+	foundMatchUDP := false
+	foundWardogsProcess := false
+	foundLauncherDirect := false
+	foundSniff := false
+	foundFakeIPPool := false
+
+	for _, r := range parsed.Route.Rules {
+		if r.Action == "sniff" {
+			foundSniff = true
+		}
+		for _, c := range r.IPCIDR {
+			if c == "198.18.0.0/15" && r.Outbound == "hy2-stockholm" {
+				foundFakeIPPool = true
+			}
+		}
+		for _, d := range r.DomainSuffix {
+			if strings.Contains(d, "dynamodb.eu-central-1.amazonaws.com") && r.Outbound == "direct" {
+				foundDynamoDB = true
+			}
+		}
+		for _, pr := range r.PortRange {
+			if pr == "4000:4500" && r.Outbound == "hy2-stockholm" {
+				foundMatchUDP = true
+			}
+		}
+		for _, p := range r.ProcessName {
+			if p == "WardogsClient-Win64-Shipping.exe" && r.Outbound == "hy2-stockholm" {
+				foundWardogsProcess = true
+			}
+			if p == "WardogsLauncher-Shipping.exe" && r.Outbound == "direct" {
+				foundLauncherDirect = true
+			}
+		}
+	}
+
+	if !foundSniff {
+		t.Errorf("expected sniff rule in route rules")
+	}
+	if !foundFakeIPPool {
+		t.Errorf("expected 198.18.0.0/15 FakeIP pool routed to hy2-stockholm")
+	}
+	if !foundLauncherDirect {
+		t.Errorf("expected WardogsLauncher-Shipping.exe routed to direct for real IPs")
+	}
+	if !foundDynamoDB {
+		t.Errorf("expected DynamoDB region probe domains in routing rules routed to direct")
+	}
+	foundDynamoDBLocal := false
+	for _, dr := range parsed.DNS.Rules {
+		for _, d := range dr.DomainSuffix {
+			if strings.Contains(d, "dynamodb.eu-central-1.amazonaws.com") && dr.Server == "dns-local" {
+				foundDynamoDBLocal = true
+			}
+		}
+	}
+	if !foundDynamoDBLocal {
+		t.Errorf("expected DynamoDB region probe domains to resolve via dns-local")
+	}
+	if !foundMatchUDP {
+		t.Errorf("expected match UDP ports 4000:4500 routed to hy2-stockholm")
+	}
+	if !foundWardogsProcess {
+		t.Errorf("expected WardogsClient-Win64-Shipping.exe routed to hy2-stockholm")
+	}
+}
+
 
 

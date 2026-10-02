@@ -1,78 +1,189 @@
-<!-- MODAL: Custom SBP & Multi-Method Donation -->
+<!-- MODAL: Custom SBP & Multi-Method Donation & Boosty -->
 <div id="modal-donate-custom" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
     <div class="modal-card donate-modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
         <div class="modal-header">
-            <span class="modal-title">Поддержать сервер WarLink</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <span class="modal-title font-mono" style="font-weight: 700; letter-spacing: 0.04em;">ПОДДЕРЖКА // WARLINK</span>
+            </div>
             <button class="btn-icon" onclick="closeDonateModal()">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
         </div>
         <div class="modal-body">
-            <div style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 2px; line-height: 1.3;">
-                Поддержка и софинансирование игрового шлюза сообщества.
-            </div>
-            <div class="donate-perks-box">
-                <div class="donate-perk-item">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    <span>100 ₽ = 30 дней активного статуса «Спонсор»</span>
-                </div>
-                <div class="donate-perk-item">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    <span>Выделенный слот шлюза без очередей</span>
-                </div>
-                <div class="donate-perk-item">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                    <span>Никнейм и аватарка на Доске почёта спонсоров</span>
-                </div>
-            </div>
-
-            <div class="form-group" style="margin-top: 6px;">
-                <label class="form-label">Способ оплаты:</label>
-                <div class="donate-method-row">
-                    <button type="button" class="method-chip active" id="chip-method-sbp" onclick="selectDonateMethod('sbp')">
-                        <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect width="6" height="6" x="3" y="3" rx="1"/>
-                            <rect width="6" height="6" x="15" y="3" rx="1"/>
-                            <rect width="6" height="6" x="3" y="15" rx="1"/>
-                            <path d="M15 15h2v2h-2zM19 15h2v2h-2zM15 19h2v2h-2zM19 19h2v2h-2z"/>
-                        </svg>
-                        <span>СБП (QR-код)</span>
-                    </button>
-                    <button type="button" class="method-chip" id="chip-method-card" onclick="selectDonateMethod('card')">
-                        <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect width="20" height="14" x="2" y="5" rx="2"/>
-                            <line x1="2" x2="22" y1="10" y2="10"/>
-                        </svg>
-                        <span>Банковская карта РФ</span>
-                    </button>
-                </div>
-            </div>
-
-            <div class="form-group" style="margin-top: 6px;">
-                <label class="form-label">Сумма пожертвования:</label>
-                <div id="donate-presets-container" class="donate-preset-row">
-                    <button type="button" class="preset-chip active" onclick="selectDonatePreset(100)">100 ₽</button>
-                    <button type="button" class="preset-chip" onclick="selectDonatePreset(200)">200 ₽</button>
-                    <button type="button" class="preset-chip" onclick="selectDonatePreset(500)">500 ₽</button>
-                    <button type="button" class="preset-chip" onclick="selectDonatePreset(1000)">1000 ₽</button>
-                </div>
-                <div class="donate-input-wrap">
-                    <input type="number" id="input-donate-custom" class="form-input donate-custom-input" min="100" max="50000" step="50" value="100" oninput="onCustomDonateInput(this.value)">
-                    <span class="donate-currency-badge">₽</span>
-                </div>
-                <div id="donate-method-hint" style="font-size: 9.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.25;">
-                    Комиссия 1% • Моментальная оплата по QR-коду СБП через любое банковское приложение
-                </div>
-            </div>
-
-            <div id="donate-calc-summary" class="donate-calc-summary">
-                Статус «Спонсор» на 30 дней
-            </div>
-
-            <div style="margin-top: 8px;">
-                <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 32px;" onclick="submitCustomDonation()">
-                    Поддержать сервер
+            <!-- Navigation Tabs (Boosty First & Highlighted) -->
+            <div class="donate-nav-tabs">
+                <button type="button" id="tab-donate-boosty" class="donate-tab-btn tab-boosty-active active font-mono" onclick="switchDonateTab('boosty')">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    ПОДДЕРЖКА АВТОРА (BOOSTY)
                 </button>
+                <button type="button" id="tab-donate-server" class="donate-tab-btn font-mono" onclick="switchDonateTab('server')">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    СЕРВЕРНЫЙ ШЛЮЗ (СБП)
+                </button>
+            </div>
+
+            <!-- TAB 1: Автору на Boosty (Default & Prominent) -->
+            <div id="donate-panel-boosty">
+                <!-- 100,000 RUB Target Goal Card -->
+                <div class="boosty-goal-card" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
+                    <div class="boosty-goal-top">
+                        <div class="boosty-goal-title-wrap">
+                            <span class="boosty-goal-badge font-mono">ЦЕЛЬ СБОРА</span>
+                            <span id="boosty-goal-title" class="boosty-goal-title">WarLink | Поддержка дальнейшей разработки | Долги</span>
+                        </div>
+                        <div class="boosty-goal-amount font-mono">
+                            <span id="boosty-goal-target" class="boosty-goal-target">100 000 ₽</span>
+                        </div>
+                    </div>
+                    <div class="boosty-goal-bar-wrap">
+                        <div class="boosty-goal-bar">
+                            <div id="boosty-goal-fill" class="boosty-goal-bar-fill" style="width: 0%;"></div>
+                        </div>
+                        <div class="boosty-goal-meta font-mono">
+                            <span id="boosty-goal-text">Собрано: 0 ₽ из 100 000 ₽ (0%)</span>
+                            <span class="boosty-goal-link-label">Сделать взнос →</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Prominent One-Time Donation Card -->
+                <div class="boosty-onetime-wrap">
+                    <div class="boosty-onetime-info">
+                        <span class="boosty-onetime-title">Разовый донат любой суммой на Boosty</span>
+                        <span class="boosty-onetime-sub">Прямой донат без подписки на форму оплаты</span>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm boosty-onetime-action-btn font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                        ЗАДОНАТИТЬ
+                    </button>
+                </div>
+
+                <!-- Subscriptions Header -->
+                <div style="font-size: 9.5px; font-weight: 700; color: #888888; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px;">
+                    ЕЖЕМЕСЯЧНЫЕ ПОДПИСКИ НА РАЗРАБОТКУ
+                </div>
+
+                <!-- 4 Boosty Subscription Tiers Grid -->
+                <div class="boosty-levels-grid">
+                    <!-- 1. Рекрут -->
+                    <div class="boosty-level-card">
+                        <div class="boosty-level-info">
+                            <span class="boosty-level-name">Рекрут | WarLink</span>
+                            <span class="boosty-level-price font-mono">100 ₽ / мес</span>
+                        </div>
+                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link')">
+                            Подписаться
+                        </button>
+                    </div>
+
+                    <!-- 2. Оперативник -->
+                    <div class="boosty-level-card">
+                        <div class="boosty-level-info">
+                            <span class="boosty-level-name">Оперативник | WarLink</span>
+                            <span class="boosty-level-price font-mono">500 ₽ / мес</span>
+                        </div>
+                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link')">
+                            Подписаться
+                        </button>
+                    </div>
+
+                    <!-- 3. Ветеран -->
+                    <div class="boosty-level-card">
+                        <div class="boosty-level-info">
+                            <span class="boosty-level-name">Ветеран | WarLink</span>
+                            <span class="boosty-level-price font-mono">1 000 ₽ / мес</span>
+                        </div>
+                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link')">
+                            Подписаться
+                        </button>
+                    </div>
+
+                    <!-- 4. Генерал -->
+                    <div class="boosty-level-card">
+                        <div class="boosty-level-info">
+                            <span class="boosty-level-name">Генерал | WarLink</span>
+                            <span class="boosty-level-price font-mono">5 000 ₽ / мес</span>
+                        </div>
+                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link')">
+                            Подписаться
+                        </button>
+                    </div>
+                </div>
+
+                <div style="font-size: 9px; color: #666666; line-height: 1.3; margin-top: 2px;">
+                    Большое тебе спасибо, друг! Донат на Boosty идет напрямую автору. Не привязан к серверам и не начисляет автоматический статус шлюза.
+                </div>
+            </div>
+
+            <!-- TAB 2: Серверный шлюз (СБП, Карты) -->
+            <div id="donate-panel-server" style="display: none;">
+                <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 2px; line-height: 1.3;">
+                    Софинансирование серверной инфраструктуры и шлюзов сообщества.
+                </div>
+                <div class="donate-perks-box">
+                    <div class="donate-perk-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>100 ₽ = 30 дней активного статуса «Спонсор»</span>
+                    </div>
+                    <div class="donate-perk-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Выделенный слот шлюза без очередей</span>
+                    </div>
+                    <div class="donate-perk-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Никнейм и аватарка на Доске почёта спонсоров</span>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 4px;">
+                    <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Способ оплаты:</label>
+                    <div class="donate-method-row">
+                        <button type="button" class="method-chip active" id="chip-method-sbp" onclick="selectDonateMethod('sbp')">
+                            <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect width="6" height="6" x="3" y="3" rx="1"/>
+                                <rect width="6" height="6" x="15" y="3" rx="1"/>
+                                <rect width="6" height="6" x="3" y="15" rx="1"/>
+                                <path d="M15 15h2v2h-2zM19 15h2v2h-2zM15 19h2v2h-2zM19 19h2v2h-2z"/>
+                            </svg>
+                            <span>СБП (QR-код)</span>
+                        </button>
+                        <button type="button" class="method-chip" id="chip-method-card" onclick="selectDonateMethod('card')">
+                            <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect width="20" height="14" x="2" y="5" rx="2"/>
+                                <line x1="2" x2="22" y1="10" y2="10"/>
+                            </svg>
+                            <span>Банковская карта РФ</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 4px;">
+                    <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Сумма пожертвования:</label>
+                    <div id="donate-presets-container" class="donate-preset-row">
+                        <button type="button" class="preset-chip active" onclick="selectDonatePreset(100)">100 ₽</button>
+                        <button type="button" class="preset-chip" onclick="selectDonatePreset(200)">200 ₽</button>
+                        <button type="button" class="preset-chip" onclick="selectDonatePreset(500)">500 ₽</button>
+                        <button type="button" class="preset-chip" onclick="selectDonatePreset(1000)">1000 ₽</button>
+                    </div>
+                    <div class="donate-input-wrap">
+                        <input type="number" id="input-donate-custom" class="form-input donate-custom-input" min="100" max="50000" step="50" value="100" oninput="onCustomDonateInput(this.value)">
+                        <span class="donate-currency-badge">₽</span>
+                    </div>
+                    <div id="donate-method-hint" style="font-size: 9px; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">
+                        Комиссия 1% • Моментальная оплата по QR-коду СБП через любое банковское приложение
+                    </div>
+                </div>
+
+                <div id="donate-calc-summary" class="donate-calc-summary">
+                    Статус «Спонсор» на 30 дней
+                </div>
+
+                <div style="margin-top: 6px;">
+                    <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 28px; font-size: 11px;" onclick="submitCustomDonation()">
+                        Поддержать сервер
+                    </button>
+                </div>
             </div>
         </div>
     </div>

@@ -44,7 +44,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.1.10"
+var AppVersion = "v2.1.12"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -92,6 +92,11 @@ var (
 	modShell32             = syscall.NewLazyDLL("shell32.dll")
 	procShellExecute       = modShell32.NewProc("ShellExecuteW")
 	procIsUserAnAdmin      = modShell32.NewProc("IsUserAnAdmin")
+	modDwmapi              = syscall.NewLazyDLL("dwmapi.dll")
+	procDwmExtendFrameIntoClientArea = modDwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	procDwmSetWindowAttribute        = modDwmapi.NewProc("DwmSetWindowAttribute")
+	procIsIconic                     = modUser32.NewProc("IsIconic")
+	procSetCurrentProcessExplicitAppUserModelID = modShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
 )
 
 const (
@@ -107,7 +112,17 @@ const (
 var (
 	cachedLargeIcon uintptr
 	cachedSmallIcon uintptr
+
+	// BlockedSteamGames содержит реестр AppID игр, запрещенных к голосованию
+	BlockedSteamGames = map[int]string{
+		3602290: "FEMBOY FUTA HOUSE",
+	}
 )
+
+func isBlockedSteamGame(appID int) bool {
+	_, blocked := BlockedSteamGames[appID]
+	return blocked
+}
 
 func isRunningAsAdmin() bool {
 	r, _, _ := procIsUserAnAdmin.Call()
@@ -153,26 +168,46 @@ const (
 
 	HWND_TOPMOST   = ^uintptr(0) // -1
 	HWND_NOTOPMOST = ^uintptr(1) // -2
-	SWP_NOSIZE     = 0x0001
-	SWP_NOMOVE     = 0x0002
-	SWP_SHOWWINDOW = 0x0040
+	SWP_NOSIZE       = 0x0001
+	SWP_NOMOVE       = 0x0002
+	SWP_NOZORDER     = 0x0004
+	SWP_NOACTIVATE   = 0x0010
+	SWP_FRAMECHANGED = 0x0020
+	SWP_SHOWWINDOW   = 0x0040
 
 	GWLP_WNDPROC   = -4
+	GCLP_HBRBACKGROUND = -10
 	WM_CLOSE       = 0x0010
 	WM_ERASEBKGND  = 0x0014
 	WM_SHOWWINDOW  = 0x0018
+	WM_GETMINMAXINFO = 0x0024
+	WM_NCCALCSIZE  = 0x0083
+	WM_NCHITTEST   = 0x0084
+	WM_SYSCOMMAND  = 0x0112
+	SC_MINIMIZE    = 0xF020
+	SC_RESTORE     = 0xF120
 	WH_CBT         = 5
 	HCBT_CREATEWND = 3
 
+	WS_POPUP       = 0x80000000
 	WS_VISIBLE     = 0x10000000
 	WS_BORDER      = 0x00800000
 	WS_CAPTION     = 0x00C00000
+	WS_SYSMENU     = 0x00080000
 	WS_THICKFRAME  = 0x00040000
+	WS_MINIMIZEBOX = 0x00020000
 	WS_MAXIMIZEBOX = 0x00010000
 
 	SM_CXSCREEN    = 0
 	SM_CYSCREEN    = 1
 )
+
+type MARGINS struct {
+	CxLeftWidth    int32
+	CxRightWidth   int32
+	CyTopHeight    int32
+	CyBottomHeight int32
+}
 
 type CREATESTRUCTW struct {
 	LpCreateParams uintptr
@@ -183,7 +218,7 @@ type CREATESTRUCTW struct {
 	Cx             int32
 	Y              int32
 	X              int32
-	Style          int32
+	Style          uint32
 	LpszName       *uint16
 	LpszClass      *uint16
 	ExStyle        uint32
@@ -679,7 +714,8 @@ func forceForegroundWindow(hwnd uintptr) {
 		Left, Top, Right, Bottom int32
 	}
 	procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
-	if rect.Left < -1000 || rect.Top < -1000 {
+	isIconic, _, _ := procIsIconic.Call(hwnd)
+	if isIconic == 0 && (rect.Left < -1000 || rect.Top < -1000) {
 		sw, _, _ := procGetSystemMetrics.Call(uintptr(SM_CXSCREEN))
 		sh, _, _ := procGetSystemMetrics.Call(uintptr(SM_CYSCREEN))
 		posX := (int32(sw) - AppWindowWidth) / 2
@@ -687,34 +723,36 @@ func forceForegroundWindow(hwnd uintptr) {
 		procSetWindowPos.Call(hwnd, 0, uintptr(posX), uintptr(posY), uintptr(AppWindowWidth), uintptr(AppWindowHeight), SWP_SHOWWINDOW)
 	}
 
-	// 2. Restore window from minimized or hidden state
+	// 2. Restore window from minimized or hidden state smoothly
 	procShowWindow.Call(hwnd, uintptr(SW_RESTORE))
-	procShowWindow.Call(hwnd, uintptr(SW_SHOW))
 
-	// 3. Force to top and bring to foreground (standard bypass for Windows foreground lock)
+	// 3. Bring to foreground without breaking DWM transitions
 	foreWnd, _, _ := procGetForegroundWindow.Call()
+	swpFlags := uintptr(SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 	if foreWnd != 0 && foreWnd != hwnd {
 		foreThread, _, _ := procGetWindowThreadProcessId.Call(foreWnd, 0)
 		curThread, _, _ := procGetCurrentThreadId.Call()
 		if foreThread != curThread && foreThread != 0 {
 			procAttachThreadInput.Call(curThread, foreThread, 1)
-			procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
-			procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, swpFlags)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, swpFlags)
 			procSetForeground.Call(hwnd)
 			procAttachThreadInput.Call(curThread, foreThread, 0)
 		} else {
-			procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
-			procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, swpFlags)
+			procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, swpFlags)
 			procSetForeground.Call(hwnd)
 		}
 	} else {
-		procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
-		procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW)
+		procSetWindowPos.Call(hwnd, uintptr(HWND_TOPMOST), 0, 0, 0, 0, swpFlags)
+		procSetWindowPos.Call(hwnd, uintptr(HWND_NOTOPMOST), 0, 0, 0, 0, swpFlags)
 		procSetForeground.Call(hwnd)
 	}
 
-	// 4. Flash window / taskbar demanding user attention
-	procFlashWindow.Call(hwnd, 1)
+	// 4. Flash window only if foreground acquisition needs user attention
+	if foreWnd != 0 && foreWnd != hwnd {
+		procFlashWindow.Call(hwnd, 1)
+	}
 }
 
 func restoreFromTray(appTray *tray.Tray, wv webview2.WebView) {
@@ -762,6 +800,19 @@ func hookWindowClose(hwnd uintptr, onInterceptClose func() bool) {
 				procFillRect.Call(wParam, uintptr(unsafe.Pointer(&rect)), darkBrush)
 				return 1 // Erased with dark brush!
 			}
+		} else if msg == WM_NCCALCSIZE {
+			if wParam != 0 {
+				return 0
+			}
+		} else if msg == WM_GETMINMAXINFO {
+			procCallWindowProc.Call(oldWndProc, h, uintptr(msg), wParam, lParam)
+			return 0
+		} else if msg == WM_NCHITTEST {
+			hit, _, _ := procCallWindowProc.Call(oldWndProc, h, uintptr(msg), wParam, lParam)
+			if hit >= 10 && hit <= 17 {
+				return 1 // HTCLIENT: fixed-size window, lock borders to client area
+			}
+			return hit
 		} else if msg == 0x0050 { // WM_INPUTLANGCHANGEREQUEST
 			r, _, _ := procDefWindowProc.Call(h, uintptr(msg), wParam, lParam)
 			return r
@@ -770,11 +821,18 @@ func hookWindowClose(hwnd uintptr, onInterceptClose func() bool) {
 		return r
 	})
 	nIndex := int32(-4)
-	r, _, _ := procSetWindowLongPtr.Call(hwnd, uintptr(uint32(nIndex)), newWndProc)
+	r, _, _ := procSetWindowLongPtr.Call(hwnd, uintptr(nIndex), newWndProc)
 	oldWndProc = r
+	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|0x0020) // SWP_FRAMECHANGED
 }
 
 func main() {
+	// Set explicit Application User Model ID for proper taskbar grouping and animation target
+	if procSetCurrentProcessExplicitAppUserModelID.Find() == nil {
+		appIDPtr, _ := syscall.UTF16PtrFromString("MaxAlekseyev.WarLink.Client")
+		procSetCurrentProcessExplicitAppUserModelID.Call(uintptr(unsafe.Pointer(appIDPtr)))
+	}
+
 	// 0a. Catch unexpected fatal panics into warlink_core/logs/crash.log
 	defer func() {
 		if r := recover(); r != nil {
@@ -1090,9 +1148,8 @@ func main() {
 		}
 		_ = conn.Close()
 		ms := int(time.Since(start).Milliseconds())
-		if ms <= 5 {
-			// <= 5 ms indicates local TUN adapter or loopback interception, not real RTT to Stockholm
-			return 0
+		if ms < 1 {
+			return 1
 		}
 		return ms
 	}
@@ -1104,10 +1161,8 @@ func main() {
 			if serverIP != "" {
 				rtt := measureGatewayRTT(serverIP)
 				state.mu.Lock()
-				if rtt > 5 {
+				if rtt > 0 {
 					state.gatewayRealPing = rtt
-				} else {
-					state.gatewayRealPing = 0
 				}
 				state.mu.Unlock()
 			}
@@ -1242,8 +1297,18 @@ func main() {
 		gwSlots := "—"
 		gwSlotsTooltip := ""
 		gwDays := 0
-		gwLocation := "Стокгольм, Швеция"
 		gwDonateAmount := 100
+		routeMode := state.cfg.GetNetworkRouteMode()
+		gwBadge := "Москва -> Стокгольм"
+		gwLocation := "Транзит Москва -> Стокгольм"
+		switch routeMode {
+		case config.RouteModeDirectStockholm:
+			gwBadge = "Стокгольм"
+			gwLocation = "Стокгольм, Швеция"
+		case config.RouteModeDirectMoscow:
+			gwBadge = "Москва"
+			gwLocation = "Москва, Россия"
+		}
 		isAdmin := state.cfg.AccountNumber == "5230-6527-2989-4096" || state.cfg.AccountTier == "admin"
 		if isAdmin {
 			state.cfg.AccountTier = "admin"
@@ -1251,7 +1316,9 @@ func main() {
 		isSponsor := state.cfg.AccountTier == "sponsor" || isAdmin
 		if state.gatewayStatus != nil {
 			gwDays = state.gatewayStatus.DaysLeft
-			gwLocation = state.gatewayStatus.Location
+			if routeMode == config.RouteModeDirectStockholm && state.gatewayStatus.Location != "" {
+				gwLocation = state.gatewayStatus.Location
+			}
 			if state.gatewayStatus.DonateAmountRub > 0 {
 				gwDonateAmount = state.gatewayStatus.DonateAmountRub
 			}
@@ -1307,6 +1374,7 @@ func main() {
 			"is_connected":          state.eng.IsConnected(),
 			"ping_ms":               totalPing,
 			"gateway_ping":          gwPing,
+			"gateway_badge":         gwBadge,
 			"game_ping":             gamePing,
 			"total_ping":            totalPing,
 			"ping_label":            pingLabel,
@@ -1344,6 +1412,7 @@ func main() {
 			"enable_voting":         enableVoting,
 			"enable_community_goal": enableCommunityGoal,
 			"last_error":            state.lastConnectError,
+			"network_route_mode":    state.cfg.GetNetworkRouteMode(),
 			"account_number":        state.cfg.AccountNumber,
 			"nickname":              state.cfg.Nickname,
 			"avatar_url":            state.cfg.AvatarURL,
@@ -1519,6 +1588,285 @@ func main() {
 		})
 	})
 
+	// Support Chat: Get Active Ticket & Conversation Thread (or specific by ?ticket_id=...)
+	mux.HandleFunc("/api/support/active", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		acc := state.cfg.AccountNumber
+		dev := singbox.GetMachineGUID()
+		serverAPI := singbox.GetServerAPI()
+		targetURL := fmt.Sprintf("%s/api/v1/tickets/active?account_number=%s&device_id=%s", serverAPI, acc, dev)
+		if reqTID := strings.TrimSpace(r.URL.Query().Get("ticket_id")); reqTID != "" {
+			targetURL += "&ticket_id=" + url.QueryEscape(reqTID)
+		}
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		httpReq, err := http.NewRequest(http.MethodGet, targetURL, nil)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	// Support Chat: Get Tickets History
+	mux.HandleFunc("/api/support/history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		acc := state.cfg.AccountNumber
+		dev := singbox.GetMachineGUID()
+		serverAPI := singbox.GetServerAPI()
+		targetURL := fmt.Sprintf("%s/api/v1/tickets/history?account_number=%s&device_id=%s", serverAPI, acc, dev)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		httpReq, err := http.NewRequest(http.MethodGet, targetURL, nil)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	// Support Chat: Send User Message
+	mux.HandleFunc("/api/support/send-message", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			TicketID   int64  `json:"ticket_id"`
+			IsNewTopic bool   `json:"is_new_topic"`
+			Message    string `json:"message"`
+			Category   string `json:"category"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid body", http.StatusBadRequest)
+			return
+		}
+
+		payload := map[string]interface{}{
+			"ticket_id":      req.TicketID,
+			"is_new_topic":   req.IsNewTopic,
+			"message":        req.Message,
+			"account_number": state.cfg.AccountNumber,
+			"device_id":      singbox.GetMachineGUID(),
+			"category":       req.Category,
+			"app_version":    AppVersion,
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		serverAPI := singbox.GetServerAPI()
+		targetURL := fmt.Sprintf("%s/api/v1/tickets/messages", serverAPI)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		httpReq, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	// Support Chat: Send Fresh Logs (Quick Action)
+	mux.HandleFunc("/api/support/send-fresh-logs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			TicketID int64 `json:"ticket_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		// 1. Refresh game log from %LOCALAPPDATA%
+		_ = deps.FetchWardogsGameLog()
+
+		// 2. Build tar.gz bundle of all files in warlink_core/logs/
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gw)
+
+		logsDir := deps.GetLogsDir()
+		entries, _ := os.ReadDir(logsDir)
+		fileCount := 0
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fPath := filepath.Join(logsDir, entry.Name())
+			data, err := os.ReadFile(fPath)
+			if err != nil {
+				continue
+			}
+			if len(data) > 10*1024*1024 {
+				data = data[len(data)-10*1024*1024:]
+			}
+			hdr := &tar.Header{
+				Name:    entry.Name(),
+				Mode:    0644,
+				Size:    int64(len(data)),
+				ModTime: time.Now(),
+			}
+			if err := tw.WriteHeader(hdr); err == nil {
+				_, _ = tw.Write(data)
+				fileCount++
+			}
+		}
+		_ = tw.Close()
+		_ = gw.Close()
+
+		logsBase64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+		if logsBase64 == "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "empty_logs"})
+			return
+		}
+
+		payload := map[string]interface{}{
+			"ticket_id":      req.TicketID,
+			"logs_gzip":      logsBase64,
+			"account_number": state.cfg.AccountNumber,
+			"device_id":      singbox.GetMachineGUID(),
+			"summary":        fmt.Sprintf("Прикреплен свежий архив диагностики (%d файлов)", fileCount),
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		serverAPI := singbox.GetServerAPI()
+		targetURL := fmt.Sprintf("%s/api/v1/tickets/logs", serverAPI)
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		httpReq, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		appendLog("[SUPPORT] Пользователь отправил свежие логи в диалог поддержки")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	// Support Chat: Mark Ticket Resolved
+	mux.HandleFunc("/api/support/resolve", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			TicketID int64 `json:"ticket_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TicketID <= 0 {
+			http.Error(w, "Invalid body", http.StatusBadRequest)
+			return
+		}
+		payloadBytes, _ := json.Marshal(req)
+		serverAPI := singbox.GetServerAPI()
+		targetURL := fmt.Sprintf("%s/api/v1/tickets/resolve", serverAPI)
+
+		client := &http.Client{Timeout: 10 * time.Second}
+		httpReq, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	// Support Chat: Quick Telemetry Ping Test
+	mux.HandleFunc("/api/support/ping-test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			TicketID int64 `json:"ticket_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		// Test Stockholm gateway status
+		start := time.Now()
+		gwStatus, err := singbox.GetServerGatewayStatus()
+		pingMs := time.Since(start).Milliseconds()
+
+		modeStr := "Игровой режим (Direct)"
+		if state.eng != nil && state.eng.IsFreeInternetActive() {
+			modeStr = "Комплексный режим"
+		}
+		var telemetryMsg string
+		if err == nil && gwStatus != nil {
+			telemetryMsg = fmt.Sprintf("Тест связи со шлюзом: RTT %d мс, локация: %s (статус: %s), профиль: %s", pingMs, gwStatus.Location, gwStatus.Status, modeStr)
+		} else {
+			telemetryMsg = fmt.Sprintf("Тест связи со шлюзом: задержка %d мс, профиль: %s, версия: %s", pingMs, modeStr, AppVersion)
+		}
+
+		if req.TicketID > 0 {
+			payload := map[string]interface{}{
+				"ticket_id":      req.TicketID,
+				"message":        telemetryMsg,
+				"account_number": state.cfg.AccountNumber,
+				"device_id":      singbox.GetMachineGUID(),
+				"app_version":    AppVersion,
+			}
+			payloadBytes, _ := json.Marshal(payload)
+			serverAPI := singbox.GetServerAPI()
+			targetURL := fmt.Sprintf("%s/api/v1/tickets/messages", serverAPI)
+			httpReq, _ := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+			if httpReq != nil {
+				httpReq.Header.Set("Content-Type", "application/json")
+				httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+				client := &http.Client{Timeout: 8 * time.Second}
+				_, _ = client.Do(httpReq)
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":   true,
+			"ping_ms":   pingMs,
+			"telemetry": telemetryMsg,
+		})
+	})
+
 	mux.HandleFunc("/api/open-external-url", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1588,6 +1936,35 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"opened": true, "amount_rub": amount, "payment_method": method})
+	})
+
+	mux.HandleFunc("/api/open-url", func(w http.ResponseWriter, r *http.Request) {
+		u := r.URL.Query().Get("url")
+		if u != "" {
+			pURL, _ := syscall.UTF16PtrFromString(u)
+			pOpen, _ := syscall.UTF16PtrFromString("open")
+			procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pURL)), 0, 0, uintptr(SW_SHOWNORMAL))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+
+	mux.HandleFunc("/api/boosty-goal", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 4 * time.Second}
+		resp, err := client.Get("https://138.124.103.99/api/v1/boosty-goal")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":        true,
+				"title":          "WarLink | Поддержка дальнейшей разработки | Долги",
+				"target_amount":  100000,
+				"current_amount": 0,
+				"percent":        0.0,
+			})
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(w, resp.Body)
 	})
 
 	mux.HandleFunc("/api/notifications", func(w http.ResponseWriter, r *http.Request) {
@@ -1774,6 +2151,9 @@ func main() {
 			"total_donated_rub": 0,
 			"device_count":      1,
 			"donations":         []singbox.DonationHistoryItem{},
+			"discord_id":        "",
+			"discord_tag":       "",
+			"is_discord_linked": false,
 		}
 
 		if remoteProfile, err := singbox.FetchProfile(acc, singbox.GetMachineGUID()); err == nil && remoteProfile != nil {
@@ -1816,6 +2196,9 @@ func main() {
 			respData["created_at"] = remoteProfile.CreatedAt
 			respData["total_donated_rub"] = remoteProfile.TotalDonatedRub
 			respData["device_count"] = remoteProfile.DeviceCount
+			respData["discord_id"] = remoteProfile.DiscordID
+			respData["discord_tag"] = remoteProfile.DiscordTag
+			respData["is_discord_linked"] = remoteProfile.IsDiscordLinked
 			if remoteProfile.Donations != nil {
 				respData["donations"] = remoteProfile.Donations
 			}
@@ -1878,6 +2261,47 @@ func main() {
 			_, _ = singbox.UpdateProfile(cleanAcc, singbox.GetMachineGUID(), nick, steamID, motto)
 		}()
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "account_number": cleanAcc})
+	})
+
+	mux.HandleFunc("/api/discord-link-code", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		code, exp, err := singbox.GetDiscordLinkCode(acc, singbox.GetMachineGUID())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "code": code, "expires_in": exp})
+	})
+
+	mux.HandleFunc("/api/discord-unlink", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		if err := singbox.UnlinkDiscord(acc, singbox.GetMachineGUID()); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "Discord аккаунт успешно отвязан"})
+	})
+
+	mux.HandleFunc("/api/open-discord", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		go func() {
+			_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", "https://discord.gg/2h8nVRUBeT").Start()
+		}()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 	})
 
 	mux.HandleFunc("/api/user-profile/avatar", func(w http.ResponseWriter, r *http.Request) {
@@ -2285,6 +2709,14 @@ func main() {
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректный запрос"})
 				return
 			}
+			if isBlockedSteamGame(req.SteamAppID) {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   "Данная игра внесена в список запрещенных к добавлению в голосование.",
+				})
+				return
+			}
 			ok, errMsg, err := singbox.SubmitVote(deviceID, req.SteamAppID, req.Title, req.IconURL)
 			if err != nil {
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -2315,6 +2747,123 @@ func main() {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": ok})
 		}
+	})
+
+	mux.HandleFunc("/api/network-route", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			currentMode := state.cfg.GetNetworkRouteMode()
+			modes := []map[string]string{
+				{
+					"id":          config.RouteModeTransit,
+					"title":       "1. Клиент — Москва — Стокгольм — Игра",
+					"description": "Транзитный маршрут через Европу (~80 мс)",
+					"badge":       "Мск → Стокгольм",
+				},
+				{
+					"id":          config.RouteModeDirectStockholm,
+					"title":       "2. Клиент — Стокгольм — Игра",
+					"description": "Прямое европейское подключение (~70 мс)",
+					"badge":       "Стокгольм",
+				},
+				{
+					"id":          config.RouteModeDirectMoscow,
+					"title":       "3. Клиент — Москва — Игра",
+					"description": "Прямое подключение по России (минимальный пинг ~20 мс)",
+					"badge":       "Москва",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":      true,
+				"current_mode": currentMode,
+				"modes":        modes,
+			})
+
+		case http.MethodPost:
+			var req struct {
+				Mode string `json:"mode"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректный запрос"})
+				return
+			}
+			if req.Mode != config.RouteModeTransit && req.Mode != config.RouteModeDirectStockholm && req.Mode != config.RouteModeDirectMoscow {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Неизвестный режим маршрутизации"})
+				return
+			}
+
+			oldMode := state.cfg.GetNetworkRouteMode()
+			state.cfg.SetNetworkRouteMode(req.Mode)
+			singbox.SetNetworkRouteMode(req.Mode)
+			singbox.InvalidateSession()
+
+			appendLog(fmt.Sprintf("[NET] Изменен режим маршрутизации: %s -> %s", oldMode, req.Mode))
+
+			// If connected, seamlessly reconnect with new gateway target
+			if state.eng.IsConnected() {
+				go func() {
+					state.mu.Lock()
+					state.isBusy = true
+					state.mu.Unlock()
+					appendLog("[NET] Переподключение к новому шлюзу...")
+					_ = state.eng.Disconnect()
+					time.Sleep(300 * time.Millisecond)
+					_ = state.eng.ConnectPipeline(nil)
+					state.mu.Lock()
+					state.isBusy = false
+					state.mu.Unlock()
+				}()
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success":      true,
+				"current_mode": req.Mode,
+			})
+		}
+	})
+
+	mux.HandleFunc("/api/routing-feedback", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректные данные"})
+			return
+		}
+
+		req["app_version"] = AppVersion
+		req["account_number"] = state.cfg.AccountNumber
+		req["device_id"] = singbox.GetMachineGUID()
+
+		bodyBytes, _ := json.Marshal(req)
+		apiURL := fmt.Sprintf("http://%s/api/v1/routing-feedback", singbox.StockholmCoreIP)
+
+		client := &http.Client{Timeout: 8 * time.Second}
+		proxyReq, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		proxyReq.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(proxyReq)
+		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Шлюз временно недоступен: " + err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
 	})
 
 	mux.HandleFunc("/api/search-steam", func(w http.ResponseWriter, r *http.Request) {
@@ -2504,12 +3053,19 @@ func main() {
 		}
 
 		if !parsed.Valid {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"error":   "Скриншот не распознан как экран прогрессии WARDOGS (не сошлась контрольная сумма: Карьера != Сумма уровней ролей)",
-			})
-			return
+			// If neither career nor roles were recognized, reject
+			if parsed.CareerLevel == 0 && parsed.SumRoles == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   "Скриншот не распознан как экран прогрессии WARDOGS",
+				})
+				return
+			}
+			// If roles were detected but career level is 0, auto-fill from roles sum
+			if parsed.CareerLevel == 0 && parsed.SumRoles > 0 {
+				parsed.CareerLevel = parsed.SumRoles
+			}
 		}
 
 		// Update config with parsed progression
@@ -2795,21 +3351,22 @@ func main() {
 	go steamWatcher.Start(steamWatcherCtx)
 
 	// 7. Initialize Native WebView2 Window (Embedded directly in WarLink.exe process)
-	// Create dark background brush (#161616) to eliminate white background flash
-	b, _, _ := procCreateSolidBrush.Call(0x00161616) // RGB(0x16, 0x16, 0x16)
+	// Create dark background brush (#111111) to eliminate white background flash
+	b, _, _ := procCreateSolidBrush.Call(0x00111111) // RGB(0x11, 0x11, 0x11)
 	darkBrush = b
 
 	// Install WH_CBT hook to intercept window creation BEFORE it is shown or painted
-	// Strip WS_VISIBLE, position offscreen (-32000, -32000), strip captions
+	// Set offscreen (-32000, -32000), retain WS_CAPTION, WS_SYSMENU, WS_MINIMIZEBOX, WS_THICKFRAME
+	// so Windows DWM enables smooth minimize and restore animations.
+	// WM_NCCALCSIZE in hookWindowClose completely eliminates the OS caption and borders.
 	tid, _, _ := procGetCurrentThreadId.Call()
 	var hHook uintptr
 	hookCb := syscall.NewCallback(func(nCode int32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 		if nCode == HCBT_CREATEWND {
 			cbt := (*CBT_CREATEWND)(lParam)
 			if cbt != nil && cbt.Lpcs != nil {
-				// Strip caption, thick frame, maximize box, and visible flag
-				cbt.Lpcs.Style &^= (WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VISIBLE)
-				cbt.Lpcs.Style |= WS_BORDER
+				cbt.Lpcs.Style &^= (WS_MAXIMIZEBOX | WS_VISIBLE)
+				cbt.Lpcs.Style |= (WS_POPUP | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX)
 				cbt.Lpcs.X = -32000
 				cbt.Lpcs.Y = -32000
 				cbt.Lpcs.Cx = AppWindowWidth
@@ -2873,6 +3430,18 @@ func main() {
 		chrom.AcceleratorKeyCallback = func(vKey uint) bool {
 			return false
 		}
+
+		// Eliminate WebView2 white flash by setting default controller background color to #111111
+		if controller := chrom.GetController(); controller != nil {
+			if controller2 := controller.GetICoreWebView2Controller2(); controller2 != nil {
+				_ = controller2.PutDefaultBackgroundColor(edge.COREWEBVIEW2_COLOR{
+					A: 255,
+					R: 0x11,
+					G: 0x11,
+					B: 0x11,
+				})
+			}
+		}
 	}()
 
 	hwnd := uintptr(wv.Window())
@@ -2880,16 +3449,39 @@ func main() {
 	// Ensure window stays hidden initially and set to exact size
 	procShowWindow.Call(hwnd, uintptr(SW_HIDE))
 
-	// Ensure frameless fixed-size properties
+	// Ensure frameless fixed-size properties with full DWM animation support
 	nIndex := int32(-16) // GWL_STYLE
-	style, _, _ := procGetWindowLongPtr.Call(hwnd, uintptr(uint32(nIndex)))
-	style &^= (WS_CAPTION | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_VISIBLE)
-	style |= WS_BORDER
-	procSetWindowLongPtr.Call(hwnd, uintptr(uint32(nIndex)), style)
+	style, _, _ := procGetWindowLongPtr.Call(hwnd, uintptr(nIndex))
+	style &^= (WS_MAXIMIZEBOX | WS_VISIBLE)
+	style |= (WS_POPUP | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX)
+	procSetWindowLongPtr.Call(hwnd, uintptr(nIndex), style)
+
+	nExIndex := int32(-20) // GWL_EXSTYLE
+	exStyle, _, _ := procGetWindowLongPtr.Call(hwnd, uintptr(nExIndex))
+	exStyle &^= 0x00000080 // WS_EX_TOOLWINDOW
+	exStyle |= 0x00040000  // WS_EX_APPWINDOW
+	procSetWindowLongPtr.Call(hwnd, uintptr(nExIndex), exStyle)
+
 	var offscreenVal int32 = -32000
 	offscreenCoord := uintptr(uint32(offscreenVal))
 	procSetWindowPos.Call(hwnd, 0, offscreenCoord, offscreenCoord, uintptr(AppWindowWidth), uintptr(AppWindowHeight), 0x0004|0x0020|0x0080) // SWP_NOZORDER | SWP_FRAMECHANGED | SWP_HIDEWINDOW
-	wv.SetSize(int(AppWindowWidth), int(AppWindowHeight), webview2.HintFixed)
+	wv.SetSize(int(AppWindowWidth), int(AppWindowHeight), webview2.HintNone)
+
+	// Apply dark background brush to window class to eliminate any GDI pre-paint white flash
+	if darkBrush != 0 {
+		nClassIndex := int32(GCLP_HBRBACKGROUND)
+		if procSetClassLongPtr.Find() == nil {
+			procSetClassLongPtr.Call(hwnd, uintptr(nClassIndex), darkBrush)
+		} else {
+			procSetClassLong := modUser32.NewProc("SetClassLongW")
+			procSetClassLong.Call(hwnd, uintptr(nClassIndex), darkBrush)
+		}
+	}
+
+	// Extend DWM frame into client area for native drop shadow and hardware transitions
+	margins := MARGINS{1, 1, 1, 1}
+	procDwmExtendFrameIntoClientArea.Call(hwnd, uintptr(unsafe.Pointer(&margins)))
+
 	applyWindowIcons(hwnd)
 
 	// Hook window close [X] and WM_SHOWWINDOW early to intercept any premature show
@@ -2920,7 +3512,7 @@ func main() {
 	})
 
 	_ = wv.Bind("minimizeWindow", func() error {
-		procShowWindow.Call(hwnd, uintptr(SW_MINIMIZE))
+		procPostMessage.Call(hwnd, uintptr(WM_SYSCOMMAND), uintptr(SC_MINIMIZE), 0)
 		return nil
 	})
 
@@ -2953,6 +3545,13 @@ func main() {
 		pLog, _ := syscall.UTF16PtrFromString(logFilePath)
 		pOpen, _ := syscall.UTF16PtrFromString("open")
 		procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pLog)), 0, 0, uintptr(SW_SHOWNORMAL))
+		return nil
+	})
+
+	_ = wv.Bind("openExternalUrl", func(targetURL string) error {
+		pURL, _ := syscall.UTF16PtrFromString(targetURL)
+		pOpen, _ := syscall.UTF16PtrFromString("open")
+		procShellExecute.Call(0, uintptr(unsafe.Pointer(pOpen)), uintptr(unsafe.Pointer(pURL)), 0, 0, uintptr(SW_SHOWNORMAL))
 		return nil
 	})
 

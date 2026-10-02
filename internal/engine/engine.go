@@ -18,6 +18,7 @@ import (
 	"warlink/internal/pingmeter"
 	"warlink/internal/scanner"
 	"warlink/internal/singbox"
+	"warlink/internal/system"
 )
 
 type PipelineProgress struct {
@@ -636,6 +637,9 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 
 	e.setProgress(100, 0, 0, bestAlt, "Сетевой туннель полностью активен!", false)
 	e.log("[OK] Сетевой туннель полностью активен! Готово к игре")
+
+	// Apply Windows network stack and DSCP 46 optimizations for competitive low latency
+	go system.ApplyCompetitiveGamingTweaks(e.log)
 
 	selectedGame = e.cfg.GetSelectedGame()
 	// Launch game if autolaunch is enabled for this game

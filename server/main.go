@@ -44,6 +44,7 @@ import (
 )
 
 const (
+	ServerAppVersion     = "v2.1.12"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
@@ -56,6 +57,14 @@ const (
 	SessionInactivityTTL = 5 * time.Minute
 	PerUserRateDownBps   = 12500000 // 100 Mbps in bytes/sec
 	PerUserRateUpBps     = 6250000  // 50 Mbps in bytes/sec
+)
+
+var (
+	// TrustedIngressIPs defines reverse proxy / edge Ingress PoP nodes (e.g. Moscow node)
+	// that forward client traffic to the Stockholm gateway.
+	TrustedIngressIPs = map[string]bool{
+		"45.12.63.85": true,
+	}
 )
 
 type ServerConfig struct {
@@ -576,6 +585,7 @@ func main() {
 				state.initDatabase()
 				state.loadFeatureSettings()
 				go state.startAnalyticsCollector()
+				go state.startBoostyGoalSyncWorker()
 			} else {
 				log.Printf("[DB] Warning: PostgreSQL ping failed: %v", errPing)
 			}
@@ -628,6 +638,10 @@ func main() {
 	publicMux.HandleFunc("/api/v1/progression/database", state.handleProgressionDatabase)
 	publicMux.HandleFunc("/api/v1/profile", state.handleProfile)
 	publicMux.HandleFunc("/api/v1/profile/avatar", state.handleProfileAvatar)
+	publicMux.HandleFunc("/api/v1/profile/discord/link-code", state.handleDiscordLinkCode)
+	publicMux.HandleFunc("/api/v1/profile/discord/unlink", state.handleDiscordUnlink)
+	publicMux.HandleFunc("/api/v1/internal/discord/verify-link", state.handleDiscordVerifyLink)
+	publicMux.HandleFunc("/api/v1/internal/discord/profile", state.handleDiscordProfileLookup)
 
 	avatarsDir := "/opt/warlink-server/avatars"
 	if _, err := os.Stat("/opt/warlink-server"); os.IsNotExist(err) {
@@ -647,7 +661,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
 	publicMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": "v2.1.10"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": ServerAppVersion})
 	})
 	publicMux.HandleFunc("/metrics", state.handleMetrics)
 	publicMux.HandleFunc("/dashboard", state.handleDashboard)
@@ -657,10 +671,22 @@ func main() {
 	publicMux.HandleFunc("/control", state.handleDashboard)
 	publicMux.HandleFunc("/control/", state.handleDashboard)
 	publicMux.HandleFunc("/api/v1/tickets", state.handleClientTicketSubmit)
+	publicMux.HandleFunc("/api/v1/tickets/active", state.handleClientTicketActive)
+	publicMux.HandleFunc("/api/v1/tickets/history", state.handleClientTicketsHistory)
+	publicMux.HandleFunc("/api/v1/tickets/messages", state.handleClientTicketSendMessage)
+	publicMux.HandleFunc("/api/v1/tickets/logs", state.handleClientTicketUploadLogs)
+	publicMux.HandleFunc("/api/v1/tickets/resolve", state.handleClientTicketResolve)
 	publicMux.HandleFunc("/api/v1/admin/tickets", state.handleAdminTicketsList)
 	publicMux.HandleFunc("/api/v1/admin/tickets/", state.handleAdminTicketRouter)
 	publicMux.HandleFunc("/admin/tickets", state.handleAdminTicketWeb)
 	publicMux.HandleFunc("/admin/tickets/", state.handleAdminTicketWeb)
+	publicMux.HandleFunc("/api/v1/routing-feedback", state.handleRoutingFeedback)
+	publicMux.HandleFunc("/api/v1/admin/routing-feedback", state.handleAdminRoutingFeedback)
+	publicMux.HandleFunc("/admin/routing-feedback", state.handleAdminRoutingFeedbackWeb)
+	publicMux.HandleFunc("/admin/routing-feedback/", state.handleAdminRoutingFeedbackWeb)
+	publicMux.HandleFunc("/api/v1/boosty-goal", state.handleGetBoostyGoal)
+	publicMux.HandleFunc("/api/v1/admin/boosty-goal", state.handleAdminBoostyGoal)
+	publicMux.HandleFunc("/api/v1/admin/boosty-goal/parse", state.handleAdminBoostyGoalParse)
 
 	loggingHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
@@ -1539,9 +1565,13 @@ func (s *AppState) handleInternalAuth(w http.ResponseWriter, r *http.Request) {
 		if connectingIP == "" {
 			connectingIP = req.Addr
 		}
-		if sess.ClientIP != connectingIP {
-			sess.ClientIP = connectingIP
-			sess.LastSeen = time.Now()
+		if !TrustedIngressIPs[connectingIP] {
+			if sess.ClientIP != connectingIP {
+				sess.ClientIP = connectingIP
+				sess.LastSeen = time.Now()
+			} else {
+				sess.LastSeen = time.Now()
+			}
 		} else {
 			sess.LastSeen = time.Now()
 		}
@@ -1792,6 +1822,16 @@ func (s *AppState) handleSessionRelease(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// BlockedSteamGames содержит реестр AppID игр, запрещенных к добавлению в каталог голосования
+var BlockedSteamGames = map[int]string{
+	3602290: "FEMBOY FUTA HOUSE",
+}
+
+func isBlockedSteamGame(appID int) bool {
+	_, blocked := BlockedSteamGames[appID]
+	return blocked
+}
+
 type GameSuggestionItem struct {
 	SteamAppID int       `json:"steam_app_id"`
 	Title      string    `json:"title"`
@@ -1863,6 +1903,9 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			var g GameSuggestionItem
 			var icon sql.NullString
 			if err := rows.Scan(&g.SteamAppID, &g.Title, &icon, &g.VotesCount, &g.Status, &g.CreatedAt); err == nil {
+				if isBlockedSteamGame(g.SteamAppID) {
+					continue
+				}
 				g.IconURL = icon.String
 				if g.IconURL == "" || strings.HasSuffix(g.IconURL, fmt.Sprintf("/%d/capsule_231x87.jpg", g.SteamAppID)) {
 					if fixedIcon := resolveSteamStoreIcon(g.SteamAppID); fixedIcon != "" {
@@ -1984,6 +2027,16 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
 				"error":   "Игра WARDOGS уже официально поддерживается в WarLink!",
+			})
+			return
+		}
+
+		// Reject prohibited games
+		if isBlockedSteamGame(req.SteamAppID) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Данная игра внесена в список запрещенных к добавлению в голосование.",
 			})
 			return
 		}
@@ -2824,17 +2877,68 @@ func (s *AppState) initDatabase() {
 	CREATE INDEX IF NOT EXISTS idx_tickets_acc ON support_tickets(account_number);
 	CREATE INDEX IF NOT EXISTS idx_tickets_dev ON support_tickets(device_id);
 
+	CREATE TABLE IF NOT EXISTS ticket_messages (
+		id BIGSERIAL PRIMARY KEY,
+		ticket_id BIGINT NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+		sender_type TEXT NOT NULL, -- 'user', 'admin', 'system'
+		sender_name TEXT NOT NULL DEFAULT '',
+		message TEXT NOT NULL,
+		attachment_type TEXT NOT NULL DEFAULT '', -- '', 'logs_archive', 'telemetry_ping'
+		attachment_data BYTEA,
+		attachment_size INT NOT NULL DEFAULT 0,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_ticket_messages_ticket ON ticket_messages(ticket_id, created_at ASC);
+	CREATE INDEX IF NOT EXISTS idx_ticket_messages_created ON ticket_messages(created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS routing_feedback (
+		id BIGSERIAL PRIMARY KEY,
+		account_number TEXT NOT NULL DEFAULT '',
+		device_id TEXT NOT NULL DEFAULT '',
+		app_version TEXT NOT NULL DEFAULT '',
+		route_mode TEXT NOT NULL,
+		status TEXT NOT NULL,
+		in_game_ping INT NOT NULL DEFAULT 0,
+		match_quality TEXT NOT NULL DEFAULT '',
+		discord_status TEXT NOT NULL DEFAULT '',
+		user_comment TEXT NOT NULL DEFAULT '',
+		client_ip TEXT NOT NULL DEFAULT '',
+		telemetry_data JSONB DEFAULT '{}'::jsonb,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_routing_feedback_mode ON routing_feedback(route_mode);
+	CREATE INDEX IF NOT EXISTS idx_routing_feedback_created ON routing_feedback(created_at DESC);
+
 	DROP TABLE IF EXISTS active_sessions CASCADE;
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		log.Printf("[DB] Error initializing schema: %v", err)
 	} else {
-		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, active sessions in RAM)")
+		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, tickets, ticket_messages, active sessions in RAM)")
 	}
 
 	_, _ = s.db.Exec(`
 		ALTER TABLE daily_active_devices ADD COLUMN IF NOT EXISTS app_version TEXT;
 		ALTER TABLE user_connection_history ADD COLUMN IF NOT EXISTS app_version TEXT;
+		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS discord_id TEXT NOT NULL DEFAULT '';
+		ALTER TABLE accounts ADD COLUMN IF NOT EXISTS discord_tag TEXT NOT NULL DEFAULT '';
+		CREATE INDEX IF NOT EXISTS idx_accounts_discord_id ON accounts(discord_id);
+
+		-- Migrate existing tickets without messages
+		INSERT INTO ticket_messages (ticket_id, sender_type, sender_name, message, attachment_type, attachment_data, attachment_size, created_at)
+		SELECT st.id, 'user', COALESCE(NULLIF(acc.nickname, ''), st.account_number), st.user_comment, 
+		       CASE WHEN st.logs_archive_size > 0 THEN 'logs_archive' ELSE '' END,
+		       st.logs_archive, st.logs_archive_size, st.created_at
+		FROM support_tickets st
+		LEFT JOIN accounts acc ON acc.account_number = st.account_number
+		WHERE NOT EXISTS (SELECT 1 FROM ticket_messages tm WHERE tm.ticket_id = st.id)
+		  AND length(st.user_comment) > 0;
+
+		INSERT INTO ticket_messages (ticket_id, sender_type, sender_name, message, created_at)
+		SELECT st.id, 'admin', 'Max (Разработчик)', st.admin_reply, COALESCE(st.resolved_at, st.updated_at)
+		FROM support_tickets st
+		WHERE length(st.admin_reply) > 0
+		  AND NOT EXISTS (SELECT 1 FROM ticket_messages tm WHERE tm.ticket_id = st.id AND tm.sender_type = 'admin');
 	`)
 }
 
@@ -3744,7 +3848,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	sb.WriteString("# HELP warlink_server_version Server software release version info\n")
 	sb.WriteString("# TYPE warlink_server_version gauge\n")
-	sb.WriteString("warlink_server_version{version=\"v2.1.7\"} 1\n\n")
+	sb.WriteString(fmt.Sprintf("warlink_server_version{version=\"%s\"} 1\n\n", ServerAppVersion))
 
 	clusterBudgetEur := 10
 	clusterBudgetRub := 1300
@@ -3884,7 +3988,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_client_version_online Connected active clients broken down by version\n")
 	sb.WriteString("# TYPE warlink_client_version_online gauge\n")
 	if len(clientVersions) == 0 {
-		sb.WriteString("warlink_client_version_online{version=\"v2.1.10\"} 0\n\n")
+		sb.WriteString("warlink_client_version_online{version=\"v2.1.12\"} 0\n\n")
 	} else {
 		for v, cnt := range clientVersions {
 			sb.WriteString(fmt.Sprintf("warlink_client_version_online{version=\"%s\"} %d\n", v, cnt))
@@ -5572,6 +5676,9 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 		DeviceCount        int             `json:"device_count"`
 		Donations          []DonationItem  `json:"donations"`
 		Progression        json.RawMessage `json:"progression,omitempty"`
+		DiscordID          string          `json:"discord_id"`
+		DiscordTag         string          `json:"discord_tag"`
+		IsDiscordLinked    bool            `json:"is_discord_linked"`
 	}
 
 	if r.Method == http.MethodGet {
@@ -5594,18 +5701,19 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 		if acc != "" {
 			err = s.db.QueryRow(`
-				SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE), COALESCE(progression::text, '')
+				SELECT account_number, nickname, avatar_url, steam_id, motto, tier, sponsor_until, total_donated_rub, created_at, COALESCE(hide_donation_amount, FALSE), COALESCE(progression::text, ''), COALESCE(discord_id, ''), COALESCE(discord_tag, '')
 				FROM accounts WHERE account_number = $1
-			`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr)
+			`, acc).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr, &resp.DiscordID, &resp.DiscordTag)
 		} else {
 			err = s.db.QueryRow(`
-				SELECT a.account_number, a.nickname, a.avatar_url, a.steam_id, a.motto, a.tier, a.sponsor_until, a.total_donated_rub, a.created_at, COALESCE(a.hide_donation_amount, FALSE), COALESCE(a.progression::text, '')
+				SELECT a.account_number, a.nickname, a.avatar_url, a.steam_id, a.motto, a.tier, a.sponsor_until, a.total_donated_rub, a.created_at, COALESCE(a.hide_donation_amount, FALSE), COALESCE(a.progression::text, ''), COALESCE(a.discord_id, ''), COALESCE(a.discord_tag, '')
 				FROM account_devices ad
 				JOIN accounts a ON ad.account_number = a.account_number
 				WHERE ad.device_id = $1
 				ORDER BY a.sponsor_until DESC NULLS LAST LIMIT 1
-			`, dev).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr)
+			`, dev).Scan(&resp.AccountNumber, &resp.Nickname, &resp.AvatarURL, &st, &mo, &resp.Tier, &sponsorTime, &totalDonated, &createdAt, &resp.HideDonationAmount, &progStr, &resp.DiscordID, &resp.DiscordTag)
 		}
+		resp.IsDiscordLinked = (resp.DiscordID != "" || resp.DiscordTag != "")
 
 		if progStr != "" && progStr != "null" && progStr != "{}" {
 			resp.Progression = json.RawMessage(progStr)
@@ -5763,6 +5871,18 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 			}
 			if !isDummy {
 				_, _ = s.db.Exec(`UPDATE accounts SET progression = $1, updated_at = NOW() WHERE account_number = $2`, req.Progression, acc)
+				if s.rdb != nil {
+					var dID sql.NullString
+					_ = s.db.QueryRow(`SELECT discord_id FROM accounts WHERE account_number = $1`, acc).Scan(&dID)
+					if dID.Valid && dID.String != "" {
+						pPayload, _ := json.Marshal(map[string]interface{}{
+							"account_number": acc,
+							"discord_id":     dID.String,
+							"progression":    json.RawMessage(req.Progression),
+						})
+						_ = s.rdb.Publish(context.Background(), "discord:progression_update", pPayload).Err()
+					}
+				}
 			}
 		}
 
@@ -5926,6 +6046,290 @@ func (s *AppState) handleProfileAvatar(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[AVATAR] Saved 128x128 avatar for %s -> %s", account, avatarURL)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"avatar_url": avatarURL,
+	})
+}
+
+// handleDiscordLinkCode generates a temporary 6-digit code for linking Discord account
+func (s *AppState) handleDiscordLinkCode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		AccountNumber string `json:"account_number"`
+		DeviceID      string `json:"device_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad_request"})
+		return
+	}
+	acc := strings.TrimSpace(req.AccountNumber)
+	if acc == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "account_number_required"})
+		return
+	}
+
+	if s.rdb == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "redis_unavailable"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	// Check if existing code is still valid
+	if existingCode, err := s.rdb.Get(ctx, "wl:discord:acc:"+acc).Result(); err == nil && len(existingCode) == 6 {
+		ttl, _ := s.rdb.TTL(ctx, "wl:discord:acc:"+acc).Result()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    true,
+			"code":       existingCode,
+			"expires_in": int(ttl.Seconds()),
+		})
+		return
+	}
+
+	// Generate random 6-digit code using crypto/rand
+	b := make([]byte, 3)
+	_, _ = rand.Read(b)
+	num := (int(b[0])<<16 | int(b[1])<<8 | int(b[2]))%900000 + 100000
+	code := fmt.Sprintf("%06d", num)
+
+	ttl := 15 * time.Minute
+	_ = s.rdb.Set(ctx, "wl:discord:code:"+code, acc, ttl).Err()
+	_ = s.rdb.Set(ctx, "wl:discord:acc:"+acc, code, ttl).Err()
+
+	log.Printf("[DISCORD-LINK] Generated link code %s for account %s (TTL: 15m)", code, acc)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"code":       code,
+		"expires_in": 900,
+	})
+}
+
+// handleDiscordVerifyLink validates code from Discord Bot and links Discord ID with WarLink account
+func (s *AppState) handleDiscordVerifyLink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dashboard-Key, Authorization")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
+		return
+	}
+
+	var req struct {
+		Code       string `json:"code"`
+		DiscordID  string `json:"discord_id"`
+		DiscordTag string `json:"discord_tag"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad_request"})
+		return
+	}
+	code := strings.TrimSpace(req.Code)
+	discordID := strings.TrimSpace(req.DiscordID)
+	discordTag := strings.TrimSpace(req.DiscordTag)
+
+	if code == "" || discordID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "code_and_discord_id_required"})
+		return
+	}
+
+	if s.rdb == nil || s.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "services_unavailable"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	acc, err := s.rdb.Get(ctx, "wl:discord:code:"+code).Result()
+	if err != nil || acc == "" {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_or_expired_code"})
+		return
+	}
+
+	// Update PostgreSQL
+	_, dbErr := s.db.Exec(`
+		UPDATE accounts
+		SET discord_id = $1, discord_tag = $2, updated_at = NOW()
+		WHERE account_number = $3
+	`, discordID, discordTag, acc)
+	if dbErr != nil {
+		log.Printf("[DISCORD-LINK] DB error updating account %s: %v", acc, dbErr)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "db_error"})
+		return
+	}
+
+	// Clean up Redis keys
+	_ = s.rdb.Del(ctx, "wl:discord:code:"+code, "wl:discord:acc:"+acc).Err()
+
+	// Fetch account status for roles
+	var tier, nickname string
+	var totalDonated int
+	var sponsorUntil *time.Time
+	var progRaw string
+	_ = s.db.QueryRow(`
+		SELECT COALESCE(nickname, ''), tier, total_donated_rub, sponsor_until, COALESCE(progression::text, '')
+		FROM accounts WHERE account_number = $1
+	`, acc).Scan(&nickname, &tier, &totalDonated, &sponsorUntil, &progRaw)
+
+	isSponsor := false
+	if sponsorUntil != nil && sponsorUntil.After(time.Now()) {
+		isSponsor = true
+	} else if totalDonated > 0 || tier == "sponsor" || tier == "supporter" {
+		isSponsor = true
+	}
+
+	log.Printf("[DISCORD-LINK] Successfully linked Discord %s (%s) to WarLink account %s (Sponsor: %v)", discordTag, discordID, acc, isSponsor)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":           true,
+		"account_number":    acc,
+		"nickname":          nickname,
+		"discord_id":        discordID,
+		"discord_tag":       discordTag,
+		"is_sponsor":        isSponsor,
+		"total_donated_rub": totalDonated,
+		"tier":              tier,
+		"progression":       json.RawMessage(progRaw),
+	})
+}
+
+// handleDiscordUnlink unlinks Discord account from WarLink profile
+func (s *AppState) handleDiscordUnlink(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		AccountNumber string `json:"account_number"`
+		DeviceID      string `json:"device_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "bad_request"})
+		return
+	}
+	acc := strings.TrimSpace(req.AccountNumber)
+	if acc == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "account_number_required"})
+		return
+	}
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "db_unavailable"})
+		return
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE accounts
+		SET discord_id = '', discord_tag = '', updated_at = NOW()
+		WHERE account_number = $1
+	`, acc)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "db_error"})
+		return
+	}
+
+	log.Printf("[DISCORD-LINK] Successfully unlinked Discord for account %s", acc)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Discord аккаунт успешно отвязан",
+	})
+}
+
+func (s *AppState) handleDiscordProfileLookup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if s.cfg.DashboardKey != "" && r.Header.Get("X-Dashboard-Key") != s.cfg.DashboardKey && r.URL.Query().Get("key") != s.cfg.DashboardKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "unauthorized"})
+		return
+	}
+
+	discordID := strings.TrimSpace(r.URL.Query().Get("discord_id"))
+	if discordID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "discord_id_required"})
+		return
+	}
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "db_unavailable"})
+		return
+	}
+
+	var acc, nickname, tier string
+	var totalDonated int
+	var sponsorUntil *time.Time
+	var progRaw string
+	err := s.db.QueryRow(`
+		SELECT account_number, COALESCE(nickname, ''), tier, total_donated_rub, sponsor_until, COALESCE(progression::text, '')
+		FROM accounts WHERE discord_id = $1
+	`, discordID).Scan(&acc, &nickname, &tier, &totalDonated, &sponsorUntil, &progRaw)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "not_found"})
+		return
+	}
+
+	isSponsor := false
+	if sponsorUntil != nil && sponsorUntil.After(time.Now()) {
+		isSponsor = true
+	} else if totalDonated > 0 || tier == "sponsor" || tier == "supporter" {
+		isSponsor = true
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":           true,
+		"account_number":    acc,
+		"nickname":          nickname,
+		"discord_id":        discordID,
+		"is_sponsor":        isSponsor,
+		"total_donated_rub": totalDonated,
+		"tier":              tier,
+		"progression":       json.RawMessage(progRaw),
 	})
 }
 
@@ -6317,6 +6721,32 @@ const dashboardHTML = `<!DOCTYPE html>
                         <input type="number" id="input-free-slots" value="89" min="1" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
                         <button class="btn" onclick="saveSetting('free_slots_limit', 'input-free-slots')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
                     </div>
+                </div>
+            </div>
+
+            <!-- Boosty Goal Control (Control Plane) -->
+            <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    <div>
+                        <div style="font-weight: 700; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-main);">Цель сбора на Boosty (Прогресс-бар в клиенте)</div>
+                        <div id="admin-boosty-sub" style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">Сбор: 0 ₽ из 100 000 ₽</div>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--text-muted);">
+                        <span>Собрано:</span>
+                        <input type="number" id="input-boosty-current" min="0" max="10000000" step="500" value="0" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 5px 8px; border-radius: 2px; width: 85px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
+                        <span>₽</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--text-muted);">
+                        <span>Цель:</span>
+                        <input type="number" id="input-boosty-target" min="1000" max="10000000" step="1000" value="100000" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 5px 8px; border-radius: 2px; width: 85px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
+                        <span>₽</span>
+                    </div>
+                    <button class="btn" onclick="saveBoostyGoalControl()" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; padding: 5px 12px; font-size: 11px; cursor: pointer;">Сохранить</button>
+                    <button class="btn" onclick="syncBoostyGoalControl()" style="background: #111; border: 1px solid var(--border); color: var(--text-main); font-weight: 600; padding: 5px 10px; font-size: 11px; cursor: pointer;">Спарсить с Boosty</button>
+                    <span id="boosty-ctrl-status" style="font-family: var(--font-mono); font-size: 10px; color: var(--green);"></span>
                 </div>
             </div>
         </div>
@@ -6896,11 +7326,93 @@ const dashboardHTML = `<!DOCTYPE html>
             }
         }
 
+        async function loadBoostyGoalControl() {
+            try {
+                let url = '/api/v1/boosty-goal';
+                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
+                const res = await fetch(url);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data && data.success) {
+                    const cIn = document.getElementById('input-boosty-current');
+                    const tIn = document.getElementById('input-boosty-target');
+                    const subEl = document.getElementById('admin-boosty-sub');
+                    if (cIn) cIn.value = data.current_amount || 0;
+                    if (tIn) tIn.value = data.target_amount || 100000;
+                    if (subEl) {
+                        const src = data.source === 'auto_parser' ? 'авто-парсер Boosty' : 'ручной ввод';
+                        subEl.textContent = 'Сбор: ' + (data.current_amount || 0).toLocaleString('ru-RU') + ' ₽ из ' + (data.target_amount || 100000).toLocaleString('ru-RU') + ' ₽ (' + (data.percent || 0) + '%, ' + src + ')';
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load boosty goal:', err);
+            }
+        }
+
+        async function saveBoostyGoalControl() {
+            const curr = parseInt(document.getElementById('input-boosty-current').value, 10) || 0;
+            const tgt = parseInt(document.getElementById('input-boosty-target').value, 10) || 100000;
+            const statusEl = document.getElementById('boosty-ctrl-status');
+            if (statusEl) { statusEl.textContent = 'Сохранение...'; statusEl.style.color = 'var(--text-muted)'; }
+            try {
+                let url = '/api/v1/admin/boosty-goal';
+                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ current_amount: curr, target_amount: tgt })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    if (statusEl) {
+                        statusEl.textContent = 'Сохранено!';
+                        statusEl.style.color = 'var(--green)';
+                        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+                    }
+                    loadBoostyGoalControl();
+                } else {
+                    if (statusEl) {
+                        statusEl.textContent = 'Ошибка сохранения!';
+                        statusEl.style.color = '#ef4444';
+                    }
+                }
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.textContent = 'Ошибка сети!';
+                    statusEl.style.color = '#ef4444';
+                }
+            }
+        }
+
+        async function syncBoostyGoalControl() {
+            const statusEl = document.getElementById('boosty-ctrl-status');
+            if (statusEl) { statusEl.textContent = 'Синхронизация...'; statusEl.style.color = 'var(--text-muted)'; }
+            try {
+                let url = '/api/v1/admin/boosty-goal/parse';
+                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
+                const res = await fetch(url, { method: 'POST' });
+                const data = await res.json();
+                if (statusEl) {
+                    statusEl.textContent = data.message || (data.success ? 'Синхронизировано!' : 'Не удалось спарсить');
+                    statusEl.style.color = data.success ? 'var(--green)' : 'var(--accent)';
+                    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
+                }
+                loadBoostyGoalControl();
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.textContent = 'Ошибка запроса!';
+                    statusEl.style.color = '#ef4444';
+                }
+            }
+        }
+
         // Initial fetch and auto-refresh
         loadData();
         loadFeatures();
+        loadBoostyGoalControl();
         setInterval(loadData, 5000);
         setInterval(loadFeatures, 10000);
+        setInterval(loadBoostyGoalControl, 15000);
         window.addEventListener('resize', () => loadData());
     </script>
 </body>
@@ -7015,12 +7527,36 @@ func (s *AppState) handleClientTicketSubmit(w http.ResponseWriter, r *http.Reque
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "db_error"})
 			return
 		}
+		if ticketID > 0 {
+			var attType = ""
+			if len(archiveBytes) > 0 {
+				attType = "logs_archive"
+			}
+			_, _ = s.db.Exec(`
+				INSERT INTO ticket_messages (
+					ticket_id, sender_type, sender_name, message, attachment_type, attachment_data, attachment_size, created_at
+				) VALUES ($1, 'user', $2, $3, $4, $5, $6, NOW())
+			`, ticketID, req.AccountNumber, req.UserComment, attType, archiveBytes, len(archiveBytes))
+		}
 	} else {
 		ticketID = time.Now().Unix()
 	}
 
 	log.Printf("[TICKETS] Saved new support ticket #%d from acc=%s, dev=%s, cat=%s (logs archive: %d bytes)",
 		ticketID, req.AccountNumber, req.DeviceID, req.Category, len(archiveBytes))
+
+	// Publish to Redis Pub/Sub for Discord Bot
+	if s.rdb != nil {
+		go func(tID int64) {
+			pubCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := s.rdb.Publish(pubCtx, "tickets:new", fmt.Sprintf("%d", tID)).Err(); err != nil {
+				log.Printf("[TICKETS] Warning: Failed to publish ticket #%d to Redis: %v", tID, err)
+			} else {
+				log.Printf("[TICKETS] Published ticket #%d event to Redis channel 'tickets:new'", tID)
+			}
+		}(ticketID)
+	}
 
 	ticketCode := fmt.Sprintf("TK-%04d", ticketID)
 	w.WriteHeader(http.StatusOK)
@@ -7029,6 +7565,972 @@ func (s *AppState) handleClientTicketSubmit(w http.ResponseWriter, r *http.Reque
 		"ticket_id":   ticketID,
 		"ticket_code": ticketCode,
 		"message":     "Отчет успешно доставлен администратору. Я изучу диагностику и направлю ответ в ваш Центр уведомлений.",
+	})
+}
+
+type TicketMessageItem struct {
+	ID             int64  `json:"id"`
+	TicketID       int64  `json:"ticket_id"`
+	SenderType     string `json:"sender_type"` // 'user', 'admin', 'system'
+	SenderName     string `json:"sender_name"`
+	Message        string `json:"message"`
+	AttachmentType string `json:"attachment_type,omitempty"`
+	AttachmentSize int    `json:"attachment_size,omitempty"`
+	CreatedAt      string `json:"created_at"`
+}
+
+type RouteReviewItem struct {
+	RouteMode     string `json:"route_mode"`
+	Status        string `json:"status"`
+	InGamePing    int    `json:"in_game_ping"`
+	MatchQuality  string `json:"match_quality"`
+	DiscordStatus string `json:"discord_status"`
+	UserComment   string `json:"user_comment"`
+}
+
+type RoutingFeedbackSubmission struct {
+	AccountNumber  string                 `json:"account_number"`
+	DeviceID       string                 `json:"device_id"`
+	AppVersion     string                 `json:"app_version"`
+	RouteMode      string                 `json:"route_mode"`
+	Status         string                 `json:"status"`
+	InGamePing     int                    `json:"in_game_ping"`
+	MatchQuality   string                 `json:"match_quality"`
+	DiscordStatus  string                 `json:"discord_status"`
+	UserComment    string                 `json:"user_comment"`
+	Reviews        []RouteReviewItem      `json:"reviews,omitempty"`
+	OverallComment string                 `json:"overall_comment,omitempty"`
+	TelemetryData  map[string]interface{} `json:"telemetry_data"`
+}
+
+func (s *AppState) handleRoutingFeedback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1024*1024)
+	var req RoutingFeedbackSubmission
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_payload"})
+		return
+	}
+
+	clientIP := s.getClientIP(r)
+	telemetryJSON, _ := json.Marshal(req.TelemetryData)
+
+	if s.db != nil {
+		if len(req.Reviews) > 0 {
+			for _, rev := range req.Reviews {
+				m := strings.TrimSpace(rev.RouteMode)
+				if m == "" {
+					continue
+				}
+				st := strings.TrimSpace(rev.Status)
+				if st == "" {
+					st = "works_great"
+				}
+				comm := rev.UserComment
+				if req.OverallComment != "" && comm == "" {
+					comm = req.OverallComment
+				}
+				_, err := s.db.Exec(`
+					INSERT INTO routing_feedback (
+						account_number, device_id, app_version, route_mode, status,
+						in_game_ping, match_quality, discord_status, user_comment, client_ip, telemetry_data
+					) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+					req.AccountNumber, req.DeviceID, req.AppVersion, m, st,
+					rev.InGamePing, rev.MatchQuality, rev.DiscordStatus, comm, clientIP, telemetryJSON,
+				)
+				if err != nil {
+					log.Printf("[FEEDBACK] Error saving multi-route feedback item: %v", err)
+				}
+			}
+		} else {
+			req.RouteMode = strings.TrimSpace(req.RouteMode)
+			if req.RouteMode == "" {
+				req.RouteMode = "transit"
+			}
+			req.Status = strings.TrimSpace(req.Status)
+			if req.Status == "" {
+				req.Status = "works_great"
+			}
+
+			_, err := s.db.Exec(`
+				INSERT INTO routing_feedback (
+					account_number, device_id, app_version, route_mode, status,
+					in_game_ping, match_quality, discord_status, user_comment, client_ip, telemetry_data
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+				req.AccountNumber, req.DeviceID, req.AppVersion, req.RouteMode, req.Status,
+				req.InGamePing, req.MatchQuality, req.DiscordStatus, req.UserComment, clientIP, telemetryJSON,
+			)
+			if err != nil {
+				log.Printf("[FEEDBACK] Error saving routing feedback: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "db_error"})
+				return
+			}
+		}
+	}
+
+	log.Printf("[FEEDBACK] Received multi-route feedback from %s (%s): reviews=%d",
+		req.AccountNumber, req.DeviceID, len(req.Reviews))
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Спасибо за подробную обратную связь по всем маршрутам!",
+	})
+}
+
+func (s *AppState) handleAdminRoutingFeedback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	type ModeStats struct {
+		Mode     string  `json:"mode"`
+		Count    int     `json:"count"`
+		AvgPing  float64 `json:"avg_ping"`
+		GreatPct float64 `json:"great_pct"`
+	}
+
+	var stats []ModeStats
+	if s.db != nil {
+		rows, err := s.db.Query(`
+			SELECT route_mode, COUNT(*), ROUND(COALESCE(AVG(NULLIF(in_game_ping, 0)), 0)::numeric, 1),
+			       ROUND(COUNT(CASE WHEN status = 'works_great' THEN 1 END)::numeric / NULLIF(COUNT(*), 0)::numeric * 100, 1)
+			FROM routing_feedback
+			GROUP BY route_mode
+			ORDER BY route_mode`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var st ModeStats
+				if err := rows.Scan(&st.Mode, &st.Count, &st.AvgPing, &st.GreatPct); err == nil {
+					stats = append(stats, st)
+				}
+			}
+		}
+	}
+
+	type FeedbackItem struct {
+		ID            int64                  `json:"id"`
+		CreatedAt     string                 `json:"created_at"`
+		AccountNumber string                 `json:"account_number"`
+		DeviceID      string                 `json:"device_id"`
+		AppVersion    string                 `json:"app_version"`
+		RouteMode     string                 `json:"route_mode"`
+		Status        string                 `json:"status"`
+		InGamePing    int                    `json:"in_game_ping"`
+		MatchQuality  string                 `json:"match_quality"`
+		DiscordStatus string                 `json:"discord_status"`
+		UserComment   string                 `json:"user_comment"`
+		ClientIP      string                 `json:"client_ip"`
+		Telemetry     map[string]interface{} `json:"telemetry,omitempty"`
+	}
+
+	var items []FeedbackItem
+	if s.db != nil {
+		rows, err := s.db.Query(`
+			SELECT id, to_char(created_at, 'YYYY-MM-DD HH24:MI:SS'), account_number, device_id, app_version,
+			       route_mode, status, in_game_ping, match_quality, discord_status, user_comment, client_ip, telemetry_data
+			FROM routing_feedback
+			ORDER BY created_at DESC LIMIT 100`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var it FeedbackItem
+				var telRaw []byte
+				if err := rows.Scan(&it.ID, &it.CreatedAt, &it.AccountNumber, &it.DeviceID, &it.AppVersion,
+					&it.RouteMode, &it.Status, &it.InGamePing, &it.MatchQuality, &it.DiscordStatus, &it.UserComment, &it.ClientIP, &telRaw); err == nil {
+					if len(telRaw) > 0 {
+						_ = json.Unmarshal(telRaw, &it.Telemetry)
+					}
+					it.ClientIP = maskIP(it.ClientIP)
+					items = append(items, it)
+				}
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"stats":   stats,
+		"items":   items,
+	})
+}
+
+type BoostyGoalData struct {
+	Title         string  `json:"title"`
+	TargetAmount  int     `json:"target_amount"`
+	CurrentAmount int     `json:"current_amount"`
+	Percent       float64 `json:"percent"`
+	Source        string  `json:"source"`
+	UpdatedAt     string  `json:"updated_at"`
+}
+
+func (s *AppState) getBoostyGoal() BoostyGoalData {
+	goal := BoostyGoalData{
+		Title:         "WarLink | Поддержка дальнейшей разработки | Долги",
+		TargetAmount:  100000,
+		CurrentAmount: 0,
+		Source:        "manual",
+		UpdatedAt:     time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	if s.db != nil {
+		rows, err := s.db.Query(`SELECT key, value FROM server_settings WHERE key IN ('boosty_goal_title', 'boosty_goal_target', 'boosty_goal_current', 'boosty_goal_source', 'boosty_goal_updated_at')`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var k, v string
+				if err := rows.Scan(&k, &v); err == nil {
+					switch k {
+					case "boosty_goal_title":
+						if v != "" {
+							goal.Title = v
+						}
+					case "boosty_goal_target":
+						if t, err := strconv.Atoi(v); err == nil && t > 0 {
+							goal.TargetAmount = t
+						}
+					case "boosty_goal_current":
+						if c, err := strconv.Atoi(v); err == nil && c >= 0 {
+							goal.CurrentAmount = c
+						}
+					case "boosty_goal_source":
+						if v != "" {
+							goal.Source = v
+						}
+					case "boosty_goal_updated_at":
+						if v != "" {
+							goal.UpdatedAt = v
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if goal.TargetAmount > 0 {
+		goal.Percent = math.Round((float64(goal.CurrentAmount)/float64(goal.TargetAmount)*100)*10) / 10
+		if goal.Percent > 100 {
+			goal.Percent = 100
+		}
+	}
+
+	return goal
+}
+
+func (s *AppState) saveBoostyGoal(current, target int, title, source string) error {
+	now := time.Now().Format("2006-01-02 15:04:05")
+	if s.db == nil {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if title != "" {
+		_, _ = tx.Exec(`INSERT INTO server_settings (key, value) VALUES ('boosty_goal_title', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, title)
+	}
+	if target > 0 {
+		_, _ = tx.Exec(`INSERT INTO server_settings (key, value) VALUES ('boosty_goal_target', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(target))
+	}
+	if current >= 0 {
+		_, _ = tx.Exec(`INSERT INTO server_settings (key, value) VALUES ('boosty_goal_current', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(current))
+	}
+	if source != "" {
+		_, _ = tx.Exec(`INSERT INTO server_settings (key, value) VALUES ('boosty_goal_source', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, source)
+	}
+	_, _ = tx.Exec(`INSERT INTO server_settings (key, value) VALUES ('boosty_goal_updated_at', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, now)
+
+	return tx.Commit()
+}
+
+func (s *AppState) parseBoostyGoalFromWeb() (int, int, bool) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", "https://boosty.to/pld1n/donate", nil)
+	if err != nil {
+		return 0, 0, false
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	if err != nil {
+		return 0, 0, false
+	}
+	body := string(bodyBytes)
+
+	// Regex pattern 1: "currentSum":(\d+).*?"targetSum":(\d+)
+	reSum := regexp.MustCompile(`"currentSum":\s*(\d+).*?"targetSum":\s*(\d+)`)
+	if m := reSum.FindStringSubmatch(body); len(m) >= 3 {
+		curr, _ := strconv.Atoi(m[1])
+		tgt, _ := strconv.Atoi(m[2])
+		if tgt > 0 {
+			return curr, tgt, true
+		}
+	}
+
+	// Regex pattern 2: "raised":\s*(\d+).*?"target":\s*(\d+)
+	reRaised := regexp.MustCompile(`"raised":\s*(\d+).*?"target":\s*(\d+)`)
+	if m := reRaised.FindStringSubmatch(body); len(m) >= 3 {
+		curr, _ := strconv.Atoi(m[1])
+		tgt, _ := strconv.Atoi(m[2])
+		if tgt > 0 {
+			return curr, tgt, true
+		}
+	}
+
+	// Regex pattern 3: (\d+[\s\d]*)\s*₽\s*из\s*(\d+[\s\d]*)\s*₽
+	reText := regexp.MustCompile(`([0-9\s]{1,10})\s*₽\s*из\s*([0-9\s]{1,10})\s*₽`)
+	if m := reText.FindStringSubmatch(body); len(m) >= 3 {
+		cleanCurr := strings.ReplaceAll(m[1], " ", "")
+		cleanTgt := strings.ReplaceAll(m[2], " ", "")
+		curr, err1 := strconv.Atoi(cleanCurr)
+		tgt, err2 := strconv.Atoi(cleanTgt)
+		if err1 == nil && err2 == nil && tgt > 0 {
+			return curr, tgt, true
+		}
+	}
+
+	return 0, 0, false
+}
+
+func (s *AppState) startBoostyGoalSyncWorker() {
+	go func() {
+		time.Sleep(30 * time.Second)
+		if curr, tgt, ok := s.parseBoostyGoalFromWeb(); ok {
+			log.Printf("[BOOSTY-SYNC] Initial sync: %d / %d RUB", curr, tgt)
+			_ = s.saveBoostyGoal(curr, tgt, "", "auto_parser")
+		}
+
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if curr, tgt, ok := s.parseBoostyGoalFromWeb(); ok {
+				log.Printf("[BOOSTY-SYNC] Daily sync: %d / %d RUB", curr, tgt)
+				_ = s.saveBoostyGoal(curr, tgt, "", "auto_parser")
+			} else {
+				log.Printf("[BOOSTY-SYNC] Daily check could not extract numbers; manual values retained")
+			}
+		}
+	}()
+}
+
+func (s *AppState) handleGetBoostyGoal(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	goal := s.getBoostyGoal()
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":        true,
+		"title":          goal.Title,
+		"target_amount":  goal.TargetAmount,
+		"current_amount": goal.CurrentAmount,
+		"percent":        goal.Percent,
+		"source":         goal.Source,
+		"updated_at":     goal.UpdatedAt,
+	})
+}
+
+func (s *AppState) handleAdminBoostyGoal(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			CurrentAmount *int   `json:"current_amount"`
+			TargetAmount  *int   `json:"target_amount"`
+			Title         string `json:"title"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+			goal := s.getBoostyGoal()
+			curr := goal.CurrentAmount
+			tgt := goal.TargetAmount
+			title := goal.Title
+			if req.CurrentAmount != nil {
+				curr = *req.CurrentAmount
+			}
+			if req.TargetAmount != nil && *req.TargetAmount > 0 {
+				tgt = *req.TargetAmount
+			}
+			if req.Title != "" {
+				title = req.Title
+			}
+			_ = s.saveBoostyGoal(curr, tgt, title, "manual")
+			log.Printf("[ADMIN] Boosty goal updated manually: %d / %d RUB (title: %s)", curr, tgt, title)
+		}
+	}
+
+	goal := s.getBoostyGoal()
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"goal":    goal,
+	})
+}
+
+func (s *AppState) handleAdminBoostyGoalParse(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	curr, tgt, ok := s.parseBoostyGoalFromWeb()
+	if ok {
+		_ = s.saveBoostyGoal(curr, tgt, "", "auto_parser")
+		log.Printf("[ADMIN] Boosty goal parsed successfully: %d / %d RUB", curr, tgt)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": fmt.Sprintf("Успешно синхронизировано с Boosty: %d ₽ из %d ₽", curr, tgt),
+			"goal":    s.getBoostyGoal(),
+		})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": false,
+		"message": "Парсер не нашел цифры сбора на странице Boosty. Сохранены текущие значения.",
+		"goal":    s.getBoostyGoal(),
+	})
+}
+
+func (s *AppState) handleClientTicketActive(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Account-Number, X-Device-ID")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	accNum := strings.TrimSpace(r.URL.Query().Get("account_number"))
+	if accNum == "" {
+		accNum = strings.TrimSpace(r.Header.Get("X-Account-Number"))
+	}
+	devID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	if devID == "" {
+		devID = strings.TrimSpace(r.Header.Get("X-Device-ID"))
+	}
+
+	if accNum == "" && devID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "missing_account_or_device"})
+		return
+	}
+
+	if s.db == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    true,
+			"has_active": false,
+			"ticket":     nil,
+			"messages":   []TicketMessageItem{},
+		})
+		return
+	}
+
+	var t AdminTicketSummary
+	var resAt sql.NullString
+	var sysRaw string
+	var archiveBytes []byte
+
+	var err error
+	requestedIDStr := strings.TrimSpace(r.URL.Query().Get("ticket_id"))
+	if requestedIDStr != "" {
+		reqID, pErr := strconv.ParseInt(requestedIDStr, 10, 64)
+		if pErr == nil && reqID > 0 {
+			err = s.db.QueryRow(`
+				SELECT id, TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+				       TO_CHAR(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+				       account_number, device_id, app_version, category, user_comment,
+				       logs_archive_size, status, admin_reply,
+				       TO_CHAR(resolved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+				       COALESCE(system_info::TEXT, '{}'),
+				       logs_archive
+				FROM support_tickets
+				WHERE id = $1
+				  AND ((length($2) > 0 AND account_number = $2) OR (length($3) > 0 AND device_id = $3))
+			`, reqID, accNum, devID).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.AccountNumber, &t.DeviceID, &t.AppVersion, &t.Category, &t.UserComment, &t.LogsArchiveSize, &t.Status, &t.AdminReply, &resAt, &sysRaw, &archiveBytes)
+		}
+	}
+
+	if requestedIDStr == "" || err != nil {
+		// Look up only active ticket (status: new or in_progress)
+		err = s.db.QueryRow(`
+			SELECT id, TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       TO_CHAR(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       account_number, device_id, app_version, category, user_comment,
+			       logs_archive_size, status, admin_reply,
+			       TO_CHAR(resolved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       COALESCE(system_info::TEXT, '{}'),
+			       logs_archive
+			FROM support_tickets
+			WHERE ((length($1) > 0 AND account_number = $1)
+			   OR (length($2) > 0 AND device_id = $2))
+			  AND status IN ('new', 'in_progress', 'open')
+			ORDER BY updated_at DESC
+			LIMIT 1
+		`, accNum, devID).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.AccountNumber, &t.DeviceID, &t.AppVersion, &t.Category, &t.UserComment, &t.LogsArchiveSize, &t.Status, &t.AdminReply, &resAt, &sysRaw, &archiveBytes)
+	}
+
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":    true,
+			"has_active": false,
+			"ticket":     nil,
+			"messages":   []TicketMessageItem{},
+		})
+		return
+	}
+
+	if resAt.Valid {
+		val := resAt.String
+		t.ResolvedAt = &val
+	}
+	t.SystemInfo = json.RawMessage(sysRaw)
+
+	// Fetch messages
+	messages := make([]TicketMessageItem, 0)
+	rows, mErr := s.db.Query(`
+		SELECT id, ticket_id, sender_type, sender_name, message, attachment_type, attachment_size,
+		       TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		FROM ticket_messages
+		WHERE ticket_id = $1
+		ORDER BY created_at ASC
+	`, t.ID)
+	if mErr == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var m TicketMessageItem
+			if err := rows.Scan(&m.ID, &m.TicketID, &m.SenderType, &m.SenderName, &m.Message, &m.AttachmentType, &m.AttachmentSize, &m.CreatedAt); err == nil {
+				messages = append(messages, m)
+			}
+		}
+	}
+
+	// Fallback if ticket_messages was empty
+	if len(messages) == 0 {
+		if t.UserComment != "" {
+			messages = append(messages, TicketMessageItem{
+				ID:             1,
+				TicketID:       t.ID,
+				SenderType:     "user",
+				SenderName:     t.AccountNumber,
+				Message:        t.UserComment,
+				AttachmentType: func() string { if t.LogsArchiveSize > 0 { return "logs_archive" }; return "" }(),
+				AttachmentSize: t.LogsArchiveSize,
+				CreatedAt:      t.CreatedAt,
+			})
+		}
+		if t.AdminReply != "" {
+			messages = append(messages, TicketMessageItem{
+				ID:         2,
+				TicketID:   t.ID,
+				SenderType: "admin",
+				SenderName: "Max (Разработчик)",
+				Message:    t.AdminReply,
+				CreatedAt:  t.UpdatedAt,
+			})
+		}
+	}
+
+	hasActive := t.Status == "new" || t.Status == "in_progress" || t.Status == "open"
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"has_active": hasActive,
+		"ticket":     t,
+		"messages":   messages,
+	})
+}
+
+func (s *AppState) handleClientTicketsHistory(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Account-Number, X-Device-ID")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	accNum := strings.TrimSpace(r.URL.Query().Get("account_number"))
+	if accNum == "" {
+		accNum = strings.TrimSpace(r.Header.Get("X-Account-Number"))
+	}
+	devID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	if devID == "" {
+		devID = strings.TrimSpace(r.Header.Get("X-Device-ID"))
+	}
+
+	if accNum == "" && devID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "missing_account_or_device"})
+		return
+	}
+
+	type HistoryItem struct {
+		ID            int64  `json:"id"`
+		CreatedAt     string `json:"created_at"`
+		UpdatedAt     string `json:"updated_at"`
+		Category      string `json:"category"`
+		Status        string `json:"status"`
+		UserComment   string `json:"user_comment"`
+		AdminReply    string `json:"admin_reply"`
+		MessagesCount int    `json:"messages_count"`
+	}
+
+	items := make([]HistoryItem, 0)
+	if s.db != nil {
+		rows, err := s.db.Query(`
+			SELECT s.id, TO_CHAR(s.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       TO_CHAR(s.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       s.category, s.status, s.user_comment, s.admin_reply,
+			       COUNT(m.id) as msg_count
+			FROM support_tickets s
+			LEFT JOIN ticket_messages m ON m.ticket_id = s.id
+			WHERE (length($1) > 0 AND s.account_number = $1)
+			   OR (length($2) > 0 AND s.device_id = $2)
+			GROUP BY s.id
+			ORDER BY s.created_at DESC
+			LIMIT 50
+		`, accNum, devID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var it HistoryItem
+				if err := rows.Scan(&it.ID, &it.CreatedAt, &it.UpdatedAt, &it.Category, &it.Status, &it.UserComment, &it.AdminReply, &it.MessagesCount); err == nil {
+					items = append(items, it)
+				}
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"tickets": items,
+	})
+}
+
+func (s *AppState) handleClientTicketSendMessage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		TicketID      int64  `json:"ticket_id"`
+		IsNewTopic    bool   `json:"is_new_topic"`
+		Message       string `json:"message"`
+		AccountNumber string `json:"account_number"`
+		DeviceID      string `json:"device_id"`
+		Category      string `json:"category"`
+		AppVersion    string `json:"app_version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_json"})
+		return
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "empty_message"})
+		return
+	}
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "database_not_ready"})
+		return
+	}
+
+	tID := req.TicketID
+	if !req.IsNewTopic && tID <= 0 {
+		_ = s.db.QueryRow(`
+			SELECT id FROM support_tickets
+			WHERE ((length($1) > 0 AND account_number = $1)
+			   OR (length($2) > 0 AND device_id = $2))
+			  AND status IN ('new', 'in_progress', 'open')
+			ORDER BY updated_at DESC LIMIT 1
+		`, req.AccountNumber, req.DeviceID).Scan(&tID)
+	}
+
+	var cat = req.Category
+	if cat == "" {
+		cat = "other"
+	}
+	var ver = req.AppVersion
+	if ver == "" {
+		ver = ServerAppVersion
+	}
+
+	if tID <= 0 || req.IsNewTopic {
+		err := s.db.QueryRow(`
+			INSERT INTO support_tickets (
+				account_number, device_id, app_version, category, user_comment, status, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, 'new', NOW(), NOW())
+			RETURNING id
+		`, req.AccountNumber, req.DeviceID, ver, cat, req.Message).Scan(&tID)
+		if err != nil {
+			log.Printf("[TICKETS] Failed to create new ticket for message: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "db_error"})
+			return
+		}
+		if s.rdb != nil {
+			_ = s.rdb.Publish(context.Background(), "tickets:new", fmt.Sprintf("%d", tID)).Err()
+		}
+	} else {
+		_, _ = s.db.Exec(`
+			UPDATE support_tickets
+			SET status = CASE WHEN status = 'resolved' THEN 'in_progress' ELSE status END,
+			    updated_at = NOW()
+			WHERE id = $1
+		`, tID)
+	}
+
+	senderName := req.AccountNumber
+	if req.AccountNumber != "" {
+		_ = s.db.QueryRow(`SELECT nickname FROM accounts WHERE account_number = $1`, req.AccountNumber).Scan(&senderName)
+	}
+	if senderName == "" {
+		senderName = "Игрок #" + req.AccountNumber
+	}
+
+	var msgID int64
+	err := s.db.QueryRow(`
+		INSERT INTO ticket_messages (
+			ticket_id, sender_type, sender_name, message, created_at
+		) VALUES ($1, 'user', $2, $3, NOW())
+		RETURNING id
+	`, tID, senderName, req.Message).Scan(&msgID)
+	if err != nil {
+		log.Printf("[TICKETS] Failed to insert ticket message: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "db_error"})
+		return
+	}
+
+	if s.rdb != nil {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"ticket_id":      tID,
+			"message_id":     msgID,
+			"sender_type":    "user",
+			"sender_name":    senderName,
+			"message":        req.Message,
+			"account_number": req.AccountNumber,
+			"created_at":     time.Now().UTC().Format(time.RFC3339),
+		})
+		_ = s.rdb.Publish(context.Background(), "tickets:message", string(payload)).Err()
+		_ = s.rdb.Publish(context.Background(), "tickets:updated", fmt.Sprintf("%d", tID)).Err()
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":     true,
+		"ticket_id":   tID,
+		"ticket_code": fmt.Sprintf("TK-%04d", tID),
+		"message_id":  msgID,
+	})
+}
+
+func (s *AppState) handleClientTicketUploadLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		TicketID      int64  `json:"ticket_id"`
+		LogsGzip      string `json:"logs_gzip"`
+		AccountNumber string `json:"account_number"`
+		DeviceID      string `json:"device_id"`
+		Summary       string `json:"summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_json"})
+		return
+	}
+
+	archiveBytes, err := base64.StdEncoding.DecodeString(req.LogsGzip)
+	if err != nil || len(archiveBytes) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_logs_archive"})
+		return
+	}
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "db_not_ready"})
+		return
+	}
+
+	tID := req.TicketID
+	if tID <= 0 {
+		_ = s.db.QueryRow(`
+			SELECT id FROM support_tickets
+			WHERE (length($1) > 0 AND account_number = $1)
+			   OR (length($2) > 0 AND device_id = $2)
+			ORDER BY updated_at DESC LIMIT 1
+		`, req.AccountNumber, req.DeviceID).Scan(&tID)
+	}
+
+	if tID <= 0 {
+		_ = s.db.QueryRow(`
+			INSERT INTO support_tickets (
+				account_number, device_id, app_version, category, user_comment, logs_archive, logs_archive_size, status
+			) VALUES ($1, $2, $3, 'other', 'Диагностический отчет', $4, $5, 'new')
+			RETURNING id
+		`, req.AccountNumber, req.DeviceID, ServerAppVersion, archiveBytes, len(archiveBytes)).Scan(&tID)
+		if s.rdb != nil {
+			_ = s.rdb.Publish(context.Background(), "tickets:new", fmt.Sprintf("%d", tID)).Err()
+		}
+	} else {
+		_, _ = s.db.Exec(`
+			UPDATE support_tickets
+			SET logs_archive = $1, logs_archive_size = $2, updated_at = NOW()
+			WHERE id = $3
+		`, archiveBytes, len(archiveBytes), tID)
+	}
+
+	summaryText := req.Summary
+	if summaryText == "" {
+		summaryText = fmt.Sprintf("Прикреплен свежий диагностический архив логов (%d КБ)", (len(archiveBytes)+1023)/1024)
+	}
+
+	var msgID int64
+	_ = s.db.QueryRow(`
+		INSERT INTO ticket_messages (
+			ticket_id, sender_type, sender_name, message, attachment_type, attachment_data, attachment_size, created_at
+		) VALUES ($1, 'system', 'Диагностика WarLink', $2, 'logs_archive', $3, $4, NOW())
+		RETURNING id
+	`, tID, summaryText, archiveBytes, len(archiveBytes)).Scan(&msgID)
+
+	if s.rdb != nil {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"ticket_id":       tID,
+			"message_id":      msgID,
+			"sender_type":     "system",
+			"sender_name":     "Диагностика WarLink",
+			"message":         summaryText,
+			"attachment_type": "logs_archive",
+			"attachment_size": len(archiveBytes),
+			"created_at":      time.Now().UTC().Format(time.RFC3339),
+		})
+		_ = s.rdb.Publish(context.Background(), "tickets:message", string(payload)).Err()
+		_ = s.rdb.Publish(context.Background(), "tickets:updated", fmt.Sprintf("%d", tID)).Err()
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"ticket_id":    tID,
+		"ticket_code":  fmt.Sprintf("TK-%04d", tID),
+		"message_id":   msgID,
+		"archive_size": len(archiveBytes),
+	})
+}
+
+func (s *AppState) handleClientTicketResolve(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		TicketID int64 `json:"ticket_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TicketID <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_ticket_id"})
+		return
+	}
+
+	if s.db != nil {
+		_, _ = s.db.Exec(`
+			UPDATE support_tickets
+			SET status = 'resolved', resolved_at = NOW(), updated_at = NOW()
+			WHERE id = $1
+		`, req.TicketID)
+
+		_, _ = s.db.Exec(`
+			INSERT INTO ticket_messages (
+				ticket_id, sender_type, sender_name, message, created_at
+			) VALUES ($1, 'system', 'Система', 'Пользователь отметил вопрос как решенный.', NOW())
+		`, req.TicketID)
+
+		if s.rdb != nil {
+			_ = s.rdb.Publish(context.Background(), "tickets:updated", fmt.Sprintf("%d", req.TicketID)).Err()
+			payload, _ := json.Marshal(map[string]interface{}{
+				"ticket_id":   req.TicketID,
+				"sender_type": "system",
+				"message":     "Пользователь отметил вопрос как решенный.",
+			})
+			_ = s.rdb.Publish(context.Background(), "tickets:message", string(payload)).Err()
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"status":  "resolved",
 	})
 }
 
@@ -7283,6 +8785,13 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 				targetID = ticketDev
 			}
 
+			if replyReq.ActionURL == "" {
+				replyReq.ActionURL = "#view-support"
+			}
+			if replyReq.ActionLabel == "" {
+				replyReq.ActionLabel = "Открыть диалог"
+			}
+
 			// 1. Dispatch Notification (Rule 7)
 			if targetID != "" {
 				_, notifErr := s.db.Exec(`
@@ -7296,7 +8805,14 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 				}
 			}
 
-			// 2. Update Ticket
+			// 2. Insert into ticket_messages
+			_, _ = s.db.Exec(`
+				INSERT INTO ticket_messages (
+					ticket_id, sender_type, sender_name, message, created_at
+				) VALUES ($1, 'admin', 'Max (Разработчик)', $2, NOW())
+			`, ticketID, replyReq.Message)
+
+			// 3. Update Ticket
 			_, _ = s.db.Exec(`
 				UPDATE support_tickets
 				SET admin_reply = $1, status = $2,
@@ -7304,6 +8820,18 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 				    updated_at = NOW()
 				WHERE id = $3
 			`, replyReq.Message, newStatus, ticketID)
+			if s.rdb != nil {
+				_ = s.rdb.Publish(context.Background(), "tickets:updated", fmt.Sprintf("%d", ticketID)).Err()
+				payload, _ := json.Marshal(map[string]interface{}{
+					"ticket_id":   ticketID,
+					"sender_type": "admin",
+					"sender_name": "Max (Разработчик)",
+					"message":     replyReq.Message,
+					"status":      newStatus,
+					"created_at":  time.Now().UTC().Format(time.RFC3339),
+				})
+				_ = s.rdb.Publish(context.Background(), "tickets:message", string(payload)).Err()
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -7331,6 +8859,9 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 				    updated_at = NOW()
 				WHERE id = $2
 			`, stReq.Status, ticketID)
+			if s.rdb != nil {
+				_ = s.rdb.Publish(context.Background(), "tickets:updated", fmt.Sprintf("%d", ticketID)).Err()
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": stReq.Status})
@@ -7341,6 +8872,7 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 		var resAt sql.NullString
 		var sysRaw string
 		var archiveBytes []byte
+		messages := make([]TicketMessageItem, 0)
 		if s.db != nil {
 			err := s.db.QueryRow(`
 				SELECT id, TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
@@ -7364,15 +8896,59 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 				t.ResolvedAt = &val
 			}
 			t.SystemInfo = json.RawMessage(sysRaw)
+
+			// Fetch messages
+			rows, err := s.db.Query(`
+				SELECT id, ticket_id, sender_type, sender_name, message, attachment_type, attachment_size,
+				       TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				FROM ticket_messages
+				WHERE ticket_id = $1
+				ORDER BY created_at ASC
+			`, ticketID)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var m TicketMessageItem
+					if err := rows.Scan(&m.ID, &m.TicketID, &m.SenderType, &m.SenderName, &m.Message, &m.AttachmentType, &m.AttachmentSize, &m.CreatedAt); err == nil {
+						messages = append(messages, m)
+					}
+				}
+			}
+		}
+
+		if len(messages) == 0 {
+			if t.UserComment != "" {
+				messages = append(messages, TicketMessageItem{
+					ID:             1,
+					TicketID:       t.ID,
+					SenderType:     "user",
+					SenderName:     t.AccountNumber,
+					Message:        t.UserComment,
+					AttachmentType: func() string { if t.LogsArchiveSize > 0 { return "logs_archive" }; return "" }(),
+					AttachmentSize: t.LogsArchiveSize,
+					CreatedAt:      t.CreatedAt,
+				})
+			}
+			if t.AdminReply != "" {
+				messages = append(messages, TicketMessageItem{
+					ID:         2,
+					TicketID:   t.ID,
+					SenderType: "admin",
+					SenderName: "Max (Разработчик)",
+					Message:    t.AdminReply,
+					CreatedAt:  t.UpdatedAt,
+				})
+			}
 		}
 
 		filesManifest := listFilesInTarGz(archiveBytes)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"ticket":  t,
-			"files":   filesManifest,
+			"success":  true,
+			"ticket":   t,
+			"messages": messages,
+			"files":    filesManifest,
 		})
 	}
 }
@@ -8137,6 +9713,10 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
         </div>
 
         <div class="header-actions">
+            <a href="/admin/routing-feedback" class="btn-link" style="color:var(--accent);">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                Замеры маршрутов
+            </a>
             <a href="/dashboard" class="btn-link" target="_blank">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
                 Телеметрия
@@ -8220,13 +9800,15 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
                     </div>
                 </div>
 
-                <!-- User Comment -->
+                <!-- Conversation Stream -->
                 <div class="comment-section">
                     <div class="section-header">
-                        <span>Описание проблемы пользователем</span>
+                        <span>История переписки и контекст диалога</span>
                         <span class="card-category" id="d-category-badge">Вылет из матча</span>
                     </div>
-                    <div class="comment-body" id="d-user-comment">Текст обращения отсутствует.</div>
+                    <div class="chat-thread-container" id="d-chat-thread" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; padding:6px 0;">
+                        <div class="comment-body" id="d-user-comment">Текст обращения отсутствует.</div>
+                    </div>
                 </div>
 
                 <!-- Full Log Viewer -->
@@ -8450,6 +10032,8 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
             listEl.innerHTML = html;
         }
 
+        let selectedTicketMessages = [];
+
         async function selectTicket(id) {
             try {
                 const res = await fetch('/api/v1/admin/tickets/' + id);
@@ -8458,6 +10042,7 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
                 if (data && data.success) {
                     selectedTicket = data.ticket;
                     selectedTicketFiles = data.files || [];
+                    selectedTicketMessages = data.messages || [];
                     renderTicketDetail();
                     renderTicketList();
                 }
@@ -8479,7 +10064,7 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
 
             document.getElementById('d-account').textContent = selectedTicket.account_number || 'Не привязан';
             document.getElementById('d-device').textContent = 'dev: ' + (selectedTicket.device_id ? selectedTicket.device_id.substring(0, 16) + '...' : 'none');
-            document.getElementById('d-app-ver').textContent = selectedTicket.app_version || 'v2.1.7';
+            document.getElementById('d-app-ver').textContent = selectedTicket.app_version || 'v2.1.12';
 
             // Parse system_info
             const sys = selectedTicket.system_info || {};
@@ -8494,19 +10079,47 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
             document.getElementById('d-archive-size').textContent = Math.round((selectedTicket.logs_archive_size || 0) / 1024) + ' KB логов';
 
             document.getElementById('d-category-badge').textContent = categoryNames[selectedTicket.category] || selectedTicket.category;
-            document.getElementById('d-user-comment').textContent = selectedTicket.user_comment || 'Без комментария';
 
-            // Previous reply
-            const historyBox = document.getElementById('reply-history');
-            if (selectedTicket.admin_reply) {
-                historyBox.style.display = 'block';
-                document.getElementById('reply-history-text').textContent = selectedTicket.admin_reply;
-            } else {
-                historyBox.style.display = 'none';
+            // Render conversation thread
+            const threadEl = document.getElementById('d-chat-thread');
+            if (threadEl) {
+                if (selectedTicketMessages && selectedTicketMessages.length > 0) {
+                    let threadHtml = '';
+                    for (const m of selectedTicketMessages) {
+                        const isUser = m.sender_type === 'user';
+                        const isAdmin = m.sender_type === 'admin';
+                        const isSys = m.sender_type === 'system';
+                        const timeStr = m.created_at ? m.created_at.replace('T', ' ').replace('Z', '') : '';
+
+                        if (isSys) {
+                            threadHtml += '<div style="background:#141414; border:1px solid #222; padding:6px 10px; border-radius:2px; font-size:11px; color:#888;">' +
+                                '<span style="font-weight:600; color:#ff9800;">Система:</span> ' + escapeHtml(m.message) +
+                                '<span style="font-size:9px; color:#555; float:right;">' + timeStr + '</span></div>';
+                        } else if (isAdmin) {
+                            threadHtml += '<div style="background:#17202a; border-left:3px solid #ff5e1f; padding:8px 10px; border-radius:2px; font-size:12px; color:#e0e0e0; margin-left:16px;">' +
+                                '<div style="font-size:10px; color:#ff5e1f; font-weight:600; margin-bottom:3px;">' + escapeHtml(m.sender_name || 'Max (Разработчик)') +
+                                '<span style="font-size:9px; color:#666; float:right;">' + timeStr + '</span></div>' +
+                                '<div style="white-space:pre-wrap;">' + escapeHtml(m.message) + '</div></div>';
+                        } else {
+                            threadHtml += '<div style="background:#1c1c1c; border-left:3px solid #5865F2; padding:8px 10px; border-radius:2px; font-size:12px; color:#ddd; margin-right:16px;">' +
+                                '<div style="font-size:10px; color:#7289da; font-weight:600; margin-bottom:3px;">' + escapeHtml(m.sender_name || 'Пользователь') +
+                                '<span style="font-size:9px; color:#666; float:right;">' + timeStr + '</span></div>' +
+                                '<div style="white-space:pre-wrap;">' + escapeHtml(m.message) + '</div></div>';
+                        }
+                    }
+                    threadEl.innerHTML = threadHtml;
+                    threadEl.scrollTop = threadEl.scrollHeight;
+                } else {
+                    threadEl.innerHTML = '<div class="comment-body">' + escapeHtml(selectedTicket.user_comment || 'Без комментария') + '</div>';
+                }
             }
 
-            // Fill default reply title
+            // Fill default reply title and actions
             document.getElementById('reply-title').value = 'Решение по обращению #TK-' + String(selectedTicket.id).padStart(4, '0');
+            const actUrlEl = document.getElementById('reply-action-url');
+            if (actUrlEl) actUrlEl.value = '#view-support';
+            const actLblEl = document.getElementById('reply-action-label');
+            if (actLblEl) actLblEl.value = 'Открыть диалог';
 
             // Render log tabs
             renderLogTabs();
@@ -8752,5 +10365,604 @@ const adminTicketCenterHTML = `<!DOCTYPE html>
 </body>
 </html>
 `
+
+func (s *AppState) handleAdminRoutingFeedbackWeb(w http.ResponseWriter, r *http.Request) {
+	qKey := r.URL.Query().Get("key")
+	if qKey != "" && s.cfg.DashboardKey != "" && qKey == s.cfg.DashboardKey {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "admin_key",
+			Value:    qKey,
+			Path:     "/",
+			MaxAge:   30 * 86400,
+			HttpOnly: false,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>WarLink Routing // Доступ ограничен</title>
+    <style>
+        body { background: #0c0d10; color: #e6e8ee; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .box { background: #14161b; border: 1px solid #262a34; padding: 32px; border-radius: 2px; width: 340px; }
+        h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 16px 0; color: #FF5E1F; }
+        p { font-size: 13px; color: #8b92a5; margin-bottom: 20px; line-height: 1.4; }
+        input { width: 100%; box-sizing: border-box; background: #0a0b0d; border: 1px solid #262a34; color: #fff; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; border-radius: 2px; outline: none; }
+        input:focus { border-color: #FF5E1F; }
+        button { width: 100%; background: #FF5E1F; color: #fff; border: none; padding: 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; cursor: pointer; border-radius: 2px; }
+        button:hover { background: #e04e14; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>WARLINK ROUTING</h2>
+        <p>Для доступа к панели замеров маршрутов введите ключ администратора.</p>
+        <form method="GET" action="/admin/routing-feedback">
+            <input type="password" name="key" placeholder="Ключ авторизации" autofocus required>
+            <button type="submit">Войти в систему</button>
+        </form>
+    </div>
+</body>
+</html>`)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(adminRoutingFeedbackHTML))
+}
+
+const adminRoutingFeedbackHTML = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WarLink // Замеры и фидбек маршрутов</title>
+    <style>
+        :root {
+            --bg: #0c0d10;
+            --card-bg: #14161b;
+            --surface: #1a1d24;
+            --surface-hover: #222630;
+            --border: #262a34;
+            --text: #e6e8ee;
+            --text-muted: #8b92a5;
+            --text-dim: #5c6375;
+            --accent: #FF5E1F;
+            --green: #10b981;
+            --amber: #f59e0b;
+            --red: #ef4444;
+            --blue: #3b82f6;
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        header {
+            height: 52px;
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            flex-shrink: 0;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-title {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--text);
+        }
+
+        .brand-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            background: rgba(255, 94, 31, 0.15);
+            color: var(--accent);
+            border: 1px solid rgba(255, 94, 31, 0.3);
+            border-radius: 2px;
+        }
+
+        .header-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .nav-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: #14161b;
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.12s ease;
+        }
+
+        .nav-btn:hover {
+            color: var(--text);
+            border-color: #3b4252;
+        }
+
+        .nav-btn.active {
+            background: #1c1512;
+            border-color: var(--accent);
+            color: #ffffff;
+        }
+
+        main {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            max-width: 1400px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            border-top: 2px solid var(--border);
+        }
+
+        .stat-card.mode-moscow { border-top-color: #10b981; }
+        .stat-card.mode-stockholm { border-top-color: #3b82f6; }
+        .stat-card.mode-transit { border-top-color: var(--accent); }
+
+        .stat-card-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+
+        .stat-card-main {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .stat-card-ping {
+            font-size: 26px;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            color: var(--text);
+        }
+
+        .stat-card-unit {
+            font-size: 12px;
+            color: var(--text-dim);
+            font-family: var(--font-mono);
+        }
+
+        .stat-card-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-dim);
+            border-top: 1px solid #1c202a;
+            padding-top: 6px;
+            margin-top: 4px;
+        }
+
+        .filter-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            padding: 8px 12px;
+        }
+
+        .filter-tabs {
+            display: flex;
+            gap: 6px;
+        }
+
+        .filter-tab {
+            padding: 5px 12px;
+            background: #111317;
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .filter-tab:hover { color: var(--text); }
+        .filter-tab.active {
+            background: #1c1512;
+            border-color: var(--accent);
+            color: #ffffff;
+        }
+
+        .search-box {
+            position: relative;
+            width: 260px;
+        }
+
+        .search-input {
+            width: 100%;
+            height: 30px;
+            background: #0a0b0d;
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            padding: 0 10px;
+            color: var(--text);
+            font-size: 12px;
+            outline: none;
+        }
+
+        .search-input:focus { border-color: var(--accent); }
+
+        .table-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            background: #111317;
+            border-bottom: 1px solid var(--border);
+            padding: 9px 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-dim);
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #1a1e27;
+            font-size: 12px;
+            vertical-align: middle;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .font-mono { font-family: var(--font-mono); }
+
+        .badge-mode {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+        .badge-mode.direct_moscow { background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .badge-mode.direct_stockholm { background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .badge-mode.transit { background: rgba(255, 94, 31, 0.12); color: var(--accent); border: 1px solid rgba(255, 94, 31, 0.3); }
+
+        .badge-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .dot { width: 6px; height: 6px; border-radius: 50%; }
+        .dot-green { background: #10b981; }
+        .dot-yellow { background: #f59e0b; }
+        .dot-red { background: #ef4444; }
+
+        .badge-ping {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .ping-fast { background: #0c2b18; color: #34d399; }
+        .ping-medium { background: #0c203b; color: #60a5fa; }
+        .ping-high { background: #2f1b0c; color: #fb923c; }
+
+        .comment-text {
+            color: var(--text);
+            max-width: 400px;
+            word-break: break-word;
+            line-height: 1.35;
+        }
+
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-brand">
+            <svg class="header-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2">
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                <line x1="6" y1="6" x2="6.01" y2="6"/>
+                <line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+            <span class="brand-title">WARLINK // ОПЕРАЦИОННЫЙ ЦЕНТР</span>
+            <span class="brand-badge">ЗАМЕРЫ СЕТИ</span>
+        </div>
+        <div class="header-nav">
+            <a href="/admin/tickets" class="nav-btn">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                Тикеты пользователей
+            </a>
+            <a href="/admin/routing-feedback" class="nav-btn active">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                Замеры маршрутов
+            </a>
+            <a href="/dashboard" class="nav-btn" target="_blank">
+                Телеметрия
+            </a>
+        </div>
+    </header>
+
+    <main>
+        <!-- Summary Cards -->
+        <div class="stats-grid">
+            <div class="stat-card mode-moscow">
+                <span class="stat-card-title">Москва (RU)</span>
+                <div class="stat-card-main">
+                    <span class="stat-card-ping" id="stat-ping-moscow">—</span>
+                    <span class="stat-card-unit">мс средний пинг</span>
+                </div>
+                <div class="stat-card-meta">
+                    <span id="stat-count-moscow">0 замеров</span>
+                    <span id="stat-rate-moscow" style="color:#10b981;">— % отлично</span>
+                </div>
+            </div>
+
+            <div class="stat-card mode-stockholm">
+                <span class="stat-card-title">Стокгольм (EU)</span>
+                <div class="stat-card-main">
+                    <span class="stat-card-ping" id="stat-ping-stockholm">—</span>
+                    <span class="stat-card-unit">мс средний пинг</span>
+                </div>
+                <div class="stat-card-meta">
+                    <span id="stat-count-stockholm">0 замеров</span>
+                    <span id="stat-rate-stockholm" style="color:#3b82f6;">— % отлично</span>
+                </div>
+            </div>
+
+            <div class="stat-card mode-transit">
+                <span class="stat-card-title">Транзит (RU→EU)</span>
+                <div class="stat-card-main">
+                    <span class="stat-card-ping" id="stat-ping-transit">—</span>
+                    <span class="stat-card-unit">мс средний пинг</span>
+                </div>
+                <div class="stat-card-meta">
+                    <span id="stat-count-transit">0 замеров</span>
+                    <span id="stat-rate-transit" style="color:var(--accent);">— % отлично</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+            <div class="filter-tabs">
+                <button class="filter-tab active" data-filter="all" onclick="setFilter('all')">Все замеры (<span id="count-all">0</span>)</button>
+                <button class="filter-tab" data-filter="direct_moscow" onclick="setFilter('direct_moscow')">Москва</button>
+                <button class="filter-tab" data-filter="direct_stockholm" onclick="setFilter('direct_stockholm')">Стокгольм</button>
+                <button class="filter-tab" data-filter="transit" onclick="setFilter('transit')">Транзит</button>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <div class="search-box">
+                    <input type="text" id="search-input" class="search-input" placeholder="Поиск по аккаунту или тексту..." oninput="handleSearch(this.value)">
+                </div>
+                <button class="nav-btn" onclick="loadFeedbackData()">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                    Обновить
+                </button>
+            </div>
+        </div>
+
+        <!-- Table Card -->
+        <div class="table-card">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:130px;">Время (МСК)</th>
+                        <th style="width:140px;">Аккаунт</th>
+                        <th style="width:120px;">Маршрут</th>
+                        <th style="width:90px;">Пинг</th>
+                        <th style="width:140px;">Статус</th>
+                        <th style="width:180px;">Матч / Discord</th>
+                        <th>Комментарий игрока</th>
+                    </tr>
+                </thead>
+                <tbody id="feedback-tbody">
+                    <tr><td colspan="7" class="empty-state">Загрузка данных замеров...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <script>
+        let allItems = [];
+        let currentFilter = 'all';
+        let searchQuery = '';
+
+        async function loadFeedbackData() {
+            try {
+                const res = await fetch('/api/v1/admin/routing-feedback', { credentials: 'same-origin' });
+                if (!res.ok) {
+                    if (res.status === 401) { location.reload(); return; }
+                    throw new Error('HTTP ' + res.status);
+                }
+                const data = await res.json();
+                if (data && data.success) {
+                    renderStats(data.stats || []);
+                    allItems = data.items || [];
+                    renderTable();
+                }
+            } catch(e) {
+                console.error('Feedback fetch error:', e);
+            }
+        }
+
+        function renderStats(stats) {
+            const map = {};
+            for (const st of stats) {
+                map[st.mode] = st;
+            }
+
+            const moscow = map['direct_moscow'] || { count: 0, avg_ping: 0, great_pct: 0 };
+            const stockholm = map['direct_stockholm'] || { count: 0, avg_ping: 0, great_pct: 0 };
+            const transit = map['transit'] || { count: 0, avg_ping: 0, great_pct: 0 };
+
+            document.getElementById('stat-ping-moscow').textContent = moscow.avg_ping ? Math.round(moscow.avg_ping) : '—';
+            document.getElementById('stat-count-moscow').textContent = moscow.count + ' замеров';
+            document.getElementById('stat-rate-moscow').textContent = (moscow.great_pct || 0) + '% отлично';
+
+            document.getElementById('stat-ping-stockholm').textContent = stockholm.avg_ping ? Math.round(stockholm.avg_ping) : '—';
+            document.getElementById('stat-count-stockholm').textContent = stockholm.count + ' замеров';
+            document.getElementById('stat-rate-stockholm').textContent = (stockholm.great_pct || 0) + '% отлично';
+
+            document.getElementById('stat-ping-transit').textContent = transit.avg_ping ? Math.round(transit.avg_ping) : '—';
+            document.getElementById('stat-count-transit').textContent = transit.count + ' замеров';
+            document.getElementById('stat-rate-transit').textContent = (transit.great_pct || 0) + '% отлично';
+        }
+
+        function setFilter(mode) {
+            currentFilter = mode;
+            document.querySelectorAll('.filter-tab').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-filter') === mode);
+            });
+            renderTable();
+        }
+
+        function handleSearch(q) {
+            searchQuery = (q || '').trim().toLowerCase();
+            renderTable();
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('feedback-tbody');
+            const countAllEl = document.getElementById('count-all');
+            if (countAllEl) countAllEl.textContent = allItems.length;
+
+            const filtered = allItems.filter(it => {
+                if (currentFilter !== 'all' && it.route_mode !== currentFilter) return false;
+                if (searchQuery) {
+                    const acc = (it.account_number || '').toLowerCase();
+                    const comm = (it.user_comment || '').toLowerCase();
+                    if (!acc.includes(searchQuery) && !comm.includes(searchQuery)) return false;
+                }
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Нет данных замеров по выбранному фильтру</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(it => {
+                const modeLabel = it.route_mode === 'direct_moscow' ? 'Москва (RU)' :
+                                 (it.route_mode === 'direct_stockholm' ? 'Стокгольм (EU)' : 'Транзит');
+                
+                let pingClass = 'ping-fast';
+                if (it.in_game_ping > 80) pingClass = 'ping-high';
+                else if (it.in_game_ping > 40) pingClass = 'ping-medium';
+
+                let statusDot = 'dot-green';
+                let statusText = 'Отлично';
+                if (it.status === 'has_issues') { statusDot = 'dot-yellow'; statusText = 'Проблемы'; }
+                else if (it.status === 'cant_connect') { statusDot = 'dot-red'; statusText = 'Не подключается'; }
+
+                let matchLabel = 'Без фризов';
+                if (it.match_quality === 'microstutter') matchLabel = 'Микрофризы';
+                else if (it.match_quality === 'disconnected') matchLabel = 'Вылет из матча';
+
+                let discordLabel = 'Чистый войс';
+                if (it.discord_status === 'robovoice') discordLabel = 'Робовойс';
+                else if (it.discord_status === 'no_connection') discordLabel = 'Войс офлайн';
+                else if (it.discord_status === 'not_used') discordLabel = 'Без Discord';
+
+                const commentSafe = escapeHtml(it.user_comment || '—');
+
+                return '<tr>' +
+                    '<td class="font-mono" style="color:var(--text-muted); font-size:11px;">' + escapeHtml(it.created_at) + '</td>' +
+                    '<td><span class="font-mono" style="color:var(--accent); font-weight:600;">' + escapeHtml(it.account_number || '#—') + '</span></td>' +
+                    '<td><span class="badge-mode ' + escapeHtml(it.route_mode) + '">' + modeLabel + '</span></td>' +
+                    '<td><span class="badge-ping ' + pingClass + '">' + (it.in_game_ping ? it.in_game_ping + ' мс' : '—') + '</span></td>' +
+                    '<td><span class="badge-status"><span class="dot ' + statusDot + '"></span>' + statusText + '</span></td>' +
+                    '<td style="color:var(--text-muted); font-size:11px;">' + matchLabel + ' · ' + discordLabel + '</td>' +
+                    '<td class="comment-text">' + commentSafe + '</td>' +
+                '</tr>';
+            }).join('');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        loadFeedbackData();
+        setInterval(loadFeedbackData, 15000);
+    </script>
+</body>
+</html>
+`
+
 
 

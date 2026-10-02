@@ -199,6 +199,12 @@ func (m *Meter) sniffLoop() {
 		return
 	}
 
+	// Limit queue retention so packets older than 100ms are discarded instead of causing latency spikes
+	if procSetParam, sErr := dll.FindProc("WinDivertSetParam"); sErr == nil {
+		_, _, _ = procSetParam.Call(handle, 1, 100)  // WINDIVERT_PARAM_QUEUE_TIME = 100ms
+		_, _, _ = procSetParam.Call(handle, 0, 2048) // WINDIVERT_PARAM_QUEUE_LENGTH = 2048 packets
+	}
+
 	m.mu.Lock()
 	m.handle = handle
 	m.mu.Unlock()

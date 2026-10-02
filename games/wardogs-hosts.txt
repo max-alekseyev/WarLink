@@ -27,7 +27,6 @@ domain: vivox.com
 domain: epicgames.dev
 domain: epicgames.com
 domain: unrealengine.com
-domain: dynamodb.eu-north-1.amazonaws.com
 domain: amazonaws.com
 domain: akamaitechnologies.com
 domain: akamaiedge.net

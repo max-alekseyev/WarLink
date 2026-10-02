@@ -246,8 +246,13 @@ func (db *Database) GetNextUnlock(role string, currentLevel int) *NextUnlockInfo
 
 // GetNextUnlocksForAllRoles computes next unlocks for all 6 roles + career.
 func (db *Database) GetNextUnlocksForAllRoles(levels map[string]int) map[string]*NextUnlockInfo {
-	result := make(map[string]*NextUnlockInfo, len(db.roles))
-	for _, role := range db.roles {
+	db.mu.RLock()
+	rolesCopy := make([]string, len(db.roles))
+	copy(rolesCopy, db.roles)
+	db.mu.RUnlock()
+
+	result := make(map[string]*NextUnlockInfo, len(rolesCopy))
+	for _, role := range rolesCopy {
 		lvl := levels[role]
 		result[role] = db.GetNextUnlock(role, lvl)
 	}

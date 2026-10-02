@@ -1,8 +1,8 @@
-<!-- VIEW: Dedicated Account Settings Page -->
+<!-- VIEW: Dedicated Account Settings Page (Modern 2026 Tabbed Layout) -->
 <div id="view-account" class="details-view">
     <div class="details-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-            <span class="details-title">Настройки аккаунта</span>
+            <span class="details-title">Профиль и аккаунт</span>
             <div class="profile-tier-badge" id="profile-tier-badge"><span class="skeleton" style="width: 130px; height: 12px;"></span></div>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
@@ -10,132 +10,244 @@
             <button class="details-close" onclick="toggleAccount(event)">Закрыть</button>
         </div>
     </div>
-    <div class="details-content">
-        <div class="setting-group">
-            <span class="setting-group-title">ПРОФИЛЬ И НИКНЕЙМ</span>
-            <div class="profile-card">
-                <div class="profile-avatar-row">
-                    <div class="profile-avatar-wrap" onclick="triggerAvatarUpload()" title="Нажмите, чтобы загрузить аватарку">
-                        <img id="profile-avatar-img" src="" alt="" class="profile-avatar" style="display:none;">
-                        <div id="profile-avatar-placeholder" class="profile-avatar-placeholder">
-                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
-                                <circle cx="12" cy="7" r="4"/>
-                            </svg>
-                        </div>
-                        <input type="file" id="input-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="handleAvatarFileSelected(event)">
+
+    <!-- Hero Identity Card -->
+    <div class="profile-hero-card">
+        <div class="profile-avatar-wrap" onclick="triggerAvatarUpload()" title="Нажмите, чтобы загрузить аватарку">
+            <img id="profile-avatar-img" src="" alt="" class="profile-avatar" style="display:none;">
+            <div id="profile-avatar-placeholder" class="profile-avatar-placeholder">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                </svg>
+            </div>
+            <div class="profile-avatar-hover-hint">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <input type="file" id="input-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="handleAvatarFileSelected(event)">
+        </div>
+
+        <div class="profile-hero-info">
+            <div class="profile-hero-top">
+                <span id="hero-display-nickname" class="profile-hero-nick">Боец</span>
+                <span id="hero-tier-tag" class="profile-hero-badge">Боец WarLink</span>
+            </div>
+            <div class="profile-hero-sub">
+                <span class="info-label" style="font-size:11px;">Аккаунт:</span>
+                <span id="val-account-number" class="info-value font-mono" style="letter-spacing: 0.5px;"><span class="skeleton" style="width: 140px; height: 11px;"></span></span>
+                <button class="btn-copy-code" onclick="copyAccountNumber()" title="Скопировать номер аккаунта">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Segmented Navigation Tabs -->
+    <div class="account-nav-tabs">
+        <button id="tab-btn-profile" class="acc-tab-btn active" onclick="switchAccountTab('profile')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Персонализация
+        </button>
+        <button id="tab-btn-discord" class="acc-tab-btn" onclick="switchAccountTab('discord')">
+            <svg width="14" height="11" viewBox="0 0 126.644 96" fill="currentColor"><path d="M81.15,0c-1.2376,2.1973-2.3489,4.4704-3.3591,6.794-9.5975-1.4396-19.3718-1.4396-28.9945,0-.985-2.3236-2.1216-4.5967-3.3591-6.794-9.0166,1.5407-17.8059,4.2431-26.1405,8.0568C2.779,32.5304-1.6914,56.3725.5312,79.8863c9.6732,7.1476,20.5083,12.603,32.0505,16.0884,2.6014-3.4854,4.8998-7.1981,6.8698-11.0623-3.738-1.3891-7.3497-3.1318-10.8098-5.1523.9092-.6567,1.7932-1.3386,2.6519-1.9953,20.281,9.547,43.7696,9.547,64.0758,0,.8587.7072,1.7427,1.3891,2.6519,1.9953-3.4601,2.0457-7.0718,3.7632-10.835,5.1776,1.97,3.8642,4.2683,7.5769,6.8698,11.0623,11.5419-3.4854,22.3769-8.9156,32.0509-16.0631,2.626-27.2771-4.496-50.9172-18.817-71.8548C98.9811,4.2684,90.1918,1.5659,81.1752.0505l-.0252-.0505ZM42.2802,65.4144c-6.2383,0-11.4159-5.6575-11.4159-12.6535s4.9755-12.6788,11.3907-12.6788,11.5169,5.708,11.4159,12.6788c-.101,6.9708-5.026,12.6535-11.3907,12.6535ZM84.3576,65.4144c-6.2637,0-11.3907-5.6575-11.3907-12.6535s4.9755-12.6788,11.3907-12.6788,11.4917,5.708,11.3906,12.6788c-.101,6.9708-5.026,12.6535-11.3906,12.6535Z"/></svg>
+            Discord & Связка
+            <span id="tab-discord-dot" class="tab-indicator-dot" style="display:none;"></span>
+        </button>
+        <button id="tab-btn-security" class="acc-tab-btn" onclick="switchAccountTab('security')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+            Устройства & ПК
+        </button>
+        <button id="tab-btn-billing" class="acc-tab-btn" onclick="switchAccountTab('billing')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+            Поддержка шлюза
+        </button>
+    </div>
+
+    <div class="details-content" style="padding-top: 10px;">
+        <!-- TAB 1: Персонализация -->
+        <div id="acc-panel-profile" class="acc-tab-panel active">
+            <div class="setting-group" style="margin-bottom: 10px;">
+                <span class="setting-group-title">ИГРОВОЙ ПОЗЫВНОЙ</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <input type="text" id="input-nickname" class="form-input form-input-sm" placeholder="Никнейм игрока" maxlength="20" style="flex: 1;">
+                    <button id="btn-save-nickname" class="btn btn-secondary btn-sm" onclick="saveNickname()">Сохранить</button>
+                </div>
+                <div class="profile-acc-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                    Отображается на Доске почёта спонсоров и в игровом сообществе
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">НАСТРОЙКА ДОСЬЕ ОПЕРАТОРА</span>
+                    <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openMyDossier()" title="Открыть предварительный просмотр боевого досье">Открыть досье</button>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Профиль Steam (ссылка или SteamID64):</span>
+                    <div style="margin-top:4px;">
+                        <input type="text" id="input-dossier-steam" class="form-input form-input-sm font-mono" placeholder="https://steamcommunity.com/id/... или SteamID64" maxlength="120">
                     </div>
-                    <div class="profile-meta-wrap">
+                </div>
+                <div class="setting-row" style="margin-top: 8px;">
+                    <span class="setting-label">Статус / девиз в досье:</span>
+                    <div style="margin-top:4px;">
+                        <input type="text" id="input-dossier-motto" class="form-input form-input-sm" placeholder="Ваш статус или описание в досье" maxlength="100">
+                    </div>
+                </div>
+                <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+                    <button id="btn-save-dossier" class="btn btn-secondary btn-sm" onclick="saveDossierSettings()">Сохранить данные досье</button>
+                </div>
+                <div class="setting-row" style="margin-top: 10px; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                        <input type="checkbox" id="check-dossier-hide-amount" onchange="toggleHideDonationAmount(this.checked)" style="accent-color: var(--action); cursor:pointer;">
+                        <span style="font-size: 11px; color: var(--text);">Скрыть сумму поддержки в досье (засекретить гриф)</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: Discord & Связка -->
+        <div id="acc-panel-discord" class="acc-tab-panel" style="display:none;">
+            <!-- Unlinked State Card -->
+            <div id="discord-card-unlinked" class="discord-card">
+                <div class="discord-card-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <svg width="20" height="15" viewBox="0 0 126.644 96" fill="#5865F2"><path d="M81.15,0c-1.2376,2.1973-2.3489,4.4704-3.3591,6.794-9.5975-1.4396-19.3718-1.4396-28.9945,0-.985-2.3236-2.1216-4.5967-3.3591-6.794-9.0166,1.5407-17.8059,4.2431-26.1405,8.0568C2.779,32.5304-1.6914,56.3725.5312,79.8863c9.6732,7.1476,20.5083,12.603,32.0505,16.0884,2.6014-3.4854,4.8998-7.1981,6.8698-11.0623-3.738-1.3891-7.3497-3.1318-10.8098-5.1523.9092-.6567,1.7932-1.3386,2.6519-1.9953,20.281,9.547,43.7696,9.547,64.0758,0,.8587.7072,1.7427,1.3891,2.6519,1.9953-3.4601,2.0457-7.0718,3.7632-10.835,5.1776,1.97,3.8642,4.2683,7.5769,6.8698,11.0623,11.5419-3.4854,22.3769-8.9156,32.0509-16.0631,2.626-27.2771-4.496-50.9172-18.817-71.8548C98.9811,4.2684,90.1918,1.5659,81.1752.0505l-.0252-.0505ZM42.2802,65.4144c-6.2383,0-11.4159-5.6575-11.4159-12.6535s4.9755-12.6788,11.3907-12.6788,11.5169,5.708,11.4159,12.6788c-.101,6.9708-5.026,12.6535-11.3907,12.6535ZM84.3576,65.4144c-6.2637,0-11.3907-5.6575-11.3907-12.6535s4.9755-12.6788,11.3907-12.6788,11.4917,5.708,11.3906,12.6788c-.101,6.9708-5.026,12.6535-11.3906,12.6535Z"/></svg>
+                        <span class="setting-group-title" style="margin-bottom:0; font-size:12px;">СИНХРОНИЗАЦИЯ С DISCORD</span>
+                    </div>
+                    <span class="badge-status-neutral">Не привязан</span>
+                </div>
+                <div class="discord-card-body">
+                    <div style="font-size:11px; color:var(--text-muted); line-height:1.5;">
+                        Привяжите ваш Discord для автоматического получения ролей уровня WARDOGS, классовых ролей, статуса спонсора и ответов по баг-репортам.
+                    </div>
+
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:12px;">
                         <div style="display:flex; align-items:center; gap:8px;">
-                            <input type="text" id="input-nickname" class="form-input form-input-sm" placeholder="Никнейм игрока" maxlength="20">
-                            <button id="btn-save-nickname" class="btn btn-secondary btn-sm" onclick="saveNickname()">Сохранить</button>
+                            <button id="btn-discord-link-code" class="btn btn-secondary btn-sm" onclick="requestDiscordLinkCode()">Получить код для Discord</button>
+                            <button class="btn btn-secondary btn-sm" style="display:inline-flex; align-items:center; gap:5px;" onclick="openDiscordCommunity()" title="Перейти на официальный сервер WarLink">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                                Наш Discord-сервер
+                            </button>
                         </div>
-                        <div class="profile-acc-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-                            Отображается на Доске почёта спонсоров и в игровом сообществе
+
+                        <div id="discord-link-code-result" class="discord-code-box" style="display:none;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:11px; color:var(--text-muted);">Код привязки:</span>
+                                <span id="val-discord-code" class="discord-code-val font-mono" onclick="copyDiscordCode()" title="Нажмите, чтобы скопировать код">------</span>
+                                <button class="btn-copy-code" onclick="copyDiscordCode()" title="Скопировать код в буфер">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                </button>
+                                <span id="val-discord-expires" style="font-size:10px; color:var(--text-muted);">(15 мин)</span>
+                            </div>
+                            <div style="font-size:10px; color:var(--text-muted); margin-top:4px;">
+                                Код автоматически скопирован. Перейдите в канал <strong>#привязка-warlink</strong> на сервере и нажмите кнопку «Привязать».
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="setting-info-row" style="margin-top: 10px;">
-                <span class="info-label">Номер аккаунта:</span>
-                <span style="display:flex; align-items:center; gap:8px;">
-                    <span id="val-account-number" class="info-value font-mono" style="letter-spacing: 0.5px;"><span class="skeleton" style="width: 140px; height: 11px;"></span></span>
-                    <button class="btn-link" style="font-size: 11px; cursor: pointer;" onclick="copyAccountNumber()" title="Скопировать номер">копировать</button>
-                </span>
-            </div>
-        </div>
-
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">НАСТРОЙКА ДОСЬЕ</span>
-                <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openMyDossier()" title="Открыть предварительный просмотр боевого досье">Открыть досье</button>
-            </div>
-            <div class="setting-row">
-                <span class="setting-label">Профиль Steam (ссылка или ID):</span>
-                <div style="margin-top:4px;">
-                    <input type="text" id="input-dossier-steam" class="form-input form-input-sm font-mono" placeholder="https://steamcommunity.com/id/... или SteamID64" maxlength="120">
-                </div>
-                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                    Отображается в вашем тактическом досье спонсора со статусом верификации.
-                </div>
-            </div>
-            <div class="setting-row" style="margin-top: 8px;">
-                <span class="setting-label">Описание:</span>
-                <div style="margin-top:4px;">
-                    <input type="text" id="input-dossier-motto" class="form-input form-input-sm" placeholder="Ваш статус или описание в досье" maxlength="100">
-                </div>
-                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                    Впечатывается в блок описания бланка досье на частоте отряда.
-                </div>
-            </div>
-            <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
-                <button id="btn-save-dossier" class="btn btn-secondary btn-sm" onclick="saveDossierSettings()">Сохранить описание</button>
-            </div>
-            <div class="setting-row" style="margin-top: 10px; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                    <input type="checkbox" id="check-dossier-hide-amount" onchange="toggleHideDonationAmount(this.checked)" style="accent-color: var(--action); cursor:pointer;">
-                    <span style="font-size: 11px; color: var(--text);">Скрыть сумму поддержки в досье (засекретить гриф)</span>
-                </label>
-                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                    При активации сумма взноса маскируется перманентным тактическим маркером цензуры.
-                </div>
-            </div>
-        </div>
-
-        <div class="setting-group">
-            <span class="setting-group-title">ДАННЫЕ АККАУНТА И УСТРОЙСТВА</span>
-            <div class="setting-info-row">
-                <span class="info-label">Дата регистрации:</span>
-                <span id="val-account-created" class="info-value font-mono"><span class="skeleton" style="width: 80px; height: 11px;"></span></span>
-            </div>
-            <div class="setting-info-row" style="margin-top: 6px;">
-                <span class="info-label">Привязанные устройства:</span>
-                <span style="display:flex; align-items:center; gap:8px;">
-                    <span id="val-account-devices" class="info-value font-mono"><span class="skeleton" style="width: 35px; height: 11px;"></span></span>
-                    <button id="btn-reset-devices" class="btn-link" style="font-size: 11px; cursor: pointer; color: var(--text-muted); display:none;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие</button>
-                </span>
-            </div>
-            <div class="setting-info-row" style="margin-top: 6px;">
-                <span class="info-label">Срок действия спонсорства:</span>
-                <span id="val-account-sponsor-until" class="info-value"><span class="skeleton" style="width: 90px; height: 11px;"></span></span>
-            </div>
-            <div class="setting-info-row" style="margin-top: 6px;">
-                <span class="info-label">Всего поддержано:</span>
-                <span id="val-account-total-donated" class="info-value font-mono" style="color: var(--action); font-weight: 600;"><span class="skeleton" style="width: 45px; height: 11px;"></span></span>
-            </div>
-
-            <div class="setting-row" style="margin-top: 10px;">
-                <span class="setting-label">Связать с другим ПК (перенос аккаунта):</span>
-                <div style="display:flex; gap:6px; margin-top:4px;">
-                    <input type="text" id="input-link-account" class="form-input form-input-sm font-mono" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19">
-                    <button class="btn btn-secondary btn-sm" onclick="linkAccountNumber()">Привязать</button>
-                </div>
-                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                    Введите 16-значный номер вашего основного ПК для переноса статуса спонсора.
-                </div>
-            </div>
-        </div>
-
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span class="setting-group-title" style="margin-bottom: 0;">ИСТОРИЯ ПОДДЕРЖКИ ШЛЮЗА</span>
-                <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openDonateModal(event)">Поддержать сервер</button>
-            </div>
-            <div id="account-donations-list" class="account-donations-list" style="margin-top: 8px;">
-                <div class="donation-row skeleton-card">
-                    <div class="donation-left" style="gap: 8px;">
-                        <div class="skeleton" style="width: 70px; height: 11px;"></div>
-                        <div class="skeleton" style="width: 45px; height: 11px;"></div>
+            <!-- Linked State Card -->
+            <div id="discord-card-linked" class="discord-card" style="display:none;">
+                <div class="discord-card-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <svg width="20" height="15" viewBox="0 0 126.644 96" fill="#5865F2"><path d="M81.15,0c-1.2376,2.1973-2.3489,4.4704-3.3591,6.794-9.5975-1.4396-19.3718-1.4396-28.9945,0-.985-2.3236-2.1216-4.5967-3.3591-6.794-9.0166,1.5407-17.8059,4.2431-26.1405,8.0568C2.779,32.5304-1.6914,56.3725.5312,79.8863c9.6732,7.1476,20.5083,12.603,32.0505,16.0884,2.6014-3.4854,4.8998-7.1981,6.8698-11.0623-3.738-1.3891-7.3497-3.1318-10.8098-5.1523.9092-.6567,1.7932-1.3386,2.6519-1.9953,20.281,9.547,43.7696,9.547,64.0758,0,.8587.7072,1.7427,1.3891,2.6519,1.9953-3.4601,2.0457-7.0718,3.7632-10.835,5.1776,1.97,3.8642,4.2683,7.5769,6.8698,11.0623,11.5419-3.4854,22.3769-8.9156,32.0509-16.0631,2.626-27.2771-4.496-50.9172-18.817-71.8548C98.9811,4.2684,90.1918,1.5659,81.1752.0505l-.0252-.0505ZM42.2802,65.4144c-6.2383,0-11.4159-5.6575-11.4159-12.6535s4.9755-12.6788,11.3907-12.6788,11.5169,5.708,11.4159,12.6788c-.101,6.9708-5.026,12.6535-11.3907,12.6535ZM84.3576,65.4144c-6.2637,0-11.3907-5.6575-11.3907-12.6535s4.9755-12.6788,11.3907-12.6788,11.4917,5.708,11.3906,12.6788c-.101,6.9708-5.026,12.6535-11.3906,12.6535Z"/></svg>
+                        <span class="setting-group-title" style="margin-bottom:0; font-size:12px;">DISCORD ПРИВЯЗАН</span>
                     </div>
-                    <div class="skeleton" style="width: 62px; height: 16px; border-radius: 2px;"></div>
+                    <span class="badge-status-active">
+                        <span class="live-status-dot"></span>
+                        Подключен
+                    </span>
                 </div>
-                <div class="donation-row skeleton-card">
-                    <div class="donation-left" style="gap: 8px;">
-                        <div class="skeleton" style="width: 70px; height: 11px;"></div>
-                        <div class="skeleton" style="width: 45px; height: 11px;"></div>
+                <div class="discord-card-body">
+                    <div class="discord-linked-row">
+                        <span class="info-label">Пользователь:</span>
+                        <span id="discord-linked-tag" class="info-value font-mono" style="color:var(--text-bright); font-weight:600;">@username</span>
                     </div>
-                    <div class="skeleton" style="width: 62px; height: 16px; border-radius: 2px;"></div>
+                    <div class="discord-linked-row" style="margin-top:6px;">
+                        <span class="info-label">Синхронизация:</span>
+                        <span class="info-value" style="font-size:11px; color:var(--action);">Автоматически при обновлении прогрессии</span>
+                    </div>
+                    <div class="discord-roles-badges" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;">
+                        <span class="role-pill">Боец WarLink</span>
+                        <span id="role-pill-sponsor" class="role-pill role-pill-sponsor" style="display:none;">Спонсор WarLink</span>
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; border-top:1px solid var(--border-subtle); padding-top:10px;">
+                        <button class="btn btn-secondary btn-sm" onclick="openDiscordCommunity()" style="display:inline-flex; align-items:center; gap:5px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                            Открыть Discord
+                        </button>
+                        <button class="btn-link" style="font-size:11px; color:var(--text-muted); cursor:pointer;" onclick="unlinkDiscordAccount()">Отвязать Discord</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: Устройства & ПК -->
+        <div id="acc-panel-security" class="acc-tab-panel" style="display:none;">
+            <div class="setting-group" style="margin-bottom: 10px;">
+                <span class="setting-group-title">АКТИВНЫЕ СЕССИИ И ДАННЫЕ</span>
+                <div class="setting-info-row">
+                    <span class="info-label">Дата регистрации:</span>
+                    <span id="val-account-created" class="info-value font-mono"><span class="skeleton" style="width: 80px; height: 11px;"></span></span>
+                </div>
+                <div class="setting-info-row" style="margin-top: 6px;">
+                    <span class="info-label">Привязанные ПК:</span>
+                    <span style="display:flex; align-items:center; gap:8px;">
+                        <span id="val-account-devices" class="info-value font-mono"><span class="skeleton" style="width: 35px; height: 11px;"></span></span>
+                        <button id="btn-reset-devices" class="btn-link" style="font-size: 11px; cursor: pointer; color: var(--text-muted); display:none;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие</button>
+                    </span>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <span class="setting-group-title">ПЕРЕНОС АККАУНТА НА ДРУГОЙ ПК</span>
+                <div class="setting-row">
+                    <span class="setting-label">Привязать 16-значный номер основного аккаунта:</span>
+                    <div style="display:flex; gap:6px; margin-top:4px;">
+                        <input type="text" id="input-link-account" class="form-input form-input-sm font-mono" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19">
+                        <button class="btn btn-secondary btn-sm" onclick="linkAccountNumber()">Привязать</button>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                        Введите номер вашего основного ПК для синхронизации спонсорского статуса и досье.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: Поддержка шлюза -->
+        <div id="acc-panel-billing" class="acc-tab-panel" style="display:none;">
+            <div class="setting-group" style="margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">СТАТУС ПОДДЕРЖКИ</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openDonateModal(event)">Поддержать сервер</button>
+                        <span style="color: #444; font-size: 10px;">·</span>
+                        <button class="btn-link" style="font-size: 11px; color: #ff8a50; cursor: pointer;" onclick="openDonateModalWithTab('boosty', event)">Донат на Boosty</button>
+                    </div>
+                </div>
+                <div class="setting-info-row">
+                    <span class="info-label">Срок действия спонсорства:</span>
+                    <span id="val-account-sponsor-until" class="info-value"><span class="skeleton" style="width: 90px; height: 11px;"></span></span>
+                </div>
+                <div class="setting-info-row" style="margin-top: 6px;">
+                    <span class="info-label">Всего поддержано:</span>
+                    <span id="val-account-total-donated" class="info-value font-mono" style="color: var(--action); font-weight: 600;"><span class="skeleton" style="width: 45px; height: 11px;"></span></span>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <span class="setting-group-title">ИСТОРИЯ ВЗНОСОВ</span>
+                <div id="account-donations-list" class="account-donations-list" style="margin-top: 6px;">
+                    <div class="donation-row skeleton-card">
+                        <div class="donation-left" style="gap: 8px;">
+                            <div class="skeleton" style="width: 70px; height: 11px;"></div>
+                            <div class="skeleton" style="width: 45px; height: 11px;"></div>
+                        </div>
+                        <div class="skeleton" style="width: 62px; height: 16px; border-radius: 2px;"></div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -58,6 +58,9 @@ type ProfileInfo struct {
 	DeviceCount     int                   `json:"device_count"`
 	Donations       []DonationHistoryItem `json:"donations"`
 	Progression     json.RawMessage       `json:"progression,omitempty"`
+	DiscordID       string                `json:"discord_id"`
+	DiscordTag      string                `json:"discord_tag"`
+	IsDiscordLinked bool                  `json:"is_discord_linked"`
 }
 
 // GetNotifications fetches in-app notifications for the current account and device.
@@ -399,3 +402,78 @@ func CreateCustomDonationWithMethod(account, device string, amountRub int, payme
 	}
 	return res.URL, nil
 }
+
+// GetDiscordLinkCode requests a temporary 6-digit code for linking Discord account
+func GetDiscordLinkCode(account, device string) (string, int, error) {
+	serverAPI := GetServerAPI()
+	if serverAPI == "" {
+		return "", 0, fmt.Errorf("адрес шлюза не настроен")
+	}
+
+	payload, _ := json.Marshal(map[string]string{
+		"account_number": account,
+		"device_id":      device,
+	})
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(fmt.Sprintf("%s/api/v1/profile/discord/link-code", serverAPI), "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("сервер вернул статус %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Success   bool   `json:"success"`
+		Code      string `json:"code"`
+		ExpiresIn int    `json:"expires_in"`
+		Error     string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", 0, err
+	}
+	if !res.Success {
+		return "", 0, fmt.Errorf("%s", res.Error)
+	}
+	return res.Code, res.ExpiresIn, nil
+}
+
+// UnlinkDiscord requests server to unlink Discord account from WarLink profile
+func UnlinkDiscord(account, device string) error {
+	serverAPI := GetServerAPI()
+	if serverAPI == "" {
+		return fmt.Errorf("адрес шлюза не настроен")
+	}
+
+	payload, _ := json.Marshal(map[string]string{
+		"account_number": account,
+		"device_id":      device,
+	})
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(fmt.Sprintf("%s/api/v1/profile/discord/unlink", serverAPI), "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("сервер вернул статус %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return err
+	}
+	if !res.Success && res.Error != "" {
+		return fmt.Errorf("%s", res.Error)
+	}
+	return nil
+}
+

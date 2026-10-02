@@ -28,10 +28,17 @@ type GameProfile struct {
 
 var DefaultServerIP = "138.124.103.99"
 
+const (
+	RouteModeTransit         = "transit"          // 1. Клиент — Москва — Стокгольм — Игра
+	RouteModeDirectStockholm = "direct_stockholm" // 2. Клиент — Стокгольм — Игра
+	RouteModeDirectMoscow    = "direct_moscow"    // 3. Клиент — Москва — Игра
+)
+
 type Config struct {
 	mu                  sync.RWMutex  `json:"-"`
 	AutolaunchGame      bool          `json:"autolaunch_game"`
 	FreeInternetEnabled bool          `json:"free_internet_enabled"`
+	NetworkRouteMode    string        `json:"network_route_mode,omitempty"`
 	SelectedGameID      string        `json:"selected_game_id"`
 	SelectedAlt         string        `json:"selected_alt,omitempty"`
 	BenchmarkCompleted  bool          `json:"benchmark_completed,omitempty"`
@@ -518,3 +525,25 @@ func (c *Config) GetGames() []GameProfile {
 	copy(res, c.Games)
 	return res
 }
+
+func (c *Config) GetNetworkRouteMode() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.NetworkRouteMode != "" {
+		return c.NetworkRouteMode
+	}
+	return RouteModeTransit
+}
+
+func (c *Config) SetNetworkRouteMode(mode string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch mode {
+	case RouteModeDirectStockholm, RouteModeDirectMoscow:
+		c.NetworkRouteMode = mode
+	default:
+		c.NetworkRouteMode = RouteModeTransit
+	}
+	_ = c.saveLocked()
+}
+

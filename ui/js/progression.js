@@ -719,16 +719,32 @@
 
     // --- Screenshot Parsing via Clipboard (Ctrl+V) & File Upload ---
     async function handleGlobalPaste(e) {
-        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-        if (!items) return;
+        const clipboardData = e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+        if (!clipboardData) return;
 
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-                const blob = items[i].getAsFile();
-                if (blob) {
+        // 1. Check if files were pasted (e.g. copied from Explorer / Desktop)
+        if (clipboardData.files && clipboardData.files.length > 0) {
+            for (let i = 0; i < clipboardData.files.length; i++) {
+                const f = clipboardData.files[i];
+                if ((f.type && f.type.startsWith('image/')) || /\.(png|jpe?g|bmp|webp)$/i.test(f.name)) {
                     e.preventDefault();
-                    await uploadScreenshotBlob(blob);
+                    await uploadScreenshotBlob(f);
                     return;
+                }
+            }
+        }
+
+        // 2. Check clipboard items (e.g. PrintScreen / Snipping Tool / copied image)
+        const items = clipboardData.items;
+        if (items) {
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type && items[i].type.indexOf('image') !== -1) {
+                    const blob = items[i].getAsFile();
+                    if (blob) {
+                        e.preventDefault();
+                        await uploadScreenshotBlob(blob);
+                        return;
+                    }
                 }
             }
         }

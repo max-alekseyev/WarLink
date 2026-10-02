@@ -1,0 +1,141 @@
+<!-- MODAL: Multi-Step Routing & Ping Feedback (Dark Cloudflare Inspired Utility) -->
+<div id="modal-routing-feedback" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card rf-modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="modal-header rf-header">
+            <div class="rf-header-left">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                    <line x1="6" y1="6" x2="6.01" y2="6"/>
+                    <line x1="6" y1="18" x2="6.01" y2="18"/>
+                </svg>
+                <span class="modal-title rf-title">ТЕСТ МАРШРУТОВ И ПИНГА</span>
+                <span id="rf-step-badge" class="rf-sub-badge font-mono">ШАГ 1 ИЗ 3</span>
+            </div>
+            <button class="btn-icon" onclick="closeRoutingFeedbackModal()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18"/>
+                    <path d="m6 6 12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Step Indicator Tabs -->
+        <div class="rf-step-nav">
+            <button type="button" class="rf-step-tab active" id="rf-tab-step-0" onclick="goToFeedbackStep(0)">
+                <span class="rf-tab-num" id="rf-tab-check-0">1</span>
+                <span class="rf-tab-label">Москва (~20 мс)</span>
+            </button>
+            <button type="button" class="rf-step-tab" id="rf-tab-step-1" onclick="goToFeedbackStep(1)">
+                <span class="rf-tab-num" id="rf-tab-check-1">2</span>
+                <span class="rf-tab-label">Стокгольм (~70 мс)</span>
+            </button>
+            <button type="button" class="rf-step-tab" id="rf-tab-step-2" onclick="goToFeedbackStep(2)">
+                <span class="rf-tab-num" id="rf-tab-check-2">3</span>
+                <span class="rf-tab-label">Транзит (~80 мс)</span>
+            </button>
+        </div>
+
+        <!-- Form Body State -->
+        <div id="rf-form-container" class="rf-body">
+            <!-- Status Selection -->
+            <div class="rf-field-group">
+                <div class="rf-field-header">
+                    <label class="rf-label">Статус подключения на выбранном маршруте *</label>
+                    <span id="rf-status-error" class="rf-field-warn" style="display:none;">Выберите статус</span>
+                </div>
+                <div class="rf-status-row">
+                    <button type="button" class="rf-status-pill" data-status="works_great" onclick="onStepStatusSelect('works_great')">
+                        <span class="status-dot dot-green"></span>
+                        <span>Работает отлично</span>
+                    </button>
+                    <button type="button" class="rf-status-pill" data-status="has_issues" onclick="onStepStatusSelect('has_issues')">
+                        <span class="status-dot dot-yellow"></span>
+                        <span>Есть проблемы / лаги</span>
+                    </button>
+                    <button type="button" class="rf-status-pill" data-status="cant_connect" onclick="onStepStatusSelect('cant_connect')">
+                        <span class="status-dot dot-red"></span>
+                        <span>Не подключается</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Metrics Grid -->
+            <div class="rf-metrics-grid">
+                <div class="rf-field-group">
+                    <label class="rf-label" for="rf-step-ping">Пинг в игре *</label>
+                    <div class="rf-input-wrap">
+                        <input type="number" id="rf-step-ping" class="rf-input font-mono" placeholder="22" min="1" max="999" oninput="onStepPingInput(this.value)">
+                        <span class="rf-unit font-mono">мс</span>
+                    </div>
+                </div>
+
+                <div class="rf-field-group">
+                    <label class="rf-label" for="rf-step-match">Качество матча</label>
+                    <select id="rf-step-match" class="rf-select" onchange="onStepMatchChange(this.value)">
+                        <option value="perfect">Идеально (без фризов)</option>
+                        <option value="microstutter">Микрофризы / телепорты</option>
+                        <option value="disconnected">Выкинуло из матча</option>
+                    </select>
+                </div>
+
+                <div class="rf-field-group">
+                    <label class="rf-label" for="rf-step-discord">Голос в Discord</label>
+                    <select id="rf-step-discord" class="rf-select" onchange="onStepDiscordChange(this.value)">
+                        <option value="clean">Чистый звук</option>
+                        <option value="robovoice">Робовойс / задержка</option>
+                        <option value="no_connection">Не подключается</option>
+                        <option value="not_used">Не использую</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Comment -->
+            <div class="rf-field-group">
+                <div class="rf-field-header">
+                    <label class="rf-label" for="rf-step-comment">Заметки по этому маршруту (опционально)</label>
+                    <span id="rf-step-counter" class="rf-counter font-mono">0 / 300</span>
+                </div>
+                <textarea id="rf-step-comment" class="rf-textarea" maxlength="300" rows="2" placeholder="Ощущения от игры, регистрация урона, стабильность..." oninput="onStepCommentInput(this.value)"></textarea>
+            </div>
+
+            <!-- Footer Navigation -->
+            <div class="rf-footer">
+                <div class="rf-footer-left">
+                    <span id="rf-progress-summary" class="rf-progress-text font-mono">Заполнено: 0 / 3</span>
+                    <button type="button" class="rf-reset-link" onclick="resetFeedbackDraft()">Сбросить</button>
+                </div>
+                <div class="rf-actions">
+                    <button type="button" id="btn-rf-prev" class="btn btn-secondary rf-btn-action" onclick="prevFeedbackStep()" style="display:none;">
+                        Назад
+                    </button>
+                    <button type="button" id="btn-rf-next" class="btn btn-primary rf-btn-action" onclick="nextFeedbackStep()">
+                        Далее
+                    </button>
+                    <button type="button" id="btn-rf-submit" class="btn btn-primary rf-btn-action" onclick="submitMultiRouteFeedback()" style="display:none;">
+                        <span id="rf-btn-text">Отправить отчет</span>
+                        <span id="rf-btn-spinner" class="spinner" style="display: none; width: 12px; height: 12px;"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Success Screen -->
+        <div id="rf-success-container" class="rf-success-body" style="display: none;">
+            <div class="rf-success-badge">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+            </div>
+            <div class="rf-success-title">Все 3 маршрута протестированы!</div>
+            <div class="rf-success-desc">
+                Огромное спасибо за полный тест Москвы, Стокгольма и Транзита. Твой фидбек поможет откалибровать сеть и сделать подключение максимально быстрым.
+            </div>
+            <button type="button" class="btn btn-secondary" style="width: 120px; justify-content: center; height: 28px;" onclick="closeRoutingFeedbackModal()">
+                Готово
+            </button>
+        </div>
+    </div>
+</div>

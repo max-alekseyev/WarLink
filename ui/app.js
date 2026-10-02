@@ -97,7 +97,7 @@ function handleClose(e) {
 }
 
 function switchView(targetViewId) {
-    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account', 'view-progression'];
+    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account', 'view-progression', 'view-support'];
     const showcase = document.getElementById('view-showcase');
     const targetEl = targetViewId ? document.getElementById(targetViewId) : null;
     const isAlreadyOpen = targetEl && targetEl.classList.contains('active');
@@ -137,6 +137,7 @@ function switchView(targetViewId) {
         if (nextActiveId === 'view-account' && typeof fetchAccountProfile === 'function') fetchAccountProfile();
         if (nextActiveId === 'view-notifications' && typeof fetchNotifications === 'function') fetchNotifications();
         if (nextActiveId === 'view-progression' && window.ProgressionController) window.ProgressionController.onOpen();
+        if (nextActiveId === 'view-support' && typeof openSupportChat === 'function') openSupportChat();
     }
 
     updateTitlebarActiveState(nextActiveId);
@@ -148,6 +149,7 @@ function updateTitlebarActiveState(activeViewId) {
         'view-sponsors': 'btn-sponsors-toggle',
         'view-notifications': 'btn-notif-toggle',
         'view-progression': 'btn-progression-toggle',
+        'view-support': 'btn-support-toggle',
         'view-details': 'btn-settings-toggle'
     };
     for (const [vId, btnId] of Object.entries(btnMap)) {
@@ -156,6 +158,11 @@ function updateTitlebarActiveState(activeViewId) {
             btn.classList.toggle('is-active', vId === activeViewId);
         }
     }
+}
+
+function toggleSupportChat(e) {
+    if (e) e.stopPropagation();
+    switchView('view-support');
 }
 
 function toggleProgression(e) {
@@ -813,9 +820,18 @@ function updateUI(data) {
             gwDaysEl.textContent = '— дн.';
         }
     }
-    const gwTitleEl = document.querySelector('.gateway-title');
-    if (gwTitleEl && data.gateway_location) {
-        gwTitleEl.textContent = data.gateway_location.split(',')[0].trim();
+    const gwTitleEl = document.getElementById('gw-title') || document.querySelector('.gateway-title');
+    if (gwTitleEl) {
+        if (data.gateway_badge) {
+            gwTitleEl.textContent = data.gateway_badge;
+        } else if (data.gateway_location) {
+            gwTitleEl.textContent = data.gateway_location.split(',')[0].trim();
+        }
+    }
+    const routeSelect = document.getElementById('select-network-route');
+    if (routeSelect && data.network_route_mode && document.activeElement !== routeSelect) {
+        routeSelect.value = data.network_route_mode;
+        updateRouteModeDescription(data.network_route_mode);
     }
     const btnDonate = document.getElementById('btn-donate-server');
     if (btnDonateText) {
@@ -902,6 +918,490 @@ async function onProfileChange(val) {
         });
     } catch (e) {
         console.error('Profile change error:', e);
+    }
+}
+
+const ROUTE_DESCRIPTIONS = {
+    'transit': 'Транзитный маршрут через Европу (~80 мс)',
+    'direct_stockholm': 'Прямое европейское подключение (~70 мс)',
+    'direct_moscow': 'Прямое подключение по России (минимальный пинг ~20 мс)'
+};
+
+function updateRouteModeDescription(mode) {
+    const descEl = document.getElementById('route-mode-desc-val');
+    if (descEl) {
+        descEl.textContent = ROUTE_DESCRIPTIONS[mode] || ROUTE_DESCRIPTIONS['transit'];
+    }
+}
+
+async function onNetworkRouteModeChange(mode) {
+    updateRouteModeDescription(mode);
+    try {
+        const res = await fetch('/api/network-route', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+            const badge = mode === 'direct_stockholm' ? 'Стокгольм' : (mode === 'direct_moscow' ? 'Москва' : 'Мск → Стокгольм');
+            showToast('Маршрут переключен: ' + badge);
+            if (typeof UIStore !== 'undefined') {
+                UIStore.invalidate('/api/status');
+            }
+        }
+    } catch (e) {
+        showToast('Ошибка переключения маршрута');
+    }
+}
+
+// --- Quick Gateway Route Popover & Routing Feedback ---
+let currentRouteModes = [
+    { id: 'transit', title: '1. Клиент — Москва — Стокгольм — Игра', desc: 'Транзитный маршрут через Европу (~80 мс)', badge: 'Мск → Стокгольм' },
+    { id: 'direct_stockholm', title: '2. Клиент — Стокгольм — Игра', desc: 'Прямое европейское подключение (~70 мс)', badge: 'Стокгольм' },
+    { id: 'direct_moscow', title: '3. Клиент — Москва — Игра', desc: 'Прямое подключение по России (пинг ~20 мс)', badge: 'Москва' }
+];
+
+async function toggleGatewayRoutePopover(e) {
+    if (e) e.stopPropagation();
+    const popover = document.getElementById('gateway-route-popover');
+    const chevron = document.getElementById('gw-chevron');
+    if (!popover) return;
+
+    const isOpen = popover.style.display !== 'none';
+    if (isOpen) {
+        closeGatewayRoutePopover();
+    } else {
+        popover.style.display = 'flex';
+        if (chevron) chevron.classList.add('is-open');
+        await loadAndRenderGatewayRoutePopover();
+    }
+}
+
+function closeGatewayRoutePopover() {
+    const popover = document.getElementById('gateway-route-popover');
+    const chevron = document.getElementById('gw-chevron');
+    if (popover) popover.style.display = 'none';
+    if (chevron) chevron.classList.remove('is-open');
+}
+
+async function loadAndRenderGatewayRoutePopover() {
+    const listEl = document.getElementById('route-popover-list');
+    if (!listEl) return;
+
+    let activeMode = 'transit';
+    try {
+        const res = await fetch('/api/network-route');
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.current_mode) {
+                activeMode = data.current_mode;
+            }
+        }
+    } catch (e) {}
+
+    listEl.innerHTML = currentRouteModes.map(m => `
+        <button type="button" class="route-popover-item ${m.id === activeMode ? 'active' : ''}" onclick="selectRouteModeFromPopover('${m.id}')">
+            <div class="popover-item-header">
+                <span class="popover-item-title">${m.title}</span>
+                <span class="popover-item-badge">${m.badge}</span>
+            </div>
+            <div class="popover-item-desc">${m.desc}</div>
+        </button>
+    `).join('');
+}
+
+async function selectRouteModeFromPopover(mode) {
+    closeGatewayRoutePopover();
+    await onNetworkRouteModeChange(mode);
+    const radio = document.querySelector(`input[name="route-mode"][value="${mode}"]`);
+    if (radio) radio.checked = true;
+}
+
+// Global click outside to dismiss popover
+document.addEventListener('click', (e) => {
+    const popover = document.getElementById('gateway-route-popover');
+    const footerLeft = document.getElementById('gw-footer-left');
+    if (popover && popover.style.display !== 'none') {
+        if (!popover.contains(e.target) && (!footerLeft || !footerLeft.contains(e.target))) {
+            closeGatewayRoutePopover();
+        }
+    }
+});
+
+// --- Multi-Step Routing Feedback Modal ---
+const FEEDBACK_STEPS = [
+    {
+        mode: 'direct_moscow',
+        title: '1. МОСКВА — ПРЯМОЙ УЗЕЛ РФ',
+        sub: 'Прямое подключение по России (минимальный пинг ~20 мс)',
+        label: 'Москва (~20 мс)'
+    },
+    {
+        mode: 'direct_stockholm',
+        title: '2. СТОКГОЛЬМ — ЕВРОПЕЙСКИЙ ШЛЮЗ',
+        sub: 'Прямое европейское подключение (~70 мс)',
+        label: 'Стокгольм (~70 мс)'
+    },
+    {
+        mode: 'transit',
+        title: '3. ТРАНЗИТ — ГИБРИДНЫЙ МАРШРУТ',
+        sub: 'Москва → Стокгольм (~80 мс)',
+        label: 'Транзит (~80 мс)'
+    }
+];
+
+let currentFeedbackStepIndex = 0;
+let feedbackDraft = {
+    'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+    'direct_stockholm': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+    'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
+};
+
+function loadFeedbackDraftFromStorage() {
+    try {
+        const raw = localStorage.getItem('warlink_routing_feedback_draft_v2');
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                for (const k of ['direct_moscow', 'direct_stockholm', 'transit']) {
+                    if (parsed[k]) feedbackDraft[k] = Object.assign({}, feedbackDraft[k], parsed[k]);
+                }
+            }
+        }
+    } catch(e) {}
+}
+
+function saveFeedbackDraftToStorage() {
+    try {
+        localStorage.setItem('warlink_routing_feedback_draft_v2', JSON.stringify(feedbackDraft));
+    } catch(e) {}
+}
+
+function resetFeedbackDraft() {
+    feedbackDraft = {
+        'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+        'direct_stockholm': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+        'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
+    };
+    try { localStorage.removeItem('warlink_routing_feedback_draft_v2'); } catch(e) {}
+    renderFeedbackCurrentStep();
+    showToast('Черновик замеров сброшен');
+}
+
+function openRoutingFeedbackModal(e) {
+    if (e) e.stopPropagation();
+    closeGatewayRoutePopover();
+
+    const modal = document.getElementById('modal-routing-feedback');
+    const formCont = document.getElementById('rf-form-container');
+    const successCont = document.getElementById('rf-success-container');
+
+    if (!modal) return;
+    if (formCont) formCont.style.display = 'flex';
+    if (successCont) successCont.style.display = 'none';
+
+    loadFeedbackDraftFromStorage();
+
+    // Default to the first uncompleted step, or current active route
+    const gwTitle = document.getElementById('gw-title');
+    const currentActiveText = (gwTitle ? gwTitle.textContent : '').toLowerCase();
+    let initialStep = 0;
+    if (currentActiveText.includes('стокгольм') && !currentActiveText.includes('->')) {
+        initialStep = 1;
+    } else if (currentActiveText.includes('транзит') || currentActiveText.includes('->')) {
+        initialStep = 2;
+    }
+
+    currentFeedbackStepIndex = initialStep;
+    renderFeedbackCurrentStep();
+    modal.style.display = 'flex';
+}
+
+function closeRoutingFeedbackModal() {
+    const modal = document.getElementById('modal-routing-feedback');
+    if (modal) modal.style.display = 'none';
+}
+
+function renderFeedbackCurrentStep() {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    const data = feedbackDraft[step.mode] || {};
+
+    const badge = document.getElementById('rf-step-badge');
+    if (badge) badge.textContent = `ШАГ ${currentFeedbackStepIndex + 1} ИЗ 3`;
+
+    // Update tabs
+    for (let i = 0; i < FEEDBACK_STEPS.length; i++) {
+        const tabEl = document.getElementById(`rf-tab-step-${i}`);
+        const checkEl = document.getElementById(`rf-tab-check-${i}`);
+        const m = FEEDBACK_STEPS[i].mode;
+        const d = feedbackDraft[m];
+        const isComplete = d && d.status && (parseInt(d.ping, 10) > 0);
+
+        if (tabEl) {
+            tabEl.classList.toggle('active', i === currentFeedbackStepIndex);
+            tabEl.classList.toggle('completed', isComplete);
+        }
+        if (checkEl) {
+            checkEl.innerHTML = isComplete ? '<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' : `${i + 1}`;
+        }
+    }
+
+    // Check if this route is currently active for ping auto-fill
+    const gwTitle = document.getElementById('gw-title');
+    const currentActiveText = (gwTitle ? gwTitle.textContent : '').toLowerCase();
+    let isActive = false;
+    if (step.mode === 'transit' && (currentActiveText.includes('транзит') || currentActiveText.includes('->'))) isActive = true;
+    else if (step.mode === 'direct_stockholm' && currentActiveText.includes('стокгольм') && !currentActiveText.includes('->')) isActive = true;
+    else if (step.mode === 'direct_moscow' && currentActiveText.includes('москва') && !currentActiveText.includes('->')) isActive = true;
+
+    // Status pills
+    const pills = document.querySelectorAll('.rf-status-pill');
+    pills.forEach(pill => {
+        pill.classList.toggle('active', pill.getAttribute('data-status') === (data.status || ''));
+    });
+
+    // Ping input
+    const pingInput = document.getElementById('rf-step-ping');
+    if (pingInput) {
+        pingInput.value = data.ping || '';
+        if (!data.ping && isActive) {
+            const gwPingEl = document.getElementById('gw-ping');
+            if (gwPingEl) {
+                const match = (gwPingEl.textContent || '').match(/\d+/);
+                if (match) {
+                    pingInput.value = match[0];
+                    data.ping = match[0];
+                    saveFeedbackDraftToStorage();
+                }
+            }
+        }
+    }
+
+    // Match quality
+    const matchEl = document.getElementById('rf-step-match');
+    if (matchEl) matchEl.value = data.match || 'perfect';
+
+    // Discord status
+    const discordEl = document.getElementById('rf-step-discord');
+    if (discordEl) discordEl.value = data.discord || 'clean';
+
+    // Comment
+    const commentEl = document.getElementById('rf-step-comment');
+    const counterEl = document.getElementById('rf-step-counter');
+    if (commentEl) commentEl.value = data.comment || '';
+    if (counterEl) counterEl.textContent = `${(data.comment || '').length} / 300`;
+
+    // Error hide
+    const warn = document.getElementById('rf-status-error');
+    if (warn) warn.style.display = 'none';
+
+    // Summary count
+    let completedCount = 0;
+    for (const s of FEEDBACK_STEPS) {
+        const d = feedbackDraft[s.mode];
+        if (d && d.status && parseInt(d.ping, 10) > 0) completedCount++;
+    }
+    const summaryEl = document.getElementById('rf-progress-summary');
+    if (summaryEl) summaryEl.textContent = `Заполнено: ${completedCount} / 3`;
+
+    // Footer buttons
+    const btnPrev = document.getElementById('btn-rf-prev');
+    const btnNext = document.getElementById('btn-rf-next');
+    const btnSubmit = document.getElementById('btn-rf-submit');
+
+    if (btnPrev) {
+        btnPrev.style.display = currentFeedbackStepIndex > 0 ? '' : 'none';
+        btnPrev.textContent = 'Назад';
+    }
+
+    if (currentFeedbackStepIndex < 2) {
+        if (btnNext) {
+            btnNext.style.display = '';
+            btnNext.textContent = 'Далее';
+        }
+        if (btnSubmit) btnSubmit.style.display = 'none';
+    } else {
+        if (btnNext) btnNext.style.display = 'none';
+        if (btnSubmit) {
+            btnSubmit.style.display = '';
+            if (completedCount < 3) {
+                btnSubmit.style.opacity = '0.6';
+                btnSubmit.title = 'Для отправки нужно протестировать все 3 маршрута';
+            } else {
+                btnSubmit.style.opacity = '1';
+                btnSubmit.title = '';
+            }
+        }
+    }
+}
+
+function goToFeedbackStep(stepIdx) {
+    if (stepIdx < 0 || stepIdx >= FEEDBACK_STEPS.length) return;
+    currentFeedbackStepIndex = stepIdx;
+    renderFeedbackCurrentStep();
+}
+
+function prevFeedbackStep() {
+    if (currentFeedbackStepIndex > 0) {
+        currentFeedbackStepIndex--;
+        renderFeedbackCurrentStep();
+    }
+}
+
+function validateCurrentStep() {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    const data = feedbackDraft[step.mode];
+    const warn = document.getElementById('rf-status-error');
+
+    if (!data.status) {
+        if (warn) {
+            warn.textContent = 'Выберите статус подключения';
+            warn.style.display = '';
+        }
+        showToast('Пожалуйста, выбери статус подключения');
+        return false;
+    }
+    const pingVal = parseInt(data.ping, 10);
+    if (!pingVal || pingVal <= 0) {
+        if (warn) {
+            warn.textContent = 'Укажите пинг в игре (мс)';
+            warn.style.display = '';
+        }
+        const input = document.getElementById('rf-step-ping');
+        if (input) input.focus();
+        showToast('Пожалуйста, укажи пинг в игре');
+        return false;
+    }
+    if (warn) warn.style.display = 'none';
+    return true;
+}
+
+function nextFeedbackStep() {
+    if (!validateCurrentStep()) return;
+    if (currentFeedbackStepIndex < FEEDBACK_STEPS.length - 1) {
+        currentFeedbackStepIndex++;
+        renderFeedbackCurrentStep();
+    }
+}
+
+async function activateCurrentFeedbackRoute() {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    if (typeof onNetworkRouteModeChange === 'function') {
+        await onNetworkRouteModeChange(step.mode);
+        renderFeedbackCurrentStep();
+    }
+}
+
+function onStepStatusSelect(status) {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    feedbackDraft[step.mode].status = status;
+    saveFeedbackDraftToStorage();
+    renderFeedbackCurrentStep();
+}
+
+function onStepPingInput(val) {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    feedbackDraft[step.mode].ping = val.replace(/\D/g, '');
+    saveFeedbackDraftToStorage();
+    let completedCount = 0;
+    for (const s of FEEDBACK_STEPS) {
+        const d = feedbackDraft[s.mode];
+        if (d && d.status && parseInt(d.ping, 10) > 0) completedCount++;
+    }
+    const summaryEl = document.getElementById('rf-progress-summary');
+    if (summaryEl) summaryEl.textContent = `Заполнено: ${completedCount} / 3`;
+}
+
+function onStepMatchChange(val) {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    feedbackDraft[step.mode].match = val;
+    saveFeedbackDraftToStorage();
+}
+
+function onStepDiscordChange(val) {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    feedbackDraft[step.mode].discord = val;
+    saveFeedbackDraftToStorage();
+}
+
+function onStepCommentInput(val) {
+    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
+    feedbackDraft[step.mode].comment = val;
+    saveFeedbackDraftToStorage();
+    const counterEl = document.getElementById('rf-step-counter');
+    if (counterEl) counterEl.textContent = `${val.length} / 300`;
+}
+
+async function submitMultiRouteFeedback() {
+    // Validate that all 3 routes are complete!
+    for (let i = 0; i < FEEDBACK_STEPS.length; i++) {
+        const s = FEEDBACK_STEPS[i];
+        const d = feedbackDraft[s.mode];
+        if (!d || !d.status || !parseInt(d.ping, 10)) {
+            currentFeedbackStepIndex = i;
+            renderFeedbackCurrentStep();
+            validateCurrentStep();
+            showToast(`Маршрут "${s.label}" еще не протестирован! Пожалуйста, заполни все 3 шага.`);
+            return;
+        }
+    }
+
+    const submitBtn = document.getElementById('btn-rf-submit');
+    const spinner = document.getElementById('rf-btn-spinner');
+    const btnText = document.getElementById('rf-btn-text');
+
+    if (submitBtn) submitBtn.disabled = true;
+    if (spinner) spinner.style.display = 'inline-block';
+    if (btnText) btnText.style.display = 'none';
+
+    try {
+        const reviews = FEEDBACK_STEPS.map(s => {
+            const d = feedbackDraft[s.mode];
+            return {
+                route_mode: s.mode,
+                status: d.status,
+                in_game_ping: parseInt(d.ping, 10) || 0,
+                match_quality: d.match || 'perfect',
+                discord_status: d.discord || 'clean',
+                user_comment: d.comment || ''
+            };
+        });
+
+        const res = await fetch('/api/routing-feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                reviews: reviews,
+                telemetry_data: {
+                    tested_all_three: true,
+                    timestamp: new Date().toISOString()
+                }
+            })
+        });
+
+        const data = await res.json();
+        if (res.ok && data && data.success) {
+            try { localStorage.removeItem('warlink_routing_feedback_draft_v2'); } catch(e) {}
+            feedbackDraft = {
+                'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+                'direct_stockholm': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+                'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
+            };
+
+            const formCont = document.getElementById('rf-form-container');
+            const successCont = document.getElementById('rf-success-container');
+            if (formCont) formCont.style.display = 'none';
+            if (successCont) successCont.style.display = 'flex';
+        } else {
+            showToast('Ошибка отправки: ' + (data.error || 'попробуйте позже'));
+        }
+    } catch (e) {
+        showToast('Не удалось отправить отчет: ' + e.message);
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+        if (btnText) btnText.style.display = 'inline';
+        if (spinner) spinner.style.display = 'none';
     }
 }
 
@@ -1207,6 +1707,12 @@ async function markAllNotificationsRead() {
 
 async function openNotifAction(encodedURL) {
     const rawURL = decodeURIComponent(encodedURL);
+    if (rawURL === '#action-routing-feedback' || rawURL === '#routing-feedback' || rawURL.includes('routing-feedback')) {
+        if (typeof openRoutingFeedbackModal === 'function') {
+            openRoutingFeedbackModal();
+        }
+        return;
+    }
     if (rawURL === '#view-progression' || rawURL === 'view-progression' || rawURL === '#progression' || rawURL === 'progression' || rawURL.includes('view-progression') || rawURL.includes('#progression')) {
         if (typeof toggleProgression === 'function') {
             toggleProgression();

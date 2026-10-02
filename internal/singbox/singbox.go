@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -26,8 +27,13 @@ import (
 	"warlink/internal/embedded"
 )
 
+const (
+	MoscowIngressIP = "45.12.63.85"
+	StockholmCoreIP = "138.124.103.99"
+)
+
 var (
-	ClientVersion       = "v2.1.10"
+	ClientVersion       = "v2.1.12"
 	DefaultServerIP     = "138.124.103.99"
 	DefaultServerAPI    = "http://138.124.103.99"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -37,32 +43,49 @@ var (
 	DefaultObfsPassword = ""
 )
 
-func GetServerIP() string {
-	if DefaultServerIP != "" {
-		return DefaultServerIP
+func GetNetworkRouteMode() string {
+	cfg := config.Load()
+	if cfg != nil {
+		return cfg.GetNetworkRouteMode()
 	}
+	return config.RouteModeTransit
+}
+
+func SetNetworkRouteMode(mode string) {
+	cfg := config.Load()
+	if cfg != nil {
+		cfg.SetNetworkRouteMode(mode)
+	}
+}
+
+func GetActiveGatewayTarget() (host string, port int, apiURL string) {
+	mode := GetNetworkRouteMode()
+	switch mode {
+	case config.RouteModeDirectStockholm:
+		return StockholmCoreIP, 443, "http://" + StockholmCoreIP
+	case config.RouteModeDirectMoscow:
+		return MoscowIngressIP, 8443, "http://" + MoscowIngressIP
+	case config.RouteModeTransit:
+		fallthrough
+	default:
+		return MoscowIngressIP, 443, "http://" + MoscowIngressIP
+	}
+}
+
+func GetServerIP() string {
 	if envIP := os.Getenv("WARLINK_SERVER_IP"); envIP != "" {
 		return envIP
 	}
-	cfg := config.Load()
-	if cfg != nil && cfg.ServerIP != "" {
-		return cfg.ServerIP
-	}
-	return ""
+	host, _, _ := GetActiveGatewayTarget()
+	return host
 }
 
 func GetServerAPI() string {
-	if DefaultServerAPI != "" {
-		return DefaultServerAPI
-	}
 	if envAPI := os.Getenv("WARLINK_SERVER_API"); envAPI != "" {
 		return envAPI
 	}
-	ip := GetServerIP()
-	if ip != "" {
-		return fmt.Sprintf("http://%s", ip)
-	}
-	return ""
+	_, _, apiURL := GetActiveGatewayTarget()
+	return apiURL
 }
 
 func GetHMACSecret() string {
@@ -304,6 +327,85 @@ var DirectGameDomains = []string{
 	"time.cloudflare.com",
 }
 
+// DynamoDBRegionProbeDomains contains AWS DynamoDB regional endpoints used by WARDOGS
+// to calculate regional ping in the "SELECT REGION" screen.
+// Routing these directly via the physical interface ensures physically accurate RTT measurement
+// (Europe ~35-50ms, North America ~110-135ms) instead of proxy edge termination.
+var DynamoDBRegionProbeDomains = []string{
+	"dynamodb.eu-central-1.amazonaws.com",
+	"dynamodb.eu-north-1.amazonaws.com",
+	"dynamodb.eu-west-1.amazonaws.com",
+	"dynamodb.eu-west-2.amazonaws.com",
+	"dynamodb.eu-west-3.amazonaws.com",
+	"dynamodb.eu-south-1.amazonaws.com",
+	"dynamodb.us-east-1.amazonaws.com",
+	"dynamodb.us-east-2.amazonaws.com",
+	"dynamodb.us-west-1.amazonaws.com",
+	"dynamodb.us-west-2.amazonaws.com",
+	"dynamodb.ca-central-1.amazonaws.com",
+	"dynamodb.sa-east-1.amazonaws.com",
+	"dynamodb.ap-northeast-1.amazonaws.com",
+	"dynamodb.ap-northeast-2.amazonaws.com",
+	"dynamodb.ap-southeast-1.amazonaws.com",
+	"dynamodb.ap-southeast-2.amazonaws.com",
+	"dynamodb.ap-south-1.amazonaws.com",
+	"dynamodb.me-south-1.amazonaws.com",
+	"dynamodb.af-south-1.amazonaws.com",
+}
+
+var (
+	resolvedRegionMu   sync.Mutex
+	resolvedRegionIPs  []string
+	resolvedRegionTime time.Time
+
+	// AWSRegionProbeSubnets contains Anycast / Global Accelerator IP ranges used by AWS DynamoDB regional endpoints.
+	// Excluded from Wintun TUN interface so Windows kernel routes TCP syn handshakes directly through physical NIC.
+	AWSRegionProbeSubnets = []string{
+		"35.71.0.0/16",
+		"52.94.0.0/16",
+		"52.119.0.0/16",
+		"54.239.0.0/16",
+		"3.218.0.0/16",
+	}
+)
+
+// GetRegionProbeExcludeAddresses returns AWS Anycast subnets and resolved regional endpoint IPs.
+func GetRegionProbeExcludeAddresses() []string {
+	excludes := append([]string{}, AWSRegionProbeSubnets...)
+	resolvedRegionMu.Lock()
+	defer resolvedRegionMu.Unlock()
+	if time.Since(resolvedRegionTime) < 10*time.Minute && len(resolvedRegionIPs) > 0 {
+		return append(excludes, resolvedRegionIPs...)
+	}
+
+	var ips []string
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, domain := range DynamoDBRegionProbeDomains {
+		wg.Add(1)
+		go func(d string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+			defer cancel()
+			var r net.Resolver
+			addrs, err := r.LookupIP(ctx, "ip4", d)
+			if err == nil {
+				mu.Lock()
+				for _, ip := range addrs {
+					if ip4 := ip.To4(); ip4 != nil {
+						ips = append(ips, ip4.String()+"/32")
+					}
+				}
+				mu.Unlock()
+			}
+		}(domain)
+	}
+	wg.Wait()
+	resolvedRegionIPs = ips
+	resolvedRegionTime = time.Now()
+	return append(excludes, ips...)
+}
+
 // DirectLauncherProcesses contains anti-cheat installer, crash reporting,
 // and third-party anti-cheat daemons that must bypass the tunnel.
 var DirectLauncherProcesses = []string{
@@ -316,6 +418,9 @@ var DirectLauncherProcesses = []string{
 	"crashpad_handler.exe",
 	"CrashReportClient.exe",
 	"crashreportclient.exe",
+	"WardogsLauncher-Shipping.exe",
+	"wardogslauncher-shipping.exe",
+	"wardogslauncher.exe",
 	// Anti-cheat services and background daemons (must bypass tunnel)
 	"vgc.exe",
 	"vgtray.exe",
@@ -993,7 +1098,13 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			Port:     []int{80},
 			Outbound: "direct",
 		},
-		// 3. Direct game & anti-cheat domains route direct
+		// 3. DynamoDB region probes route direct with real physical DNS
+		// so the game measures true wire RTT to each AWS region (Frankfurt ~35ms, US ~110ms, Asia ~200ms)
+		{
+			DomainSuffix: DynamoDBRegionProbeDomains,
+			Outbound:     "direct",
+		},
+		// 3b. Direct game & anti-cheat domains route direct
 		{
 			DomainSuffix: DirectGameDomains,
 			Outbound:     "direct",
@@ -1144,6 +1255,11 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		DomainSuffix: CRLDomains,
 		Server:       "dns-local",
 	})
+	// DynamoDB region probes must use real physical DNS to avoid FakeIP synthetic RTT
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: DynamoDBRegionProbeDomains,
+		Server:       "dns-local",
+	})
 	// Game & launcher direct domains must resolve locally to real IPs
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: DirectGameDomains,
@@ -1248,9 +1364,24 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		"172.16.0.0/12",
 		"192.168.0.0/16",
 		"127.0.0.0/8",
+		MoscowIngressIP + "/32",
+		StockholmCoreIP + "/32",
 	}
+	routeExclude = append(routeExclude, GetRegionProbeExcludeAddresses()...)
 	if targetServer != "" && !strings.Contains(targetServer, ":") {
 		routeExclude = append(routeExclude, targetServer+"/32")
+	}
+
+	gwHost, gwPort, _ := GetActiveGatewayTarget()
+	if targetServer == "" {
+		targetServer = gwHost
+	}
+	var hy2Ports []string
+	var hy2Port int
+	if gwPort == 8443 {
+		hy2Port = 8443
+	} else {
+		hy2Ports = []string{"443:443", "20000:30000"}
 	}
 
 	cfg := Config{
@@ -1278,10 +1409,488 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Type:        "hysteria2",
 				Tag:         "hy2-stockholm",
 				Server:      targetServer,
-				ServerPorts: []string{"443:443", "20000:30000"},
+				ServerPort:  hy2Port,
+				ServerPorts: hy2Ports,
 				HopInterval: "10m",
 				UpMbps:      50,
 				DownMbps:    100,
+				Password:    token,
+				Obfs:        obfsConfig,
+				TLS: &OutboundTLSOptions{
+					Enabled:    true,
+					ServerName: "gateway.warlink.network",
+					Insecure:   true,
+				},
+			},
+			{
+				Type: "direct",
+				Tag:  "direct",
+			},
+		},
+		Route: RouteConfig{
+			DefaultDomainResolver: "dns-local",
+			FindProcess:           true,
+			AutoDetectInterface:   true,
+			Rules:                 rules,
+		},
+		Experimental: &ExperimentalConfig{
+			CacheFile: &CacheFileConfig{
+				Enabled: true,
+				Path:    "cache.db",
+			},
+		},
+	}
+
+	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// IsLocalDevRoutingActive checks if local isolated developer routing mode is enabled
+// on this machine (via warlink_core/local_dev_routing.flag or WARLINK_LOCAL_ROUTING=1).
+func IsLocalDevRoutingActive() bool {
+	if os.Getenv("WARLINK_LOCAL_ROUTING") != "" {
+		return true
+	}
+	candidates := []string{
+		"local_dev_routing.flag",
+		filepath.Join("warlink_core", "local_dev_routing.flag"),
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(dir, "local_dev_routing.flag"),
+			filepath.Join(dir, "warlink_core", "local_dev_routing.flag"),
+			filepath.Join(filepath.Dir(dir), "warlink_core", "local_dev_routing.flag"),
+		)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// GenerateDevGamingConfig builds an optimized sing-box configuration tailored specifically
+// for low-latency competitive gaming with WARDOGS full-tunneling, AWS DynamoDB & GameLift routing,
+// Wintun stack: mixed (native kernel UDP fastpath, gVisor TCP for honest RTT), ring_capacity: 2MB, MTU 1380, and zero port renegotiation jitter.
+func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includeWebServices bool, optionalToken ...string) ([]byte, error) {
+	token := "wl_session_token"
+	if len(optionalToken) > 0 && optionalToken[0] != "" {
+		token = optionalToken[0]
+	}
+
+	targetServer := GetServerIP()
+
+	procSet := make(map[string]struct{})
+	for _, p := range extraProcesses {
+		pClean := strings.TrimSpace(p)
+		if pClean != "" {
+			procSet[pClean] = struct{}{}
+		}
+	}
+	// Always include core WARDOGS game client binaries (launchers and anti-cheat installers route direct)
+	wardogsBins := []string{
+		"WardogsClient-Win64-Shipping.exe",
+		"wardogsclient-win64-shipping.exe",
+		"WARDOGS-Win64-Shipping.exe",
+		"wardogs-win64-shipping.exe",
+		"wardogs.exe",
+	}
+	for _, wb := range wardogsBins {
+		procSet[wb] = struct{}{}
+	}
+	if includeWebServices {
+		procSet["Telegram.exe"] = struct{}{}
+		procSet["telegram.exe"] = struct{}{}
+	}
+
+	domainSet := make(map[string]struct{})
+	ipSet := make(map[string]struct{})
+
+	for _, prof := range profiles {
+		for _, p := range prof.Processes {
+			pClean := strings.TrimSpace(p)
+			if pClean != "" {
+				procSet[pClean] = struct{}{}
+			}
+		}
+		for _, d := range prof.Domains {
+			dClean := strings.ToLower(strings.TrimSpace(d))
+			if dClean != "" {
+				domainSet[dClean] = struct{}{}
+			}
+		}
+		for _, ip := range prof.IPs {
+			ipClean := strings.TrimSpace(ip)
+			if ipClean != "" {
+				if strings.Contains(ipClean, ",") {
+					parts := strings.Split(ipClean, ",")
+					ipClean = strings.TrimSpace(parts[0])
+				}
+				if !strings.Contains(ipClean, "/") {
+					if strings.Contains(ipClean, ":") {
+						ipClean = ipClean + "/128"
+					} else {
+						ipClean = ipClean + "/32"
+					}
+				}
+				if _, _, err := net.ParseCIDR(ipClean); err == nil {
+					ipSet[ipClean] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Add critical game matchmaking and voice domains for WARDOGS
+	gameTelemetryDomains := []string{
+		"faa.bulkhead.net",
+		"bulkhead.net",
+		"pragmaengine.com",
+		"vivox.com",
+	}
+	for _, gd := range gameTelemetryDomains {
+		domainSet[gd] = struct{}{}
+	}
+
+	var allProcesses []string
+	for p := range procSet {
+		allProcesses = append(allProcesses, p)
+	}
+	var allDomains []string
+	for d := range domainSet {
+		allDomains = append(allDomains, d)
+	}
+	var allIPs []string
+	for ip := range ipSet {
+		allIPs = append(allIPs, ip)
+	}
+
+	// Build optimized routing rules
+	rules := []RouteRule{
+		{
+			Action: "sniff",
+		},
+		// 1. DynamoDB region probes route direct with real physical DNS
+		// so the game measures true wire RTT to each AWS region (Frankfurt ~35ms, US ~110ms, Asia ~200ms)
+		{
+			DomainSuffix: DynamoDBRegionProbeDomains,
+			Outbound:     "direct",
+		},
+		// 2. Direct game & anti-cheat domains route direct
+		{
+			DomainSuffix: DirectGameDomains,
+			Outbound:     "direct",
+		},
+		// 2. Never route loopback, private RFC1918, or link-local subnets through tunnel
+		{
+			IPCIDR: []string{
+				"127.0.0.0/8",
+				"::1/128",
+				"10.0.0.0/8",
+				"172.16.0.0/12",
+				"192.168.0.0/16",
+			},
+			Outbound: "direct",
+		},
+		// 2b. Never route NTP (UDP 123) through tunnel
+		{
+			Network:  "udp",
+			Port:     []int{123},
+			Outbound: "direct",
+		},
+		// 3. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
+		{
+			IPCIDR:   []string{"198.18.0.0/15"},
+			Outbound: "hy2-stockholm",
+		},
+		// 3b. Game launchers and anti-cheat processes route direct when connecting to real IPs
+		{
+			ProcessName: DirectLauncherProcesses,
+			Outbound:    "direct",
+		},
+		// 4. DNS queries to direct domains must resolve directly
+		{
+			Protocol: []string{"dns"},
+			ProcessName: append([]string{
+				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe",
+				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
+			}, DirectLauncherProcesses...),
+			Outbound: "direct",
+		},
+		{
+			Protocol:     []string{"dns"},
+			DomainSuffix: CRLDomains,
+			Outbound:     "direct",
+		},
+		{
+			Protocol:     []string{"dns"},
+			DomainSuffix: DirectGameDomains,
+			Outbound:     "direct",
+		},
+		{
+			Protocol: []string{"dns"},
+			DomainSuffix: []string{
+				"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+				"github.com", "githubusercontent.com",
+			},
+			Outbound: "direct",
+		},
+		// 5. Hijack remaining DNS queries to resolve through sing-box DNS engine
+		{
+			Protocol: []string{"dns"},
+			Action:   "hijack-dns",
+		},
+	}
+
+	if targetServer != "" {
+		rules = append(rules, RouteRule{
+			IPCIDR:   []string{targetServer + "/32"},
+			Outbound: "direct",
+		})
+	}
+
+	if includeWebServices {
+		rules = append(rules, RouteRule{
+			Action:       "reject",
+			Network:      "udp",
+			Port:         []int{443},
+			DomainSuffix: BlockedServiceDomains,
+		})
+		rules = append(rules,
+			RouteRule{
+				DomainSuffix: BlockedServiceDomains,
+				Outbound:     "hy2-stockholm",
+			},
+			RouteRule{
+				IPCIDR:   BlockedServiceIPs,
+				Outbound: "hy2-stockholm",
+			},
+		)
+	}
+
+	// Route profile domains & AWS GameLift / DynamoDB telemetry to Stockholm
+	if len(allDomains) > 0 {
+		rules = append(rules, RouteRule{
+			DomainSuffix: allDomains,
+			Outbound:     "hy2-stockholm",
+		})
+	}
+
+	// Route profile IPs / CIDRs
+	if len(allIPs) > 0 {
+		rule := RouteRule{
+			IPCIDR:   allIPs,
+			Outbound: "hy2-stockholm",
+		}
+		if len(allProcesses) > 0 {
+			rule.ProcessName = allProcesses
+		}
+		rules = append(rules, rule)
+	}
+
+	// Route WARDOGS dedicated match UDP traffic (ports 4000:4500) through Stockholm
+	rules = append(rules,
+		RouteRule{
+			Network:   "udp",
+			PortRange: []string{"4000:4500"},
+			Outbound:  "hy2-stockholm",
+		},
+		RouteRule{
+			Network:   "udp",
+			PortRange: []string{"27000:27200"},
+			Outbound:  "direct",
+		},
+	)
+
+	// Discord Voice WebRTC UDP media routes direct with WinDivert desync
+	rules = append(rules,
+		RouteRule{
+			Network:  "udp",
+			Port:     []int{3478},
+			Outbound: "direct",
+		},
+		RouteRule{
+			Network:   "udp",
+			PortRange: []string{"19294:19344", "50000:50100"},
+			Outbound:  "direct",
+		},
+	)
+
+	// Route all target processes (WardogsClient, WardogsLauncher, etc.) to hy2-stockholm
+	if len(allProcesses) > 0 {
+		rules = append(rules, RouteRule{
+			ProcessName: allProcesses,
+			Outbound:    "hy2-stockholm",
+		})
+	}
+
+	// Default fallback to direct
+	rules = append(rules, RouteRule{
+		Outbound: "direct",
+	})
+
+	var dnsRules []DNSRule
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: CRLDomains,
+		Server:       "dns-local",
+	})
+	// DynamoDB region probes must use real physical DNS to avoid FakeIP synthetic RTT
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: DynamoDBRegionProbeDomains,
+		Server:       "dns-local",
+	})
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: DirectGameDomains,
+		Server:       "dns-local",
+	})
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: []string{
+			"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+			"github.com", "githubusercontent.com",
+		},
+		Server: "dns-local",
+	})
+	dnsRules = append(dnsRules, DNSRule{
+		ProcessName: append([]string{
+			"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe",
+			"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
+		}, DirectLauncherProcesses...),
+		Server: "dns-local",
+	})
+	// WARDOGS Vivox voice resolves securely via remote DNS
+	dnsRules = append(dnsRules,
+		DNSRule{
+			DomainSuffix: []string{"vivox.com"},
+			Server:       "dns-remote",
+		},
+	)
+
+	if len(allProcesses) > 0 {
+		dnsRules = append(dnsRules, DNSRule{
+			ProcessName: allProcesses,
+			Server:      "dns-fakeip",
+		})
+	}
+
+	var fakeDomains []string
+	if includeWebServices {
+		for _, d := range BlockedServiceDomains {
+			fakeDomains = append(fakeDomains, d)
+		}
+	}
+	if len(allDomains) > 0 {
+		for _, d := range allDomains {
+			isDirect := false
+			for _, dd := range DirectGameDomains {
+				if strings.HasSuffix(d, dd) {
+					isDirect = true
+					break
+				}
+			}
+			if isDirect || strings.HasSuffix(d, "vivox.com") || strings.HasSuffix(d, "amazonaws.com") {
+				continue
+			}
+			fakeDomains = append(fakeDomains, d)
+		}
+	}
+	if len(fakeDomains) > 0 {
+		dnsRules = append(dnsRules, DNSRule{
+			DomainSuffix: fakeDomains,
+			Server:       "dns-fakeip",
+		})
+	}
+
+	dnsConfig := &DNSConfig{
+		Servers: []DNSServer{
+			{
+				Tag:        "dns-fakeip",
+				Type:       "fakeip",
+				Inet4Range: "198.18.0.0/15",
+			},
+			{
+				Tag:    "dns-remote",
+				Type:   "tcp",
+				Server: "1.1.1.1",
+				Detour: "hy2-stockholm",
+			},
+			{
+				Tag:    "dns-local",
+				Type:   "local",
+				Detour: "direct",
+			},
+		},
+		Rules: dnsRules,
+		Final: "dns-local",
+	}
+
+	obfsKey := GetObfsPassword()
+	var obfsConfig *Hysteria2Obfs
+	if obfsKey != "" {
+		obfsConfig = &Hysteria2Obfs{
+			Type:     "salamander",
+			Password: obfsKey,
+		}
+	}
+
+	routeExclude := []string{
+		"162.159.0.0/16",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		MoscowIngressIP + "/32",
+		StockholmCoreIP + "/32",
+	}
+	routeExclude = append(routeExclude, GetRegionProbeExcludeAddresses()...)
+	if targetServer != "" && !strings.Contains(targetServer, ":") {
+		routeExclude = append(routeExclude, targetServer+"/32")
+	}
+
+	gwHost, gwPort, _ := GetActiveGatewayTarget()
+	if envIP := os.Getenv("WARLINK_SERVER_IP"); envIP != "" {
+		targetServer = envIP
+	} else {
+		targetServer = gwHost
+	}
+	var hy2ServerPorts []string
+	var hy2ServerPort int
+	if gwPort == 8443 {
+		hy2ServerPort = 8443
+	} else {
+		hy2ServerPorts = []string{"443:443", "20000:30000"}
+	}
+
+	cfg := Config{
+		Log: LogConfig{
+			Level:     "info",
+			Output:    filepath.ToSlash(filepath.Join(GetDefaultLogsDir(), "singbox.log")),
+			Timestamp: true,
+		},
+		DNS: dnsConfig,
+		Inbounds: []InboundConfig{
+			{
+				Type:          "tun",
+				Tag:           "tun-in",
+				InterfaceName: "WarLink-Tun",
+				Address:       []string{"172.19.0.1/30"},
+				MTU:           1380, // Optimized fastpath MTU to prevent packet fragmentation
+				AutoRoute:     true,
+				StrictRoute:   false,
+				Stack:         "mixed", // Mixed stack: native kernel UDP for gaming fastpath, gVisor TCP for honest end-to-end RTT
+				RouteExcludeAddress: routeExclude,
+			},
+		},
+		Outbounds: []Outbound{
+			{
+				Type:        "hysteria2",
+				Tag:         "hy2-stockholm",
+				Server:      targetServer,
+				ServerPort:  hy2ServerPort,
+				ServerPorts: hy2ServerPorts,
+				HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
+				UpMbps:      100,
+				DownMbps:    200,
 				Password:    token,
 				Obfs:        obfsConfig,
 				TLS: &OutboundTLSOptions{
@@ -1460,9 +2069,24 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	m.includeWebServices = includeWebServices
 	m.currentGame = targetGame
 
-	// 1. Primary: fetch dynamic sing-box configuration directly from remote server
+	// 1. Primary: check if local dev routing override is active on this machine
 	var cfgBytes []byte
-	if remoteCfg, rErr := FetchRemoteConfig(GetServerAPI(), token, targetGame, targetProcesses, includeWebServices); rErr == nil && len(remoteCfg) > 0 {
+	if IsLocalDevRoutingActive() {
+		if logFn != nil {
+			logFn("[DEV] АКТИВЕН РЕЖИМ ЛОКАЛЬНОГО ТЕСТИРОВАНИЯ МАРШРУТИЗАЦИИ WARDOGS")
+			logFn("[DEV] Применены: Wintun stack mixed, MTU 1380, Ring 2MB, честный замер задержки регионов через Стокгольм")
+		}
+		var activeProfiles []Profile
+		profiles, pErr := FetchProfiles(GetServerAPI())
+		if pErr == nil && len(profiles) > 0 {
+			activeProfiles = profiles
+		}
+		devCfgBytes, devErr := GenerateDevGamingConfig(activeProfiles, targetProcesses, includeWebServices, token)
+		if devErr != nil {
+			return fmt.Errorf("ошибка формирования тестовой конфигурации sing-box: %w", devErr)
+		}
+		cfgBytes = devCfgBytes
+	} else if remoteCfg, rErr := FetchRemoteConfig(GetServerAPI(), token, targetGame, targetProcesses, includeWebServices); rErr == nil && len(remoteCfg) > 0 {
 		cfgBytes = remoteCfg
 		if logFn != nil {
 			logFn("[OK] Получена динамическая конфигурация sing-box со шлюза")
