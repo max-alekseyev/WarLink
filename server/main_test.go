@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"image"
 	"image/color"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -423,6 +425,96 @@ func TestAdminSlotReservation(t *testing.T) {
 	}
 	if MaxActiveSessions != 61 {
 		t.Fatalf("expected MaxActiveSessions 61, got %d", MaxActiveSessions)
+	}
+}
+
+func TestTelemetryBeaconAndRouteMode(t *testing.T) {
+	state := &AppState{
+		sessions:     make(map[string]*SessionInfo),
+		deviceTokens: make(map[string]string),
+		rateLimiter:  NewIPRateLimiter(60, time.Minute),
+		cfg: ServerConfig{
+			ServerIP:    "138.124.103.99",
+			MaxSessions: 100,
+		},
+	}
+
+	// 1. Session request with route_mode
+	ts := time.Now().Unix()
+	sessReq := SessionRequest{
+		DeviceID:      "dev-123",
+		AccountNumber: "1111-2222-3333-4444",
+		Timestamp:     ts,
+		Nonce:         "testnonce",
+		Game:          "wardogs",
+		RouteMode:     "direct_stockholm",
+	}
+	bodyBytes, _ := json.Marshal(sessReq)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/session", bytes.NewReader(bodyBytes))
+	w := httptest.NewRecorder()
+	state.handleSession(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from handleSession, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	token := state.deviceTokens["dev-123"]
+	sess := state.sessions[token]
+	if sess == nil {
+		t.Fatalf("expected session to be created")
+	}
+	if sess.RouteMode != "direct_stockholm" {
+		t.Errorf("expected RouteMode 'direct_stockholm', got '%s'", sess.RouteMode)
+	}
+
+	// 2. Telemetry Beacon update
+	beacon := TelemetryBeaconPayload{
+		DeviceID:           "dev-123",
+		AccountNumber:      "1111-2222-3333-4444",
+		AppVersion:         "v2.1.13",
+		RouteMode:          "transit",
+		Status:             "beacon",
+		PingMoscowMs:       24,
+		PingStockholmMs:    48,
+		InGamePing:         54,
+		JitterMs:           3,
+		PacketLossPct:      0,
+		GameID:             "wardogs",
+		ProcessName:        "WardogsClient-Win64-Shipping.exe",
+		MatchServer:        "54.115.8.196:4192",
+		IsFinalReport:      false,
+		SessionDurationSec: 120,
+	}
+	beaconBytes, _ := json.Marshal(beacon)
+	bReq := httptest.NewRequest(http.MethodPost, "/api/v1/telemetry/beacon", bytes.NewReader(beaconBytes))
+	bW := httptest.NewRecorder()
+	state.handleTelemetryBeacon(bW, bReq)
+
+	if bW.Code != http.StatusOK {
+		t.Fatalf("expected 200 from handleTelemetryBeacon, got %d (%s)", bW.Code, bW.Body.String())
+	}
+
+	// Verify route mode was updated in session
+	if sess.RouteMode != "transit" {
+		t.Errorf("expected updated RouteMode 'transit', got '%s'", sess.RouteMode)
+	}
+
+	// 3. Prometheus metrics output
+	mReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	mReq.RemoteAddr = "127.0.0.1:1234"
+	mW := httptest.NewRecorder()
+	state.handleMetrics(mW, mReq)
+
+	if mW.Code != http.StatusOK {
+		t.Fatalf("expected 200 from handleMetrics, got %d", mW.Code)
+	}
+	mBody := mW.Body.String()
+	if !strings.Contains(mBody, "warlink_sessions_by_route_mode") {
+		t.Errorf("expected metrics to contain warlink_sessions_by_route_mode, got:\n%s", mBody)
+	}
+	if !strings.Contains(mBody, `warlink_sessions_by_route_mode{route_mode="transit"} 1`) {
+		t.Errorf("expected metrics to report 1 transit session, got:\n%s", mBody)
 	}
 }
 

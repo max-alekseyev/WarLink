@@ -84,3 +84,41 @@ func TestMeterSlidingAverage(t *testing.T) {
 		t.Errorf("Expected average 50, got %d", m.latestRTT)
 	}
 }
+
+func TestMeterGetDetailedStats(t *testing.T) {
+	m := New()
+
+	// Initial inactive state
+	_, _, _, _, _, _, active := m.GetDetailedStats()
+	if active {
+		t.Errorf("Expected inactive meter initially")
+	}
+
+	m.activeServer = "54.115.8.196"
+	m.activePort = 4192
+	samples := []int{50, 60, 40, 55}
+	for _, s := range samples {
+		m.addSample(s)
+	}
+
+	srv, wireRtt, inGame, jitter, minRtt, maxRtt, active := m.GetDetailedStats()
+	if !active {
+		t.Fatalf("Expected active meter after samples")
+	}
+	if srv != "54.115.8.196:4192" {
+		t.Errorf("Expected server 54.115.8.196:4192, got %s", srv)
+	}
+	if wireRtt != 51 { // (50+60+40+55)/4 = 205/4 = 51
+		t.Errorf("Expected wireRtt 51, got %d", wireRtt)
+	}
+	if inGame != 81 {
+		t.Errorf("Expected inGame 81, got %d", inGame)
+	}
+	if minRtt != 40 || maxRtt != 60 {
+		t.Errorf("Expected min=40, max=60, got min=%d, max=%d", minRtt, maxRtt)
+	}
+	// Jitter: |60-50|=10, |40-60|=20, |55-40|=15 -> (10+20+15)/3 = 45/3 = 15
+	if jitter != 15 {
+		t.Errorf("Expected jitter 15, got %d", jitter)
+	}
+}

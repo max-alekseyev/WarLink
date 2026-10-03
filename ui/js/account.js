@@ -94,7 +94,7 @@ function renderAccountData(p) {
     }
     const resetDevBtn = document.getElementById('btn-reset-devices');
     if (resetDevBtn) {
-        resetDevBtn.style.display = (p.device_count > 1) ? 'inline-block' : 'none';
+        resetDevBtn.style.display = 'inline-block';
     }
 
     const steamInput = document.getElementById('input-dossier-steam');

@@ -133,6 +133,44 @@ func (m *Meter) GetActivePing() (server string, wireRttMs int, inGameEstMs int, 
 	return srv, m.latestRTT, inGame, true
 }
 
+// GetDetailedStats returns detailed match latency metrics including jitter, min, and max RTT.
+func (m *Meter) GetDetailedStats() (server string, wireRttMs int, inGameEstMs int, jitterMs int, minRttMs int, maxRttMs int, active bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.latestRTT <= 0 || m.activeServer == "" || len(m.samples) == 0 {
+		return "", 0, 0, 0, 0, 0, false
+	}
+	srv := fmt.Sprintf("%s:%d", m.activeServer, m.activePort)
+	inGame := m.latestRTT + 30
+
+	jitter := 0
+	if len(m.samples) >= 2 {
+		diffSum := 0
+		for i := 1; i < len(m.samples); i++ {
+			d := m.samples[i] - m.samples[i-1]
+			if d < 0 {
+				d = -d
+			}
+			diffSum += d
+		}
+		jitter = diffSum / (len(m.samples) - 1)
+	}
+
+	minRTT := m.samples[0]
+	maxRTT := m.samples[0]
+	for _, s := range m.samples[1:] {
+		if s < minRTT {
+			minRTT = s
+		}
+		if s > maxRTT {
+			maxRTT = s
+		}
+	}
+
+	return srv, m.latestRTT, inGame, jitter, minRTT, maxRTT, true
+}
+
 func (m *Meter) closeHandleLocked() {
 	if m.handle != 0 && m.handle != ^uintptr(0) {
 		h := m.handle

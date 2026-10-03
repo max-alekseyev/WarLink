@@ -77,6 +77,7 @@ func GetNotifications(account, device string) ([]InAppNotification, error) {
 	q := u.Query()
 	q.Set("account", account)
 	q.Set("device", device)
+	q.Set("route_mode", GetNetworkRouteMode())
 	u.RawQuery = q.Encode()
 
 	client := &http.Client{Timeout: 5 * time.Second}

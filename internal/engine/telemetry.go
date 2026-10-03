@@ -96,6 +96,25 @@ func (tm *TelemetryMonitor) Get() (int, int) {
 	return tm.pingMs, tm.packetLoss
 }
 
+// GetDetailed returns the current measured ping (ms), packet loss percentage, and sliding jitter (ms).
+func (tm *TelemetryMonitor) GetDetailed() (pingMs int, lossPct int, jitterMs int) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	jitter := 0
+	if len(tm.rtts) >= 2 {
+		diffSum := 0
+		for i := 1; i < len(tm.rtts); i++ {
+			d := tm.rtts[i] - tm.rtts[i-1]
+			if d < 0 {
+				d = -d
+			}
+			diffSum += d
+		}
+		jitter = diffSum / (len(tm.rtts) - 1)
+	}
+	return tm.pingMs, tm.packetLoss, jitter
+}
+
 func (tm *TelemetryMonitor) loop() {
 	ticker := time.NewTicker(2500 * time.Millisecond)
 	defer ticker.Stop()

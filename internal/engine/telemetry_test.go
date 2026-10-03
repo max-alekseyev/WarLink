@@ -36,3 +36,19 @@ func TestProbeDirect_Localhost(t *testing.T) {
 		t.Errorf("expected probe to closed port to fail, got ok=true, rtt=%d", rtt)
 	}
 }
+
+func TestTelemetryMonitor_GetDetailed(t *testing.T) {
+	tm := NewTelemetryMonitor()
+	tm.pingMs = 45
+	tm.packetLoss = 5
+	tm.rtts = []int{40, 50, 42, 48}
+
+	ping, loss, jitter := tm.GetDetailed()
+	if ping != 45 || loss != 5 {
+		t.Errorf("expected ping=45, loss=5, got %d, %d", ping, loss)
+	}
+	// |50-40|=10, |42-50|=8, |48-42|=6 -> (10+8+6)/3 = 24/3 = 8
+	if jitter != 8 {
+		t.Errorf("expected jitter 8, got %d", jitter)
+	}
+}

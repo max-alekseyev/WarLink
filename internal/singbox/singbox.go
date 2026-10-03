@@ -33,7 +33,7 @@ const (
 )
 
 var (
-	ClientVersion       = "v2.1.12"
+	ClientVersion       = "v2.1.13"
 	DefaultServerIP     = "138.124.103.99"
 	DefaultServerAPI    = "http://138.124.103.99"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -576,6 +576,7 @@ func AcquireSession(game ...string) (string, error) {
 			"nonce":          nonce,
 			"game":           targetGame,
 			"app_version":    ClientVersion,
+			"route_mode":     GetNetworkRouteMode(),
 		})
 
 		req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(reqBody))
@@ -822,7 +823,7 @@ func GetServerGatewayStatus() (*GatewayStatus, error) {
 	if serverAPI == "" {
 		return nil, fmt.Errorf("server API not configured")
 	}
-	apiURL := fmt.Sprintf("%s/api/v1/status", serverAPI)
+	apiURL := fmt.Sprintf("%s/api/v1/status?route_mode=%s&device_id=%s", serverAPI, url.QueryEscape(GetNetworkRouteMode()), url.QueryEscape(GetMachineGUID()))
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(apiURL)
 	if err != nil {

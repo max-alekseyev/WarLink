@@ -11,12 +11,21 @@ param(
     [int64]$DeleteId = 0,
     [switch]$List,
     [string]$SshKey = "$HOME\.ssh\id_ed25519",
-    [string]$ServerHost = $(if ($env:WARLINK_SERVER_HOST) { $env:WARLINK_SERVER_HOST } else { "127.0.0.1" })
+    [string]$ServerHost = $(if ($env:WARLINK_SERVER_HOST) { $env:WARLINK_SERVER_HOST } elseif ([Environment]::GetEnvironmentVariable("WARLINK_SERVER_HOST", "User")) { [Environment]::GetEnvironmentVariable("WARLINK_SERVER_HOST", "User") } else { "127.0.0.1" })
 )
+
+$bindArgs = @()
+try {
+    $defIf = (Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue | Where-Object NextHop -ne "0.0.0.0" | Select-Object -First 1 -ExpandProperty ifIndex)
+    if ($defIf) {
+        $physIp = (Get-NetIPAddress -InterfaceIndex $defIf -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty IPAddress)
+        if ($physIp) { $bindArgs = @("-b", $physIp) }
+    }
+} catch {}
 
 if ($List) {
     Write-Host "Fetching active notifications from $ServerHost..." -ForegroundColor Cyan
-    $res = ssh -i $SshKey -o StrictHostKeyChecking=no "root@$ServerHost" "curl -s http://127.0.0.1:8081/api/v1/admin/notifications"
+    $res = ssh -i $SshKey $bindArgs -o StrictHostKeyChecking=no "root@$ServerHost" "curl -s http://127.0.0.1:8081/api/v1/admin/notifications"
     $res | ConvertFrom-Json | Select-Object -ExpandProperty notifications | Format-Table id, target_type, severity, title, action_label, created_at
     exit 0
 }
@@ -46,9 +55,8 @@ $payload = @{
     action_url   = $ActionUrl
 } | ConvertTo-Json -Compress
 
-$escapedPayload = $payload.Replace('"', '\"')
-$remoteCmd = "curl -s -X POST http://127.0.0.1:8081/api/v1/admin/notifications -H 'Content-Type: application/json' -d '$escapedPayload'"
-
 Write-Host "Dispatching notification to $ServerHost..." -ForegroundColor Cyan
-$res = ssh -i $SshKey -o StrictHostKeyChecking=no "root@$ServerHost" $remoteCmd
+$b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($payload))
+$remoteCmd = "echo $b64 | base64 -d | curl -s -X POST http://127.0.0.1:8081/api/v1/admin/notifications -H 'Content-Type: application/json' -d @-"
+$res = ssh -i $SshKey $bindArgs -o StrictHostKeyChecking=no "root@$ServerHost" $remoteCmd
 Write-Host "Response: $res" -ForegroundColor Green

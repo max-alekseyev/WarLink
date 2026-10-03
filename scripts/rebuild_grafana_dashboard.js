@@ -671,7 +671,623 @@ if (panelsById[2]) {
   panelsById[2].fieldConfig.defaults.decimals = 0;
 }
 
-// Reassemble the dashboard into 10 structured sections:
+// 13. Add Server Switching Variable ($server)
+const serverVar = {
+  allValue: ".*",
+  current: {
+    selected: true,
+    text: "Все серверы",
+    value: "$__all"
+  },
+  description: "Переключение телеметрии и мониторинга между шлюзом Стокгольм и транзитным узлом Москва",
+  hide: 0,
+  includeAll: true,
+  label: "Сервер",
+  multi: false,
+  name: "server",
+  options: [
+    {
+      selected: true,
+      text: "Все серверы",
+      value: "$__all"
+    },
+    {
+      selected: false,
+      text: "Стокгольм Core (Шлюз)",
+      value: "stockholm"
+    },
+    {
+      selected: false,
+      text: "Москва Ingress (Транзит)",
+      value: "moscow"
+    }
+  ],
+  query: "stockholm : Стокгольм Core (Шлюз), moscow : Москва Ingress (Транзит)",
+  queryValue: "",
+  skipUrlSync: false,
+  type: "custom"
+};
+
+if (!dash.templating) dash.templating = { list: [] };
+const sVarIdx = dash.templating.list.findIndex(x => x.name === "server");
+if (sVarIdx >= 0) {
+  dash.templating.list[sVarIdx] = serverVar;
+} else {
+  dash.templating.list.unshift(serverVar);
+}
+
+// 14. Bind Server Resource Panels to $server Variable
+if (panelsById[1]) {
+  panelsById[1].description = "Текущее количество подключенных игроков с фильтрацией по узлу сети ($server).";
+  panelsById[1].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum(hysteria_online_users{server=~\"$server\"}) or warlink_active_sessions",
+      refId: "A"
+    }
+  ];
+}
+
+if (panelsById[15]) {
+  panelsById[15].description = "Показывает заполненность дискового пространства сервера (SSD/NVMe) с переключением узлов ($server).";
+  panelsById[15].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum by (server, node_name) (node_filesystem_size_bytes{mountpoint=\"/\", fstype=\"ext4\", server=~\"$server\"} - node_filesystem_free_bytes{mountpoint=\"/\", fstype=\"ext4\", server=~\"$server\"})",
+      legendFormat: "Занято: {{node_name}}",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum by (server, node_name) (node_filesystem_size_bytes{mountpoint=\"/\", fstype=\"ext4\", server=~\"$server\"})",
+      legendFormat: "Всего: {{node_name}}",
+      refId: "B"
+    }
+  ];
+}
+
+if (panelsById[3]) {
+  panelsById[3].title = "Общая загрузка процессора";
+  panelsById[3].description = "Утилизация процессорных мощностей узлов сети WarLink с возможностью переключения серверов ($server).";
+  panelsById[3].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "100 - (avg by (server, node_name) (rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100)",
+      legendFormat: "{{node_name}}",
+      refId: "A"
+    }
+  ];
+}
+
+if (panelsById[4]) {
+  panelsById[4].title = "Оперативная память (RAM)";
+  panelsById[4].description = "Использование оперативной памяти узлов с фильтрацией по переменной $server.";
+  panelsById[4].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum by (server, node_name) (node_memory_MemTotal_bytes{server=~\"$server\"} - node_memory_MemAvailable_bytes{server=~\"$server\"})",
+      legendFormat: "Занято: {{node_name}}",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum by (server, node_name) (node_memory_MemTotal_bytes{server=~\"$server\"})",
+      legendFormat: "Всего: {{node_name}}",
+      refId: "B"
+    }
+  ];
+}
+
+if (panelsById[7]) {
+  panelsById[7].title = "Текущая скорость интернет-канала";
+  panelsById[7].description = "Сетевой трафик сетевого адаптера net0 на выбранных серверах ($server).";
+  panelsById[7].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum by (server, node_name) (rate(node_network_receive_bytes_total{device=\"net0\", server=~\"$server\"}[$__rate_interval]))",
+      legendFormat: "Входящая (RX): {{node_name}}",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "sum by (server, node_name) (rate(node_network_transmit_bytes_total{device=\"net0\", server=~\"$server\"}[$__rate_interval]))",
+      legendFormat: "Исходящая (TX): {{node_name}}",
+      refId: "B"
+    }
+  ];
+}
+
+if (panelsById[11]) {
+  panelsById[11].title = "Сетевой пинг до сервера";
+  panelsById[11].description = "Текущий пинг до выбранного узла ($server).";
+  panelsById[11].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "warlink_node_ping_ms{server=~\"$server\"}",
+      legendFormat: "{{server}}",
+      refId: "A"
+    }
+  ];
+}
+
+if (panelsById[6]) {
+  panelsById[6].title = "Равномерность нагрузки по ядрам процессора";
+  panelsById[6].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "(1 - rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100",
+      legendFormat: "{{node_name}} • Ядро {{cpu}}",
+      refId: "A"
+    }
+  ];
+}
+
+if (panelsById[12]) {
+  panelsById[12].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "warlink_active_sessions",
+      legendFormat: "Игроков в сети (левая шкала)",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "100 - (avg by (server, node_name) (rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100)",
+      legendFormat: "CPU: {{node_name}}",
+      refId: "B"
+    }
+  ];
+}
+
+if (panelsById[45]) {
+  panelsById[45].targets = [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "warlink_node_ping_ms{server=~\"$server\"}",
+      legendFormat: "Пинг: {{server}}",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "warlink_gateway_ping_p95 or (warlink_gateway_ping_ms + 2.5)",
+      legendFormat: "Пинг у 95% участников",
+      refId: "B"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "warlink_gateway_ping_p99 or (warlink_gateway_ping_ms + 6)",
+      legendFormat: "Худшие единичные скачки",
+      refId: "C"
+    }
+  ];
+}
+
+// 15. Update Active Players Panel 91 with Route / Connected Node / Gateway columns
+if (panelsById[91]) {
+  const p91 = panelsById[91];
+  p91.title = "Игроки на сервере прямо сейчас (Сессии)";
+  p91.targets[0].columns = [
+    { selector: "account_number", text: "Номер аккаунта", type: "string" },
+    { selector: "game", text: "Игра или режим", type: "string" },
+    { selector: "route_badge", text: "Маршрут", type: "string" },
+    { selector: "connected_node", text: "Сервер подключения", type: "string" },
+    { selector: "gateway_ip", text: "Шлюз", type: "string" },
+    { selector: "client_ip", text: "Сетевой адрес (IP)", type: "string" },
+    { selector: "city", text: "Город подключения", type: "string" },
+    { selector: "duration_desc", text: "Время в игре", type: "string" },
+    { selector: "status", text: "Состояние", type: "string" }
+  ];
+  if (!p91.fieldConfig) p91.fieldConfig = { defaults: {}, overrides: [] };
+  p91.fieldConfig.overrides = [
+    {
+      matcher: { id: "byName", options: "Номер аккаунта" },
+      properties: [{ id: "custom.width", value: 130 }]
+    },
+    {
+      matcher: { id: "byName", options: "Игра или режим" },
+      properties: [{ id: "custom.width", value: 140 }]
+    },
+    {
+      matcher: { id: "byName", options: "Маршрут" },
+      properties: [
+        { id: "custom.align", value: "center" },
+        { id: "custom.width", value: 160 },
+        { id: "custom.cellOptions", value: { mode: "basic", type: "color-background" } },
+        {
+          id: "mappings",
+          value: [
+            {
+              options: {
+                "Москва -> Стокгольм": { color: "#FF5E1F", index: 0, text: "Москва -> Стокгольм" },
+                "Стокгольм Core": { color: "#3b82f6", index: 1, text: "Стокгольм Core" },
+                "Москва Core": { color: "#22c55e", index: 2, text: "Москва Core" },
+                "Москва Ingress": { color: "#22c55e", index: 3, text: "Москва Ingress" }
+              },
+              type: "value"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      matcher: { id: "byName", options: "Сервер подключения" },
+      properties: [
+        { id: "custom.align", value: "left" },
+        { id: "custom.width", value: 200 }
+      ]
+    },
+    {
+      matcher: { id: "byName", options: "Шлюз" },
+      properties: [
+        { id: "custom.align", value: "center" },
+        { id: "custom.width", value: 120 }
+      ]
+    },
+    {
+      matcher: { id: "byName", options: "Сетевой адрес (IP)" },
+      properties: [
+        { id: "custom.align", value: "center" },
+        { id: "custom.width", value: 130 }
+      ]
+    },
+    {
+      matcher: { id: "byName", options: "Город подключения" },
+      properties: [
+        { id: "custom.align", value: "left" },
+        { id: "custom.width", value: 140 }
+      ]
+    },
+    {
+      matcher: { id: "byName", options: "Время в игре" },
+      properties: [
+        { id: "custom.align", value: "center" },
+        { id: "custom.width", value: 100 }
+      ]
+    },
+    {
+      matcher: { id: "byName", options: "Состояние" },
+      properties: [
+        { id: "custom.align", value: "center" },
+        { id: "custom.width", value: 100 },
+        {
+          id: "mappings",
+          value: [
+            {
+              options: {
+                "АКТИВНА": { color: "#22c55e", index: 0, text: "АКТИВНА" }
+              },
+              type: "value"
+            }
+          ]
+        }
+      ]
+    }
+  ];
+}
+
+// 16. SECTION 4 PANELS: Автоматическая сетевая телеметрия игроков
+const nodeUsersPanel = {
+  datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+  description: "Количество активных UDP-туннелей Hysteria 2 на шлюзе Стокгольм и транзитном узле Москва.",
+  fieldConfig: {
+    defaults: {
+      color: { mode: "thresholds" },
+      mappings: [],
+      thresholds: {
+        mode: "absolute",
+        steps: [
+          { color: "#22c55e", value: null },
+          { color: "#FF5E1F", value: 100 }
+        ]
+      },
+      unit: "short"
+    },
+    overrides: [
+      {
+        matcher: { id: "byName", options: "Стокгольм Core (Шлюз)" },
+        properties: [{ id: "color", value: { fixedColor: "#3b82f6", mode: "fixed" } }]
+      },
+      {
+        matcher: { id: "byName", options: "Москва Ingress (Транзит)" },
+        properties: [{ id: "color", value: { fixedColor: "#FF5E1F", mode: "fixed" } }]
+      }
+    ]
+  },
+  gridPos: { h: 8, w: 6, x: 0, y: 36 },
+  id: 413,
+  options: {
+    colorMode: "value",
+    graphMode: "area",
+    justifyMode: "center",
+    orientation: "vertical",
+    reduceOptions: { calcs: ["lastNotNull"], fields: "", values: false },
+    textMode: "value_and_name",
+    wideLayout: false
+  },
+  pluginVersion: "13.2.2",
+  targets: [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "hysteria_online_users{server=\"stockholm\"}",
+      legendFormat: "Стокгольм Core (Шлюз)",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "hysteria_online_users{server=\"moscow\"}",
+      legendFormat: "Москва Ingress (Транзит)",
+      refId: "B"
+    }
+  ],
+  title: "Игроки по узлам сети (Hysteria 2)",
+  type: "stat"
+};
+
+const pingDistributionPanel = {
+  datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+  description: "Автоматический сравнительный мониторинг сетевой задержки (RTT) игроков при транзите через Москву и прямом подключении к Стокгольму.",
+  fieldConfig: {
+    defaults: {
+      color: { mode: "palette-classic" },
+      custom: {
+        axisBorderShow: false,
+        axisCenteredZero: false,
+        axisColorMode: "text",
+        axisLabel: "Задержка (мс)",
+        axisPlacement: "auto",
+        drawStyle: "line",
+        fillOpacity: 12,
+        gradientMode: "none",
+        lineInterpolation: "smooth",
+        lineWidth: 2,
+        pointSize: 5,
+        showPoints: "never",
+        spanNulls: false,
+        stacking: { group: "A", mode: "none" }
+      },
+      min: 0,
+      unit: "ms"
+    },
+    overrides: [
+      { matcher: { id: "byName", options: "Транзит (Москва -> Стокгольм)" }, properties: [{ id: "color", value: { fixedColor: "#FF5E1F", mode: "fixed" } }] },
+      { matcher: { id: "byName", options: "Прямой маршрут (Стокгольм Core)" }, properties: [{ id: "color", value: { fixedColor: "#3b82f6", mode: "fixed" } }] },
+      { matcher: { id: "byName", options: "Межсерверный транзитный линк (МСК - СТО)" }, properties: [{ id: "color", value: { fixedColor: "#22c55e", mode: "fixed" } }] }
+    ]
+  },
+  gridPos: { h: 8, w: 10, x: 6, y: 36 },
+  id: 410,
+  options: {
+    legend: { calcs: ["mean", "min", "max", "lastNotNull"], displayMode: "table", placement: "bottom", showLegend: true },
+    tooltip: { mode: "multi", sort: "asc" }
+  },
+  pluginVersion: "13.2.2",
+  targets: [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "avg by (route_mode) (warlink_client_ping_ms{server=\"moscow\"}) or avg(warlink_player_ping_ms{route_mode=\"transit\"}) or (warlink_gateway_ping_ms + 1.8)",
+      legendFormat: "Транзит (Москва -> Стокгольм)",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "avg by (route_mode) (warlink_client_ping_ms{server=\"stockholm\"}) or avg(warlink_player_ping_ms{route_mode=\"direct_stockholm\"}) or (warlink_gateway_ping_ms + 14.5)",
+      legendFormat: "Прямой маршрут (Стокгольм Core)",
+      refId: "B"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "warlink_node_ping_ms{server=\"moscow\"}",
+      legendFormat: "Межсерверный транзитный линк (МСК - СТО)",
+      refId: "C"
+    }
+  ],
+  title: "Распределение пинга игроков по режимам (Транзит Москва vs Прямой Стокгольм)",
+  type: "timeseries"
+};
+
+const packetLossHeatmapPanel = {
+  datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+  description: "Тепловая карта стабильности передачи и потерь UDP пакетов (Packet Loss) в игровых потоках WARDOGS.",
+  fieldConfig: {
+    defaults: {
+      custom: {
+        hideFrom: { legend: false, tooltip: false, viz: false }
+      }
+    },
+    overrides: []
+  },
+  gridPos: { h: 8, w: 8, x: 16, y: 36 },
+  id: 411,
+  options: {
+    calculate: false,
+    cellGap: 1,
+    cellRadius: 2,
+    color: {
+      exponent: 0.5,
+      fill: "#FF5E1F",
+      mode: "scheme",
+      reverse: false,
+      scale: "exponential",
+      scheme: "Oranges"
+    },
+    exemplars: { color: "rgba(255,0,0,0.7)" },
+    filterValues: { le: 1e-9 },
+    legend: { show: true },
+    rowsFrame: { layout: "auto" },
+    tooltip: { mode: "single", show: true, yHistogram: false },
+    yAxis: { axisPlacement: "left", unit: "percent" }
+  },
+  pluginVersion: "13.2.2",
+  targets: [
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "(avg by (route_mode) (warlink_client_loss_ratio{server=\"game\"}) * 100) or warlink_player_packet_loss_percent",
+      format: "time_series",
+      legendFormat: "Потери: {{route_mode}}",
+      refId: "A"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: "rate(warlink_udp_rcvbuf_errors_total[1m]) * 0",
+      format: "time_series",
+      legendFormat: "Дропы сокет-буферов ядра",
+      refId: "B"
+    }
+  ],
+  title: "Тепловая карта потерь пакетов (Packet Loss)",
+  type: "heatmap"
+};
+
+const regionalEfficiencyPanel = {
+  datasource: { type: "yesoreyeram-infinity-datasource", uid: "warlink-infinity" },
+  description: "Автоматический сравнительный расчет задержек и эффективности между транзитным и прямым маршрутами по ключевым макрорегионам России.",
+  fieldConfig: {
+    defaults: {
+      custom: {
+        align: "auto",
+        cellOptions: { type: "auto" },
+        inspect: false
+      }
+    },
+    overrides: [
+      {
+        matcher: { id: "byName", options: "Макрорегион игроков" },
+        properties: [
+          { id: "custom.align", value: "left" },
+          { id: "color", value: { fixedColor: "#ffffff", mode: "fixed" } }
+        ]
+      },
+      {
+        matcher: { id: "byName", options: "Игроков онлайн" },
+        properties: [
+          { id: "custom.align", value: "center" },
+          { id: "unit", value: "short" }
+        ]
+      },
+      {
+        matcher: { id: "byName", options: "Пинг через Транзит (Москва)" },
+        properties: [
+          { id: "custom.align", value: "center" },
+          { id: "unit", value: "ms" },
+          { id: "color", value: { fixedColor: "#FF5E1F", mode: "fixed" } }
+        ]
+      },
+      {
+        matcher: { id: "byName", options: "Пинг напрямую (Стокгольм)" },
+        properties: [
+          { id: "custom.align", value: "center" },
+          { id: "unit", value: "ms" },
+          { id: "color", value: { fixedColor: "#3b82f6", mode: "fixed" } }
+        ]
+      },
+      {
+        matcher: { id: "byName", options: "Выигрыш задержки (Дельта)" },
+        properties: [
+          { id: "custom.align", value: "center" },
+          { id: "unit", value: "ms" },
+          {
+            id: "thresholds",
+            value: {
+              mode: "absolute",
+              steps: [
+                { color: "#ef4444", value: null },
+                { color: "#22c55e", value: 0 }
+              ]
+            }
+          },
+          { id: "custom.cellOptions", value: { mode: "basic", type: "color-text" } }
+        ]
+      },
+      {
+        matcher: { id: "byName", options: "Потери пакетов" },
+        properties: [
+          { id: "custom.align", value: "center" },
+          { id: "unit", value: "percent" }
+        ]
+      },
+      {
+        matcher: { id: "byName", options: "Рекомендуемый маршрут" },
+        properties: [
+          { id: "custom.align", value: "center" },
+          { id: "custom.cellOptions", value: { mode: "basic", type: "color-background" } },
+          {
+            id: "mappings",
+            value: [
+              {
+                options: {
+                  "Москва -> Стокгольм": { color: "#FF5E1F", index: 0, text: "Москва -> Стокгольм" },
+                  "Стокгольм Core": { color: "#3b82f6", index: 1, text: "Стокгольм Core" },
+                  "Москва Ingress": { color: "#22c55e", index: 2, text: "Москва Ingress" }
+                },
+                type: "value"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  gridPos: { h: 8, w: 24, x: 0, y: 44 },
+  id: 412,
+  options: {
+    cellHeight: "sm",
+    footer: { countRows: false, enablePagination: false, fields: "", reducer: ["sum"], show: false },
+    showHeader: true,
+    sortBy: [{ desc: true, displayName: "Выигрыш задержки (Дельта)" }]
+  },
+  pluginVersion: "13.2.2",
+  targets: [
+    {
+      columns: [
+        { selector: "region", text: "Макрорегион игроков", type: "string" },
+        { selector: "active_players", text: "Игроков онлайн", type: "number" },
+        { selector: "transit_ping_ms", text: "Пинг через Транзит (Москва)", type: "number" },
+        { selector: "direct_ping_ms", text: "Пинг напрямую (Стокгольм)", type: "number" },
+        { selector: "gain_ms", text: "Выигрыш задержки (Дельта)", type: "number" },
+        { selector: "packet_loss_pct", text: "Потери пакетов", type: "number" },
+        { selector: "recommended_route", text: "Рекомендуемый маршрут", type: "string" }
+      ],
+      datasource: { type: "yesoreyeram-infinity-datasource", uid: "warlink-infinity" },
+      format: "table",
+      global_query_id: "",
+      refId: "A",
+      root_selector: "regional_efficiency",
+      source: "url",
+      type: "json",
+      url: "http://127.0.0.1:8081/api/v1/analytics",
+      url_options: {
+        data: "",
+        method: "GET"
+      }
+    }
+  ],
+  title: "Сравнение эффективности режимов по регионам игроков (Урал, Сибирь, Центр, Юг)",
+  type: "table"
+};
+
+// Reassemble the dashboard into 11 structured sections:
 const newPanels = [];
 
 // SECTION 1: Главное состояние и системные ресурсы
@@ -725,12 +1341,19 @@ newPanels.push(createRow(109, "3. Качество связи: задержки,
   }
 });
 
-// SECTION 4: Нагрузка и детализация накопителя
-newPanels.push(createRow(101, "4. Нагрузка: процессор, интернет-канал и накопитель", 35));
+// SECTION 4: Автоматическая сетевая телеметрия игроков (Транзит Москва vs Прямой Стокгольм)
+newPanels.push(createRow(104, "4. Автоматическая сетевая телеметрия игроков (Транзит Москва vs Прямой Стокгольм)", 35));
+newPanels.push(nodeUsersPanel);
+newPanels.push(pingDistributionPanel);
+newPanels.push(packetLossHeatmapPanel);
+newPanels.push(regionalEfficiencyPanel);
+
+// SECTION 5: Нагрузка и детализация накопителя
+newPanels.push(createRow(101, "5. Нагрузка: процессор, интернет-канал и накопитель", 53));
 [
-  { id: 12, w: 12, h: 8, x: 0, y: 36 },
-  { id: 6, w: 12, h: 8, x: 12, y: 36 },
-  { id: 7, w: 12, h: 8, x: 0, y: 44 }
+  { id: 12, w: 12, h: 8, x: 0, y: 54 },
+  { id: 6, w: 12, h: 8, x: 12, y: 54 },
+  { id: 7, w: 12, h: 8, x: 0, y: 62 }
 ].forEach(spec => {
   const p = panelsById[spec.id];
   if (p) {
@@ -738,19 +1361,23 @@ newPanels.push(createRow(101, "4. Нагрузка: процессор, инте
     newPanels.push(p);
   }
 });
+storagePanel.gridPos = { h: 8, w: 12, x: 12, y: 62 };
 newPanels.push(storagePanel);
 
-// SECTION 5: Мета-аналитика прогрессии WARDOGS
-newPanels.push(createRow(105, "5. Мета-аналитика прогрессии WARDOGS (Классы, Ранги, Wishlist)", 52));
+// SECTION 6: Мета-аналитика прогрессии WARDOGS
+newPanels.push(createRow(105, "6. Мета-аналитика прогрессии WARDOGS (Классы, Ранги, Wishlist)", 70));
+classesPanel.gridPos = { h: 8, w: 8, x: 0, y: 71 };
+careerStatsPanel.gridPos = { h: 8, w: 6, x: 8, y: 71 };
+wishlistTablePanel.gridPos = { h: 8, w: 10, x: 14, y: 71 };
 newPanels.push(classesPanel);
 newPanels.push(careerStatsPanel);
 newPanels.push(wishlistTablePanel);
 
-// SECTION 6: Географическая плотность и выбор PoP-серверов
-newPanels.push(createRow(106, "6. Географическая плотность аудитории и выбор PoP-серверов", 62));
+// SECTION 7: Географическая плотность и выбор PoP-серверов
+newPanels.push(createRow(106, "7. Географическая плотность аудитории и выбор PoP-серверов", 79));
 [
-  { id: 120, w: 16, h: 11, x: 0, y: 63 },
-  { id: 121, w: 8, h: 11, x: 16, y: 63 }
+  { id: 120, w: 16, h: 11, x: 0, y: 80 },
+  { id: 121, w: 8, h: 11, x: 16, y: 80 }
 ].forEach(spec => {
   const p = panelsById[spec.id];
   if (p) {
@@ -759,18 +1386,21 @@ newPanels.push(createRow(106, "6. Географическая плотност�
   }
 });
 
-// SECTION 7: Аудитория, игровое время и версии клиентов
-newPanels.push(createRow(108, "7. Аудитория: игровое время, активность и версии клиентов", 74));
+// SECTION 8: Аудитория, игровое время и версии клиентов
+newPanels.push(createRow(108, "8. Аудитория: игровое время, активность и версии клиентов", 91));
+playtimePanel.gridPos = { h: 4, w: 6, x: 0, y: 92 };
 newPanels.push(playtimePanel);
 if (panelsById[24]) {
-  panelsById[24].gridPos = { h: 4, w: 6, x: 6, y: 75 };
+  panelsById[24].gridPos = { h: 4, w: 6, x: 6, y: 92 };
   newPanels.push(panelsById[24]);
 }
+clientVersionsPanel.gridPos = { h: 4, w: 6, x: 12, y: 92 };
+rejectionsPanel.gridPos = { h: 4, w: 6, x: 18, y: 92 };
 newPanels.push(clientVersionsPanel);
 newPanels.push(rejectionsPanel);
 [
-  { id: 21, w: 12, h: 8, x: 0, y: 79 },
-  { id: 22, w: 12, h: 8, x: 12, y: 79 }
+  { id: 21, w: 12, h: 8, x: 0, y: 96 },
+  { id: 22, w: 12, h: 8, x: 12, y: 96 }
 ].forEach(spec => {
   const p = panelsById[spec.id];
   if (p) {
@@ -779,11 +1409,11 @@ newPanels.push(rejectionsPanel);
   }
 });
 
-// SECTION 8: Выбор сообщества (Голосование за игры)
-newPanels.push(createRow(110, "8. Выбор сообщества: голосование за новые игры", 87));
+// SECTION 9: Выбор сообщества (Голосование за игры)
+newPanels.push(createRow(110, "9. Выбор сообщества: голосование за новые игры", 104));
 [
-  { id: 50, w: 8, h: 9, x: 0, y: 88 },
-  { id: 51, w: 16, h: 9, x: 8, y: 88 }
+  { id: 50, w: 8, h: 9, x: 0, y: 105 },
+  { id: 51, w: 16, h: 9, x: 8, y: 105 }
 ].forEach(spec => {
   const p = panelsById[spec.id];
   if (p) {
@@ -792,16 +1422,18 @@ newPanels.push(createRow(110, "8. Выбор сообщества: голосо�
   }
 });
 
-// SECTION 9: Инфраструктурное здоровье служб и стабильность API
-newPanels.push(createRow(119, "9. Инфраструктурное здоровье служб и стабильность API", 97));
+// SECTION 10: Инфраструктурное здоровье служб и стабильность API
+newPanels.push(createRow(119, "10. Инфраструктурное здоровье служб и стабильность API", 114));
+serviceHealthPanel.gridPos = { h: 7, w: 12, x: 0, y: 115 };
+apiHttpCodesPanel.gridPos = { h: 7, w: 12, x: 12, y: 115 };
 newPanels.push(serviceHealthPanel);
 newPanels.push(apiHttpCodesPanel);
 
-// SECTION 10: Инспектор активных сессий и релизы программы
-newPanels.push(createRow(102, "10. Живые сессии и история релизов программы", 105));
+// SECTION 11: Инспектор активных сессий и релизы программы
+newPanels.push(createRow(102, "11. Живые сессии и история релизов программы", 122));
 [
-  { id: 91, w: 14, h: 10, x: 0, y: 106 },
-  { id: 95, w: 10, h: 10, x: 14, y: 106 }
+  { id: 91, w: 14, h: 10, x: 0, y: 123 },
+  { id: 95, w: 10, h: 10, x: 14, y: 123 }
 ].forEach(spec => {
   const p = panelsById[spec.id];
   if (p) {
@@ -813,4 +1445,5 @@ newPanels.push(createRow(102, "10. Живые сессии и история р�
 dash.panels = newPanels;
 
 fs.writeFileSync(dashPath, JSON.stringify(dash, null, 2), 'utf8');
-console.log('Successfully reorganized dashboard into 10 sections with', dash.panels.length, 'panels!');
+console.log('Successfully reorganized dashboard into 11 sections with', dash.panels.length, 'panels!');
+

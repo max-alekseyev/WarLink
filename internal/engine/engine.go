@@ -46,6 +46,7 @@ type Engine struct {
 	singboxMgr         *singbox.Manager
 	telemetry          *TelemetryMonitor
 	pingMeter          *pingmeter.Meter
+	beacon             *AutoBeacon
 	watchdogStop           chan struct{}
 	singboxRestartAttempts int
 }
@@ -61,6 +62,7 @@ func New(cfg *config.Config, logCb func(string)) *Engine {
 		telemetry:          NewTelemetryMonitor(),
 		pingMeter:          pingmeter.New(filepath.Join(deps.GetCoreDir(), "zapret", "bin")),
 	}
+	eng.beacon = NewAutoBeacon(eng, logCb)
 	if eng.singboxMgr != nil {
 		eng.singboxMgr.OnProcessStart = func(pid int) {
 			_ = deps.AssignProcessToJob(pid)
@@ -193,6 +195,9 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		if e.pingMeter != nil {
 			_ = e.pingMeter.Start()
 		}
+		if e.beacon != nil {
+			e.beacon.Start("free_internet", "browser")
+		}
 		return nil
 	} else {
 		e.log("[FREE NET] Отключение режима «Комплексный режим» (браузер возвращен на прямой интернет)...")
@@ -226,6 +231,10 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 			return nil
 		}
 		e.stopWatchdog()
+		if e.beacon != nil {
+			e.beacon.SendMatchSummary()
+			e.beacon.Stop()
+		}
 		if e.singboxMgr != nil {
 			_ = e.singboxMgr.Stop()
 		}
@@ -634,6 +643,14 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	if e.pingMeter != nil {
 		_ = e.pingMeter.Start()
 	}
+	if e.beacon != nil {
+		g := e.cfg.GetSelectedGame()
+		pName := ""
+		if g.ExePath != "" {
+			pName = filepath.Base(g.ExePath)
+		}
+		e.beacon.Start(g.ID, pName)
+	}
 
 	e.setProgress(100, 0, 0, bestAlt, "Сетевой туннель полностью активен!", false)
 	e.log("[OK] Сетевой туннель полностью активен! Готово к игре")
@@ -740,6 +757,10 @@ func (e *Engine) disconnectInternal() error {
 	}
 	e.mu.Unlock()
 
+	if e.beacon != nil {
+		e.beacon.SendMatchSummary()
+		e.beacon.Stop()
+	}
 	if e.telemetry != nil {
 		e.telemetry.Stop()
 	}
@@ -785,6 +806,10 @@ func (e *Engine) GetPipelineProgress() PipelineProgress {
 func (e *Engine) Shutdown() {
 	e.stopWatchdog()
 
+	if e.beacon != nil {
+		e.beacon.SendMatchSummary()
+		e.beacon.Stop()
+	}
 	if e.telemetry != nil {
 		e.telemetry.Stop()
 	}
@@ -808,6 +833,20 @@ func (e *Engine) Shutdown() {
 	// sc delete is never called — on next startup WinDivert.dll self-registers cleanly.
 
 	deps.RestoreWindowsNetworkStack(e.log)
+}
+
+// OnGameStart informs the engine and auto-beacon that a game process was launched.
+func (e *Engine) OnGameStart(gameID, procName string) {
+	if e.beacon != nil {
+		e.beacon.SetGame(gameID, procName)
+	}
+}
+
+// OnGameExit sends the match summary report and resets match telemetry accumulators.
+func (e *Engine) OnGameExit(gameTitle string) {
+	if e.beacon != nil {
+		e.beacon.SendMatchSummary()
+	}
 }
 
 

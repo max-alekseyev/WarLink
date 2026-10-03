@@ -62,6 +62,20 @@
         </div>
 
         <div class="setting-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">ПРИВЯЗАННЫЕ УСТРОЙСТВА</span>
+                <button id="btn-settings-reset-devices" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие ПК</button>
+            </div>
+            <div class="setting-info-row">
+                <span class="info-label">Текущий ПК:</span>
+                <span class="info-value font-mono" style="color: var(--accent); font-weight:600;">активен</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                Отвязывает все старые сессии и лишние компьютеры от вашего аккаунта (лимит: 2 ПК на аккаунт).
+            </div>
+        </div>
+
+        <div class="setting-group">
             <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
             <div class="setting-row" style="margin-top: 6px;">
                 <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">

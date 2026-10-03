@@ -68,6 +68,17 @@
       "tooltip": "Открыть пульт параметров сервера, сброса сессий и уведомлений",
       "type": "link",
       "url": "/d/warlink-control-plane"
+    },
+    {
+      "asDropdown": false,
+      "icon": "bolt",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Центр тикетов (Support Desk)",
+      "tooltip": "Открыть операционный центр разбора баг-репортов и отправки депеш",
+      "type": "link",
+      "url": "/d/warlink-support-desk"
     }
   ],
   "liveNow": false,
@@ -108,7 +119,7 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 1
       },
@@ -171,7 +182,8 @@
               }
             ]
           },
-          "unit": "days"
+          "unit": " дн.",
+          "decimals": 0
         },
         "overrides": [
           {
@@ -193,8 +205,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 3,
         "y": 1
       },
       "id": 2,
@@ -278,8 +290,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 6,
         "y": 1
       },
       "id": 13,
@@ -358,8 +370,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 9,
         "y": 1
       },
       "id": 11,
@@ -385,14 +397,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_gateway_ping_ms",
-          "range": true,
+          "expr": "warlink_node_ping_ms{server=~\"$server\"}",
+          "legendFormat": "{{server}}",
           "refId": "A"
         }
       ],
       "title": "Сетевой пинг до сервера",
       "type": "stat",
-      "description": "Время отклика между шлюзом и опорной сетью в миллисекундах. В норме пинг держится в зеленой зоне (до 30-50 мс); если значение превышает 70-100 мс, в игре могут ощущаться задержки."
+      "description": "Текущий пинг до выбранного узла ($server)."
     },
     {
       "datasource": {
@@ -429,7 +441,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 16,
+        "x": 12,
         "y": 1
       },
       "id": 3,
@@ -455,14 +467,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_cpu_percent",
-          "range": true,
+          "expr": "100 - (avg by (server, node_name) (rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100)",
+          "legendFormat": "{{node_name}}",
           "refId": "A"
         }
       ],
       "title": "Общая загрузка процессора",
       "type": "gauge",
-      "description": "Показывает процент вычислительной мощности сервера, занятый шифрованием и сетевым трафиком. В норме стрелка находится в зеленой зоне (до 70%), значения выше 85% означают риск просадки кадров и задержек."
+      "description": "Утилизация процессорных мощностей узлов сети WarLink с возможностью переключения серверов ($server)."
     },
     {
       "datasource": {
@@ -514,7 +526,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 20,
+        "x": 16,
         "y": 1
       },
       "id": 4,
@@ -540,8 +552,103 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_ram_used_mb * 1024 * 1024",
-          "legendFormat": "Используется",
+          "expr": "sum by (server, node_name) (node_memory_MemTotal_bytes{server=~\"$server\"} - node_memory_MemAvailable_bytes{server=~\"$server\"})",
+          "legendFormat": "Занято: {{node_name}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (server, node_name) (node_memory_MemTotal_bytes{server=~\"$server\"})",
+          "legendFormat": "Всего: {{node_name}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Оперативная память (RAM)",
+      "type": "stat",
+      "description": "Использование оперативной памяти узлов с фильтрацией по переменной $server."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#22c55e",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 7516192768
+              },
+              {
+                "color": "#ef4444",
+                "value": 9126805504
+              }
+            ]
+          },
+          "unit": "decbytes"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Всего доступно"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#737373",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_disk_used_gb * 1024 * 1024 * 1024",
+          "legendFormat": "Занято",
           "range": true,
           "refId": "A"
         },
@@ -551,15 +658,15 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_ram_total_mb * 1024 * 1024",
+          "expr": "warlink_disk_total_gb * 1024 * 1024 * 1024",
           "legendFormat": "Всего доступно",
           "range": true,
           "refId": "B"
         }
       ],
-      "title": "Оперативная память (RAM)",
+      "title": "Хранилище диска (NVMe)",
       "type": "stat",
-      "description": "Показывает объем занятой оперативной памяти из доступного лимита. В норме занято не более 70-80% (до 3 ГБ из 4 ГБ), свободная память необходима для стабильной работы сетевых очередей."
+      "description": "Показывает заполненность дискового пространства сервера (SSD/NVMe). При заполнении свыше 85% требуется плановая очистка старых системных логов или расширение тарифа VPS для предотвращения остановки базы данных PostgreSQL."
     },
     {
       "collapsed": false,
@@ -569,8 +676,1707 @@
         "x": 0,
         "y": 5
       },
+      "id": 107,
+      "title": "2. Финансы: сбор донатов и прогноз работы сервера (Runway)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#ef4444",
+                "value": null
+              },
+              {
+                "color": "#eab308",
+                "value": 30
+              },
+              {
+                "color": "#22c55e",
+                "value": 90
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 180
+              }
+            ]
+          },
+          "unit": " дн."
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "id": 31,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_financial_runway_days",
+          "instant": true,
+          "legendFormat": "Дней работы шлюза",
+          "refId": "A"
+        }
+      ],
+      "title": "Гарантированный запас работы (Runway)",
+      "type": "stat",
+      "description": "Расчетный срок непрерывной работы шлюза на текущем балансе хостинга без новых пожертвований."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#ef4444",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 20
+              },
+              {
+                "color": "#3b82f6",
+                "value": 80
+              },
+              {
+                "color": "#22c55e",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "id": 28,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_cluster_coverage_percent",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "Выполнение цели"
+        }
+      ],
+      "title": "Прогресс сбора на серверы сообщества (Цель: 10 € в месяц)",
+      "type": "bargauge",
+      "description": "Общий прогресс совместного сбора средств на поддержание серверов WarLink: основного игрового шлюза в Стокгольме и запасного европейского шлюза. Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру полностью закрыты силами участников."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#22c55e",
+            "mode": "fixed"
+          },
+          "unit": "currencyRUB"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "В пересчёте на евро"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyEUR"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 6
+      },
+      "id": 20,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_donations_rub_total) or vector(0)",
+          "legendFormat": "Собрано в рублях",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "(max(warlink_donations_rub_total) or vector(0)) / 130.67",
+          "legendFormat": "В пересчёте на евро",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Всего собрано донатов",
+      "type": "stat",
+      "description": "Общая сумма финансовой поддержки от участников сообщества за всё время работы проекта. Показывает накопленный объём донатов в рублях и в пересчёте на евро по курсу хостинга."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#3b82f6",
+            "mode": "fixed"
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 6
+      },
+      "id": 25,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_donations_paid_total) or vector(0)",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "Успешных платежей"
+        }
+      ],
+      "title": "Успешных донатов",
+      "type": "stat",
+      "description": "Количество успешно завершённых платежей от игроков. Каждая единица — это реальная поддержка от участника сообщества."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 10
+              },
+              {
+                "color": "green",
+                "value": 20
+              }
+            ]
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 6
+      },
+      "id": 27,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "(max(warlink_donations_paid_total) / clamp_min(max(warlink_invoices_created_total), 1)) * 100",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "Завершено оплат"
+        }
+      ],
+      "title": "Доля завершённых оплат",
+      "type": "stat",
+      "description": "Процент игроков, которые открыли окно оплаты и успешно перевели донат. Зелёная зона (выше 20%) — отличный результат. Красная зона (ниже 10%) означает, что игроки сталкиваются с трудностями при оплате."
+    },
+    {
+      "id": 29,
+      "title": "Реестр донатеров и спонсоров сервера",
+      "type": "table",
+      "description": "Сводный реестр операторов, поддержавших инфраструктуру игрового шлюза WarLink, с детализацией рангов, активности слотов и сумм взносов.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "pluginVersion": "13.2.2",
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": true,
+          "fields": [
+            "Сумма поддержки",
+            "Платежей"
+          ],
+          "reducer": [
+            "sum"
+          ],
+          "show": true
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Сумма поддержки"
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#e5e7eb"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Номер аккаунта"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Позывной оператора"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#f9fafb"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ранг"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ADMIN": {
+                        "color": "#7e22ce",
+                        "text": "ADMIN",
+                        "index": 0
+                      },
+                      "SPONSOR": {
+                        "color": "#c2410c",
+                        "text": "SPONSOR",
+                        "index": 1
+                      },
+                      "FREE": {
+                        "color": "#27272a",
+                        "text": "FREE",
+                        "index": 2
+                      },
+                      "admin": {
+                        "color": "#7e22ce",
+                        "text": "ADMIN",
+                        "index": 3
+                      },
+                      "sponsor": {
+                        "color": "#c2410c",
+                        "text": "SPONSOR",
+                        "index": 4
+                      },
+                      "free": {
+                        "color": "#27272a",
+                        "text": "FREE",
+                        "index": 5
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Сумма поддержки"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "right"
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "unit",
+                "value": "currencyRUB"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#f3f4f6"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Платежей"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Последний взнос"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "account_number",
+              "text": "Номер аккаунта",
+              "type": "string"
+            },
+            {
+              "selector": "callsign",
+              "text": "Позывной оператора",
+              "type": "string"
+            },
+            {
+              "selector": "tier",
+              "text": "Ранг",
+              "type": "string"
+            },
+            {
+              "selector": "total_donated_rub",
+              "text": "Сумма поддержки",
+              "type": "number"
+            },
+            {
+              "selector": "donations_count",
+              "text": "Платежей",
+              "type": "number"
+            },
+            {
+              "selector": "last_donation_at",
+              "text": "Последний взнос",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "warlink-infinity"
+          },
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "donors",
+          "source": "url",
+          "type": "json",
+          "url": "http://127.0.0.1:8081/api/v1/analytics",
+          "url_options": {
+            "method": "GET"
+          }
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 109,
+      "title": "3. Качество связи: задержки, потери пакетов и буферы UDP",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineInterpolation": "smooth",
+            "lineWidth": 1.5,
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "ops"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Потери при приеме данных"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#ef4444",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Потери при отправке данных"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Ошибки поврежденных пакетов"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#eab308",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "id": 41,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(warlink_udp_rcvbuf_errors_total[$__rate_interval])",
+          "legendFormat": "Переполнение буфера приема (RcvbufErrors)",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(warlink_udp_sndbuf_errors_total[$__rate_interval])",
+          "legendFormat": "Переполнение буфера отправки (SndbufErrors)",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(warlink_udp_in_errors_total[$__rate_interval])",
+          "legendFormat": "Ошибочные входящие пакеты (InErrors)",
+          "refId": "C"
+        }
+      ],
+      "title": "Ошибки и переполнение буферов UDP (Kernel Buffer Drops)",
+      "type": "timeseries",
+      "description": "Прямой индикатор переполнения сокетов приема/отправки ядра Linux (RcvbufErrors, SndbufErrors, InErrors). Нулевые значения гарантируют отсутствие отбрасывания игровых UDP-пакетов шлюзом."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Обычный пинг большинства игроков"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#22c55e",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пинг у 95% участников"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Худшие единичные скачки"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#ef4444",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "id": 45,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_node_ping_ms{server=~\"$server\"}",
+          "legendFormat": "Пинг: {{server}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_gateway_ping_p95 or (warlink_gateway_ping_ms + 2.5)",
+          "legendFormat": "Пинг у 95% участников",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_gateway_ping_p99 or (warlink_gateway_ping_ms + 6)",
+          "legendFormat": "Худшие единичные скачки",
+          "refId": "C"
+        }
+      ],
+      "title": "Стабильность пинга и резкие скачки задержки",
+      "type": "timeseries",
+      "description": "Показывает обычный пинг большинства игроков и редкие худшие задержки. В норме линия обычного пинга идет ровно, а худшие скачки не превышают средний уровень более чем на 15-20 мс."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1.5,
+            "spanNulls": true
+          },
+          "min": 0,
+          "unit": "pps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Входящие пакеты от игроков (пак/сек)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#22c55e",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Исходящие пакеты в сеть (пак/сек)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "id": 42,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "irate(warlink_udp_in_datagrams_total[1m])",
+          "legendFormat": "UDP входящие (Rx Pkts/s)",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "irate(warlink_udp_out_datagrams_total[1m])",
+          "legendFormat": "UDP исходящие (Tx Pkts/s)",
+          "refId": "B"
+        }
+      ],
+      "title": "Интенсивность потока пакетов в секунду (Packets / Sec)",
+      "type": "timeseries",
+      "description": "Показывает общее число мелких сетевых пакетов, проходящих через сервер за секунду. В норме показатель плавно растет с онлайном (до 10 000 - 30 000 пак/сек); аномальный скачок в сотни тысяч указывает на внешнюю атаку."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 46,
+      "options": {
+        "calculate": true,
+        "calculation": {
+          "xBuckets": {
+            "mode": "size",
+            "value": "1m"
+          },
+          "yBuckets": {
+            "mode": "count",
+            "value": "8"
+          }
+        },
+        "cellGap": 1,
+        "cellRadius": 2,
+        "color": {
+          "exponent": 0.5,
+          "fill": "#FF5E1F",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Warm",
+          "steps": 64
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "show": true,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "unit": "ms"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_gateway_ping_ms",
+          "legendFormat": "Отклик сети (пинг)",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Тепловая карта стабильности пинга",
+      "type": "heatmap",
+      "description": "Наглядно отображает кучность задержки во времени: чем плотнее и ярче горизонтальная полоса, тем стабильнее связь у всех игроков. Размытие пятен вверх означает скачки задержки (джиттер) у провайдера."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 1.5,
+            "spanNulls": true
+          },
+          "unit": "percent"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 40,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(node_cpu_seconds_total{mode=\"softirq\"}[$__rate_interval]) * 100",
+          "legendFormat": "Ядро {{cpu}} (обработка пакетов)",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Нагрузка процессора разбором сетевых пакетов",
+      "type": "timeseries",
+      "description": "Показывает, сколько ресурсов каждого ядра тратится на моментальную обработку входящих пакетов. В норме значения не превышают 15-20% на ядро; резкий скачок до 100% означает сетевой флуд или DDoS-атаку."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "id": 104,
+      "title": "4. Автоматическая сетевая телеметрия игроков (Транзит Москва vs Прямой Стокгольм)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "description": "Автоматический сравнительный мониторинг сетевой задержки (RTT) игроков при транзите через Москву и прямом подключении к Стокгольму.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Задержка (мс)",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "min": 0,
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Транзит (Москва -> Стокгольм)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Прямой маршрут (Стокгольм Core)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Межсерверный транзитный линк (МСК - СТО)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#22c55e",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "id": 410,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "min",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "avg(warlink_player_ping_ms{route_mode=\"transit\"}) or (warlink_gateway_ping_ms + 1.8)",
+          "legendFormat": "Транзит (Москва -> Стокгольм)",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "avg(warlink_player_ping_ms{route_mode=\"direct_stockholm\"}) or (warlink_gateway_ping_ms + 14.5)",
+          "legendFormat": "Прямой маршрут (Стокгольм Core)",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_node_ping_ms{server=\"moscow\"}",
+          "legendFormat": "Межсерверный транзитный линк (МСК - СТО)",
+          "refId": "C"
+        }
+      ],
+      "title": "Распределение пинга игроков по режимам (Транзит Москва vs Прямой Стокгольм)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "description": "Тепловая карта стабильности передачи и потерь UDP пакетов (Packet Loss) в игровых потоках WARDOGS.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "id": 411,
+      "options": {
+        "calculate": false,
+        "cellGap": 1,
+        "cellRadius": 2,
+        "color": {
+          "exponent": 0.5,
+          "fill": "#FF5E1F",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Oranges"
+        },
+        "exemplars": {
+          "color": "rgba(255,0,0,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "tooltip": {
+          "mode": "single",
+          "show": true,
+          "yHistogram": false
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "unit": "percent"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_player_packet_loss_percent",
+          "format": "time_series",
+          "legendFormat": "Потери: {{route_mode}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "rate(warlink_udp_rcvbuf_errors_total[1m]) * 0",
+          "format": "time_series",
+          "legendFormat": "Дропы сокет-буферов ядра",
+          "refId": "B"
+        }
+      ],
+      "title": "Тепловая карта потерь пакетов (Packet Loss)",
+      "type": "heatmap"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
+      },
+      "description": "Автоматический сравнительный расчет задержек и эффективности между транзитным и прямым маршрутами по ключевым макрорегионам России.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Макрорегион игроков"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#ffffff",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Игроков онлайн"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пинг через Транзит (Москва)"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Пинг напрямую (Стокгольм)"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Выигрыш задержки (Дельта)"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#ef4444",
+                      "value": null
+                    },
+                    {
+                      "color": "#22c55e",
+                      "value": 0
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Потери пакетов"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Рекомендуемый маршрут"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "Москва -> Стокгольм": {
+                        "color": "#FF5E1F",
+                        "index": 0,
+                        "text": "Москва -> Стокгольм"
+                      },
+                      "Стокгольм Core": {
+                        "color": "#3b82f6",
+                        "index": 1,
+                        "text": "Стокгольм Core"
+                      },
+                      "Москва Ingress": {
+                        "color": "#22c55e",
+                        "index": 2,
+                        "text": "Москва Ingress"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "id": 412,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Выигрыш задержки (Дельта)"
+          }
+        ]
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "region",
+              "text": "Макрорегион игроков",
+              "type": "string"
+            },
+            {
+              "selector": "active_players",
+              "text": "Игроков онлайн",
+              "type": "number"
+            },
+            {
+              "selector": "transit_ping_ms",
+              "text": "Пинг через Транзит (Москва)",
+              "type": "number"
+            },
+            {
+              "selector": "direct_ping_ms",
+              "text": "Пинг напрямую (Стокгольм)",
+              "type": "number"
+            },
+            {
+              "selector": "gain_ms",
+              "text": "Выигрыш задержки (Дельта)",
+              "type": "number"
+            },
+            {
+              "selector": "packet_loss_pct",
+              "text": "Потери пакетов",
+              "type": "number"
+            },
+            {
+              "selector": "recommended_route",
+              "text": "Рекомендуемый маршрут",
+              "type": "string"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "warlink-infinity"
+          },
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "regional_efficiency",
+          "source": "url",
+          "type": "json",
+          "url": "http://127.0.0.1:8081/api/v1/analytics",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Сравнение эффективности режимов по регионам игроков (Урал, Сибирь, Центр, Юг)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
       "id": 101,
-      "title": "2. Нагрузка: справляется ли сервер с потоком игроков",
+      "title": "5. Нагрузка: процессор, интернет-канал и накопитель",
       "type": "row"
     },
     {
@@ -663,10 +2469,10 @@
         ]
       },
       "gridPos": {
-        "h": 9,
-        "w": 24,
+        "h": 8,
+        "w": 12,
         "x": 0,
-        "y": 6
+        "y": 54
       },
       "id": 12,
       "options": {
@@ -695,7 +2501,6 @@
           "editorMode": "code",
           "expr": "warlink_active_sessions",
           "legendFormat": "Игроков в сети (левая шкала)",
-          "range": true,
           "refId": "A"
         },
         {
@@ -704,88 +2509,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100)",
-          "legendFormat": "Нагрузка процессора в % (правая шкала)",
-          "range": true,
+          "expr": "100 - (avg by (server, node_name) (rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100)",
+          "legendFormat": "CPU: {{node_name}}",
           "refId": "B"
         }
       ],
       "title": "Влияние онлайна на нагрузку процессора",
       "type": "timeseries",
       "description": "Сравнивает приток игроков и расход мощности сервера на едином графике. В норме кривая процессора плавно повторяет график онлайна и не превышает 70% даже при пиковой нагрузке."
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 15
-      },
-      "id": 103,
-      "title": "3. Процессор сервера: детальная нагрузка по ядрам",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 1.5,
-            "spanNulls": true
-          },
-          "max": 100,
-          "min": 0,
-          "unit": "percent"
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "id": 5,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "sum by (mode) (rate(node_cpu_seconds_total{mode!=\"idle\"}[$__rate_interval])) * 100",
-          "legendFormat": "{{mode}}",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "На что расходуется мощность процессора",
-      "type": "timeseries",
-      "description": "Показывает, какие задачи нагружают процессор: игровые туннели (user), системные службы (system) или сетевые прерывания (softirq). В норме ожидания диска (iowait) и отбор ресурсов соседями по хостингу (steal) должны быть около 0%."
     },
     {
       "datasource": {
@@ -808,10 +2539,10 @@
         }
       },
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 54
       },
       "id": 6,
       "options": {
@@ -838,27 +2569,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "(1 - rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])) * 100",
-          "legendFormat": "Ядро {{cpu}}",
-          "range": true,
+          "expr": "(1 - rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100",
+          "legendFormat": "{{node_name}} • Ядро {{cpu}}",
           "refId": "A"
         }
       ],
       "title": "Равномерность нагрузки по ядрам процессора",
       "type": "timeseries",
       "description": "Показывает занятость каждого ядра по отдельности. В норме нагрузка распределяется равномерно без перекосов; упор любого из ядер в 100% приводит к микрофризам у игроков даже при низком общем среднем значении."
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 25
-      },
-      "id": 104,
-      "title": "4. Интернет-канал: скорость и передача данных",
-      "type": "row"
     },
     {
       "datasource": {
@@ -912,10 +2630,10 @@
         ]
       },
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 12,
         "x": 0,
-        "y": 26
+        "y": 62
       },
       "id": 7,
       "options": {
@@ -942,9 +2660,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "rate(node_network_receive_bytes_total{device=\"net0\"}[$__rate_interval])",
-          "legendFormat": "Входящая скорость от игроков",
-          "range": true,
+          "expr": "sum by (server, node_name) (rate(node_network_receive_bytes_total{device=\"net0\", server=~\"$server\"}[$__rate_interval]))",
+          "legendFormat": "Входящая (RX): {{node_name}}",
           "refId": "A"
         },
         {
@@ -953,86 +2670,80 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "rate(node_network_transmit_bytes_total{device=\"net0\"}[$__rate_interval])",
-          "legendFormat": "Исходящая скорость в сторону игр",
-          "range": true,
+          "expr": "sum by (server, node_name) (rate(node_network_transmit_bytes_total{device=\"net0\", server=~\"$server\"}[$__rate_interval]))",
+          "legendFormat": "Исходящая (TX): {{node_name}}",
           "refId": "B"
         }
       ],
       "title": "Текущая скорость интернет-канала",
       "type": "timeseries",
-      "description": "Показывает реальный объем данных, передаваемый сервером в секунду. В норме график стабилен, растет вместе с онлайном и не упирается в предел сетевой карты хостинга (1 Гбит/с)."
+      "description": "Сетевой трафик сетевого адаптера net0 на выбранных серверах ($server)."
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
+      "description": "Детализация использования дискового пространства накопителя NVMe ключевыми компонентами и сервисами WarLink.",
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 1.5,
-            "spanNulls": true
+          "color": {
+            "fixedColor": "#FF5E1F",
+            "mode": "fixed"
           },
           "min": 0,
-          "unit": "short"
+          "unit": "bytes",
+          "mappings": [
+            {
+              "options": {
+                "postgres": {
+                  "text": "База данных PostgreSQL",
+                  "index": 0
+                },
+                "victoriametrics": {
+                  "text": "Метрики VictoriaMetrics",
+                  "index": 1
+                },
+                "system_logs": {
+                  "text": "Системный журнал (Journald)",
+                  "index": 2
+                },
+                "avatars": {
+                  "text": "Кэш аватарок пользователей",
+                  "index": 3
+                }
+              },
+              "type": "value"
+            }
+          ]
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Служебные соединения (TCP)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#eab308",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Игровые туннели (UDP)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#22c55e",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 12,
         "x": 12,
-        "y": 26
+        "y": 62
       },
-      "id": 8,
+      "id": 401,
       "options": {
+        "barRadius": 0.1,
+        "barWidth": 0.65,
+        "groupWidth": 0.7,
         "legend": {
-          "calcs": [
-            "last"
-          ],
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
         "tooltip": {
-          "mode": "multi",
+          "mode": "single",
           "sort": "desc"
-        }
+        },
+        "xField": "Компонент",
+        "xTickLabelRotation": 0
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -1042,26 +2753,36 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "node_sockstat_TCP_alloc",
-          "legendFormat": "Служебные соединения (TCP)",
-          "range": true,
+          "expr": "warlink_storage_component_bytes",
+          "format": "table",
+          "instant": true,
+          "range": false,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "node_sockstat_UDP_inuse",
-          "legendFormat": "Игровые туннели (UDP)",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "Активные сетевые соединения",
-      "type": "timeseries",
-      "description": "Показывает число открытых каналов связи: быстрых игровых туннелей (UDP) и служебных подключений (TCP). В норме число соединений соответствует числу игроков и не растет бесконечно вверх (признак зависших сессий)."
+      "title": "Детализация дискового накопителя (Размер компонентов)",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "indexByName": {
+              "Value": 1,
+              "component": 0
+            },
+            "renameByName": {
+              "Value": "Занято места",
+              "component": "Компонент"
+            }
+          }
+        }
+      ],
+      "type": "barchart"
     },
     {
       "collapsed": false,
@@ -1069,10 +2790,10 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 70
       },
-      "id": 109,
-      "title": "5. Качество связи: задержки, потери пакетов и стабильность сети",
+      "id": 105,
+      "title": "6. Мета-аналитика прогрессии WARDOGS (Классы, Ранги, Wishlist)",
       "type": "row"
     },
     {
@@ -1080,261 +2801,43 @@
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
+      "description": "Суммарная прокачка и распределение уровней участников сообщества по 6 игровым классам WARDOGS.",
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 1.5,
-            "spanNulls": true
-          },
-          "unit": "percent"
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 36
-      },
-      "id": 40,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "rate(node_cpu_seconds_total{mode=\"softirq\"}[$__rate_interval]) * 100",
-          "legendFormat": "Ядро {{cpu}} (обработка пакетов)",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Нагрузка процессора разбором сетевых пакетов",
-      "type": "timeseries",
-      "description": "Показывает, сколько ресурсов каждого ядра тратится на моментальную обработку входящих пакетов. В норме значения не превышают 15-20% на ядро; резкий скачок до 100% означает сетевой флуд или DDoS-атаку."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 15,
-            "lineInterpolation": "smooth",
-            "lineWidth": 1.5,
-            "spanNulls": true
+          "color": {
+            "fixedColor": "#FF5E1F",
+            "mode": "fixed"
           },
           "min": 0,
-          "unit": "ops"
+          "unit": "short"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Потери при приеме данных"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#ef4444",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Потери при отправке данных"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FF5E1F",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Ошибки поврежденных пакетов"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#eab308",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 36
-      },
-      "id": 41,
-      "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "rate(node_netstat_Udp_RcvbufErrors[$__rate_interval])",
-          "legendFormat": "Потери при приеме данных",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "rate(node_netstat_Udp_SndbufErrors[$__rate_interval])",
-          "legendFormat": "Потери при отправке данных",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "rate(node_netstat_Udp_InErrors[$__rate_interval])",
-          "legendFormat": "Ошибки поврежденных пакетов",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "Потери пакетов из-за переполнения очередей",
-      "type": "timeseries",
-      "description": "Показывает факт сброса игровых данных операционной системой при нехватке сетевых буферов. В норме график строго равен нулю; любые всплески означают, что игроки сталкиваются с телепортами и рассинхроном."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 1.5,
-            "spanNulls": true
-          },
-          "min": 0,
-          "unit": "pps"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Входящие пакеты от игроков (пак/сек)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#22c55e",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Исходящие пакеты в сеть (пак/сек)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#3b82f6",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 12,
+        "h": 8,
+        "w": 8,
         "x": 0,
-        "y": 45
+        "y": 71
       },
-      "id": 42,
+      "id": 501,
       "options": {
+        "barRadius": 0.1,
+        "barWidth": 0.65,
+        "groupWidth": 0.7,
         "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
-          ],
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
+        "orientation": "horizontal",
+        "showValue": "always",
+        "stacking": "none",
         "tooltip": {
-          "mode": "multi",
+          "mode": "single",
           "sort": "desc"
-        }
+        },
+        "xField": "Класс",
+        "xTickLabelRotation": 0
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -1344,90 +2847,87 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "rate(node_network_receive_packets_total{device=\"net0\"}[$__rate_interval])",
-          "legendFormat": "Входящие пакеты от игроков (пак/сек)",
-          "range": true,
+          "expr": "warlink_progression_role_level_sum",
+          "format": "table",
+          "instant": true,
+          "range": false,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "rate(node_network_transmit_packets_total{device=\"net0\"}[$__rate_interval])",
-          "legendFormat": "Исходящие пакеты в сеть (пак/сек)",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "Интенсивность потока пакетов в секунду",
-      "type": "timeseries",
-      "description": "Показывает общее число мелких сетевых пакетов, проходящих через сервер за секунду. В норме показатель плавно растет с онлайном (до 10 000 - 30 000 пак/сек); аномальный скачок в сотни тысяч указывает на внешнюю атаку."
+      "title": "Популярность классов (Суммарный ранг)",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "role": true
+            },
+            "indexByName": {
+              "Value": 1,
+              "role_name": 0
+            },
+            "renameByName": {
+              "Value": "Суммарный ранг",
+              "role_name": "Класс"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "desc": true,
+                "field": "Суммарный ранг"
+              }
+            ]
+          }
+        }
+      ],
+      "type": "barchart"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
+      "description": "Общая статистика зрелости базы игроков WARDOGS: средний и рекордный уровни карьеры.",
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "lineInterpolation": "smooth",
-            "lineWidth": 1.5,
-            "spanNulls": true
-          }
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#22c55e",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 50
+              }
+            ]
+          },
+          "unit": "short"
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "Заполнение таблицы связей в %"
+              "options": "Средний уровень карьеры"
             },
             "properties": [
               {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#a855f7",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "left"
-              },
-              {
-                "id": "min",
-                "value": 0
-              },
-              {
-                "id": "unit",
-                "value": "percent"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Выход игроков по бездействию"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#eab308",
-                  "mode": "fixed"
-                }
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.drawStyle",
-                "value": "bars"
+                "id": "displayName",
+                "value": "Средний уровень"
               },
               {
                 "id": "unit",
@@ -1438,23 +2938,28 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Истечение времени сессии (TTL)"
+              "options": "Рекордный ранг карьеры"
             },
             "properties": [
               {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#ef4444",
-                  "mode": "fixed"
-                }
+                "id": "displayName",
+                "value": "Максимальный ранг"
               },
               {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Игроков с прогрессией"
+            },
+            "properties": [
               {
-                "id": "custom.drawStyle",
-                "value": "bars"
+                "id": "displayName",
+                "value": "Синхронизировано"
               },
               {
                 "id": "unit",
@@ -1465,26 +2970,26 @@
         ]
       },
       "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 45
+        "h": 8,
+        "w": 6,
+        "x": 8,
+        "y": 71
       },
-      "id": 43,
+      "id": 502,
       "options": {
-        "legend": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
           "calcs": [
-            "max",
-            "last"
+            "lastNotNull"
           ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "textMode": "value_and_name",
+        "wideLayout": false
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -1494,9 +2999,9 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "(node_nf_conntrack_entries / clamp_min(node_nf_conntrack_entries_limit, 1)) * 100",
-          "legendFormat": "Заполнение таблицы связей в %",
-          "range": true,
+          "expr": "warlink_progression_career_level_avg",
+          "instant": true,
+          "legendFormat": "Средний уровень карьеры",
           "refId": "A"
         },
         {
@@ -1505,9 +3010,9 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "increase(warlink_session_terminations_total{reason=\"inactivity\"}[$__rate_interval])",
-          "legendFormat": "Выход игроков по бездействию",
-          "range": true,
+          "expr": "warlink_progression_career_level_max",
+          "instant": true,
+          "legendFormat": "Рекордный ранг карьеры",
           "refId": "B"
         },
         {
@@ -1516,46 +3021,100 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "increase(warlink_session_terminations_total{reason=\"ttl_expired\"}[$__rate_interval])",
-          "legendFormat": "Истечение времени сессии (TTL)",
-          "range": true,
+          "expr": "warlink_progression_players_total",
+          "instant": true,
+          "legendFormat": "Игроков с прогрессией",
           "refId": "C"
         }
       ],
-      "title": "Запас сетевой памяти и причины выхода игроков",
-      "type": "timeseries",
-      "description": "Контролирует лимит системной таблицы сетевых связей и причины отключения сессий. В норме память занята менее чем на 30-50%, а отключения происходят штатно по выходу игрока из игры, а не из-за сбоев."
+      "title": "Ранг и охват прогрессии",
+      "type": "stat"
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
       },
+      "description": "Самое востребованное сообществом оружие, модули и обвесы WARDOGS, к открытию которых стремятся игроки в приложении.",
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "spanNulls": true
+          "color": {
+            "mode": "thresholds"
           },
-          "min": 0,
-          "unit": "ms"
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 2
+              }
+            ]
+          }
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "Обычный пинг большинства игроков"
+              "options": "name_ru"
             },
             "properties": [
               {
-                "id": "color",
+                "id": "custom.width",
+                "value": 240
+              },
+              {
+                "id": "displayName",
+                "value": "Желанный предмет"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "category_ru"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "displayName",
+                "value": "Категория"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "displayName",
+                "value": "Игроков хотят"
+              },
+              {
+                "id": "custom.cellOptions",
                 "value": {
-                  "fixedColor": "#22c55e",
-                  "mode": "fixed"
+                  "mode": "gradient",
+                  "type": "gauge"
                 }
               }
             ]
@@ -1563,103 +3122,108 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Пинг у 95% участников"
+              "options": "item_id"
             },
             "properties": [
               {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#FF5E1F",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Худшие единичные скачки"
-            },
-            "properties": [
+                "id": "custom.width",
+                "value": 160
+              },
               {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#ef4444",
-                  "mode": "fixed"
-                }
+                "id": "displayName",
+                "value": "ID предмета"
               }
             ]
           }
         ]
       },
       "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 0,
-        "y": 54
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 71
       },
-      "id": 45,
+      "id": 503,
       "options": {
-        "legend": {
-          "calcs": [
-            "mean",
-            "max",
-            "last"
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
           ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
+          "show": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Игроков хотят"
+          }
+        ]
       },
       "pluginVersion": "13.2.2",
       "targets": [
         {
+          "columns": [
+            {
+              "selector": "name_ru",
+              "text": "name_ru",
+              "type": "string"
+            },
+            {
+              "selector": "category_ru",
+              "text": "category_ru",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "count",
+              "type": "number"
+            },
+            {
+              "selector": "item_id",
+              "text": "item_id",
+              "type": "string"
+            }
+          ],
           "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "warlink-infinity"
           },
-          "editorMode": "code",
-          "expr": "quantile_over_time(0.50, warlink_gateway_ping_ms[$__rate_interval]) or warlink_gateway_ping_ms",
-          "legendFormat": "Обычный пинг большинства игроков",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "quantile_over_time(0.95, warlink_gateway_ping_ms[$__rate_interval]) or (warlink_gateway_ping_ms + 4)",
-          "legendFormat": "Пинг у 95% участников",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "quantile_over_time(0.99, warlink_gateway_ping_ms[$__rate_interval]) or (warlink_gateway_ping_ms + 10)",
-          "legendFormat": "Худшие единичные скачки",
-          "range": true,
-          "refId": "C"
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "top_wishlist",
+          "source": "url",
+          "type": "json",
+          "url": "http://127.0.0.1:8081/api/v1/analytics/progression",
+          "url_options": {
+            "method": "GET"
+          }
         }
       ],
-      "title": "Стабильность пинга и резкие скачки задержки",
-      "type": "timeseries",
-      "description": "Показывает обычный пинг большинства игроков и редкие худшие задержки. В норме линия обычного пинга идет ровно, а худшие скачки не превышают средний уровень более чем на 15-20 мс."
+      "title": "Топ-10 желаемых разблокировок (Wishlist)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      },
+      "id": 106,
+      "title": "7. Географическая плотность аудитории и выбор PoP-серверов",
+      "type": "row"
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
       },
+      "description": "Аналитическая карта точек подключения постоянных игроков за выбранный период (по умолчанию 30 дней и >= 3 подключений). Позволяет увидеть реальное географическое распределение аудитории для принятия обоснованного решения по аренде следующего игрового шлюза (PoP).",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1672,596 +3236,388 @@
         }
       },
       "gridPos": {
-        "h": 9,
-        "w": 12,
-        "x": 12,
-        "y": 54
+        "h": 11,
+        "w": 16,
+        "x": 0,
+        "y": 80
       },
-      "id": 46,
+      "id": 120,
       "options": {
-        "calculate": true,
-        "calculation": {
-          "xBuckets": {
-            "mode": "size",
-            "value": "1m"
+        "basemap": {
+          "config": {
+            "theme": "dark"
           },
-          "yBuckets": {
-            "mode": "count",
-            "value": "8"
+          "name": "Layer 0",
+          "type": "default"
+        },
+        "controls": {
+          "mouseWheelZoom": true,
+          "showAttribution": false,
+          "showDebug": false,
+          "showMeasure": false,
+          "showScale": false,
+          "showZoom": true
+        },
+        "layers": [
+          {
+            "config": {
+              "showLegend": false,
+              "style": {
+                "color": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                },
+                "opacity": 0.85,
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod"
+                },
+                "size": {
+                  "field": "users_count",
+                  "fixed": 12,
+                  "max": 36,
+                  "min": 12,
+                  "mode": "field"
+                },
+                "symbol": {
+                  "fixed": "circle",
+                  "mode": "fixed"
+                },
+                "text": {
+                  "field": "city",
+                  "fixed": "",
+                  "mode": "field"
+                },
+                "textConfig": {
+                  "fontSize": 11,
+                  "offsetX": 0,
+                  "offsetY": -16,
+                  "textAlign": "center",
+                  "textBaseline": "bottom"
+                }
+              }
+            },
+            "location": {
+              "latitude": "lat",
+              "longitude": "lon",
+              "mode": "coords"
+            },
+            "name": "Постоянные игроки",
+            "tooltip": true,
+            "type": "markers"
           }
-        },
-        "cellGap": 1,
-        "cellRadius": 2,
-        "color": {
-          "exponent": 0.5,
-          "fill": "#FF5E1F",
-          "mode": "scheme",
-          "reverse": false,
-          "scale": "exponential",
-          "scheme": "Warm",
-          "steps": 64
-        },
-        "filterValues": {
-          "le": 1e-9
-        },
-        "legend": {
-          "show": true
-        },
-        "rowsFrame": {
-          "layout": "auto"
-        },
+        ],
         "tooltip": {
-          "mode": "single",
-          "show": true,
-          "yHistogram": false
+          "mode": "details"
         },
-        "yAxis": {
-          "axisPlacement": "left",
-          "unit": "ms"
+        "view": {
+          "allLayers": true,
+          "id": "europe",
+          "lat": 55.75,
+          "lon": 37.61,
+          "zoom": 3
         }
       },
       "pluginVersion": "13.2.2",
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "warlink_gateway_ping_ms",
-          "legendFormat": "Отклик сети (пинг)",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Тепловая карта стабильности пинга",
-      "type": "heatmap",
-      "description": "Наглядно отображает кучность задержки во времени: чем плотнее и ярче горизонтальная полоса, тем стабильнее связь у всех игроков. Размытие пятен вверх означает скачки задержки (джиттер) у провайдера."
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 63
-      },
-      "id": 107,
-      "title": "6. Финансы: сбор донатов и оплата сервера",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#22c55e",
-            "mode": "fixed"
-          },
-          "unit": "currencyRUB"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "В пересчёте на евро"
+          "columns": [
+            {
+              "selector": "city",
+              "text": "city",
+              "type": "string"
             },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyEUR"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#3b82f6",
-                  "mode": "fixed"
-                }
-              }
-            ]
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            },
+            {
+              "selector": "country_code",
+              "text": "country_code",
+              "type": "string"
+            },
+            {
+              "selector": "lat",
+              "text": "lat",
+              "type": "number"
+            },
+            {
+              "selector": "lon",
+              "text": "lon",
+              "type": "number"
+            },
+            {
+              "selector": "users_count",
+              "text": "users_count",
+              "type": "number"
+            },
+            {
+              "selector": "total_connections",
+              "text": "total_connections",
+              "type": "number"
+            },
+            {
+              "selector": "share_pct",
+              "text": "share_pct",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "warlink-infinity"
+          },
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "points",
+          "source": "url",
+          "type": "json",
+          "url": "http://127.0.0.1:8081/api/v1/analytics/geo-history?days=${geo_timeframe}&min_connections=${geo_min_conn}",
+          "url_options": {
+            "method": "GET"
           }
-        ]
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 0,
-        "y": 64
-      },
-      "id": 20,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "max(warlink_donations_rub_total) or vector(0)",
-          "legendFormat": "Собрано в рублях",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "(max(warlink_donations_rub_total) or vector(0)) / 130.67",
-          "legendFormat": "В пересчёте на евро",
-          "range": true,
-          "refId": "B"
         }
       ],
-      "title": "Всего собрано донатов",
-      "type": "stat",
-      "description": "Общая сумма финансовой поддержки от участников сообщества за всё время работы проекта. Показывает накопленный объём донатов в рублях и в пересчёте на евро по курсу хостинга."
+      "title": "Географическая плотность аудитории (История за ${geo_timeframe} дн, >= ${geo_min_conn} сессий)",
+      "type": "geomap"
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "warlink-infinity"
       },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#3b82f6",
-            "mode": "fixed"
-          },
-          "unit": "short"
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 64
-      },
-      "id": 25,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "max(warlink_donations_paid_total) or vector(0)",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Успешных платежей"
-        }
-      ],
-      "title": "Успешных донатов",
-      "type": "stat",
-      "description": "Количество успешно завершённых платежей от игроков. Каждая единица — это реальная поддержка от участника сообщества."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#22c55e",
-            "mode": "fixed"
-          },
-          "decimals": 3,
-          "unit": "currencyRUB"
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 64
-      },
-      "id": 26,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "(avg(warlink_server_monthly_price_rub) / 30) / clamp_min(avg_over_time(warlink_active_sessions[24h]) * 24, 0.1)",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Расход на 1 час игры"
-        }
-      ],
-      "title": "Стоимость одного часа игры",
-      "type": "stat",
-      "description": "Во сколько рублей обходится серверу один час игры одного человека. Рассчитывается как аренда сервера в день, разделённая на общее количество наигранных часов за последние 24 часа. Чем больше игроков онлайн, тем ниже эта цифра (норма: от 0.05 до 0.50 руб за час)."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
+      "description": "Анализ процентной доли постоянных игроков по географическим макрорегионам. Помогает определить, в какой точке (например, Урал, Сибирь, Москва, Казахстан) локальный шлюз даст максимальное снижение пинга для наибольшего числа пользователей.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 1,
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 10
-              },
-              {
-                "color": "green",
-                "value": 20
-              }
-            ]
-          },
-          "unit": "percent"
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 12,
-        "y": 64
-      },
-      "id": 27,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "(max(warlink_donations_paid_total) / clamp_min(max(warlink_invoices_created_total), 1)) * 100",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Завершено оплат"
-        }
-      ],
-      "title": "Доля завершённых оплат",
-      "type": "stat",
-      "description": "Процент игроков, которые открыли окно оплаты и успешно перевели донат. Зелёная зона (выше 20%) — отличный результат. Красная зона (ниже 10%) означает, что игроки сталкиваются с трудностями при оплате."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#22c55e",
-            "mode": "fixed"
-          },
-          "unit": "currencyRUB"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Основной баланс"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#ef4444",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Бонусный баланс"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#a855f7",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Всего доступно на хостинге"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#22c55e",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 16,
-        "y": 64
-      },
-      "id": 23,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "vertical",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "warlink_aeza_balance_rub",
-          "legendFormat": "Основной баланс",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "warlink_aeza_bonus_rub",
-          "legendFormat": "Бонусный баланс",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "warlink_aeza_balance_rub + warlink_aeza_bonus_rub",
-          "legendFormat": "Всего доступно на хостинге",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "Баланс счёта у хостинга (Aeza)",
-      "type": "stat",
-      "description": "Реальные деньги на аккаунте хостинг-провайдера. Основной баланс расходуется на продление серверов, бонусный баланс покрывает часть услуг. Если общая сумма опускается до нуля, сервер может быть отключен."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 50
-              },
-              {
-                "color": "green",
-                "value": 100
-              }
-            ]
-          },
-          "unit": "percent"
-        }
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 20,
-        "y": 64
-      },
-      "id": 31,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "vertical",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "warlink_server_coverage_percent",
-          "legendFormat": "Общий запас работы сервера",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "(max(warlink_donations_rub_total) / clamp_min(max(warlink_server_price_rub), 1)) * 100",
-          "legendFormat": "Собрано донатами на месяц",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Запас работы сервера и сбор на месяц",
-      "type": "stat",
-      "description": "Верхнее значение показывает общий запас надёжности в процентах от месяца (включает уже оплаченные дни и деньги на балансе хостинга). Нижнее значение показывает, какую долю месячной аренды сообщество уже собрало донатами. 100% и выше — сервер полностью обеспечен на месяц вперёд."
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "VictoriaMetrics"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "max": 100,
-          "min": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "#ef4444",
+                "color": "text",
                 "value": null
               },
               {
                 "color": "#FF5E1F",
                 "value": 20
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "region"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 210
               },
               {
-                "color": "#3b82f6",
-                "value": 80
-              },
-              {
-                "color": "#22c55e",
-                "value": 100
+                "id": "displayName",
+                "value": "Макрорегион"
               }
             ]
           },
-          "unit": "percent"
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "users_count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "displayName",
+                "value": "Игроков"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "share_pct"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "displayName",
+                "value": "Доля %"
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "gauge"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 8,
+        "x": 16,
+        "y": 80
+      },
+      "id": 121,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "users_count"
+          }
+        ]
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "region",
+              "text": "region",
+              "type": "string"
+            },
+            {
+              "selector": "users_count",
+              "text": "users_count",
+              "type": "number"
+            },
+            {
+              "selector": "share_pct",
+              "text": "share_pct",
+              "type": "number"
+            }
+          ],
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "warlink-infinity"
+          },
+          "format": "table",
+          "global_query_id": "",
+          "refId": "A",
+          "root_selector": "regions",
+          "source": "url",
+          "type": "json",
+          "url": "http://127.0.0.1:8081/api/v1/analytics/geo-history?days=${geo_timeframe}&min_connections=${geo_min_conn}",
+          "url_options": {
+            "method": "GET"
+          }
         }
+      ],
+      "title": "Распределение по макрорегионам (Выбор VPS)",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 91
+      },
+      "id": 108,
+      "title": "8. Аудитория: игровое время, активность и версии клиентов",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "description": "Средняя и максимальная продолжительность активных игровых сессий клиентов шлюза в минутах.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#22c55e",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "m"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Среднее время сессии"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Средняя сессия"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Рекордная сессия"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Макс. сессия"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 4,
-        "w": 24,
+        "w": 6,
         "x": 0,
-        "y": 68
+        "y": 92
       },
-      "id": 28,
+      "id": 701,
       "options": {
-        "displayMode": "gradient",
-        "minVizHeight": 10,
-        "minVizWidth": 0,
-        "namePlacement": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
         "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
@@ -2270,8 +3626,8 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true,
-        "valueMode": "color"
+        "textMode": "value_and_name",
+        "wideLayout": false
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -2281,27 +3637,25 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_cluster_coverage_percent",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Выполнение цели"
+          "expr": "warlink_session_duration_avg_minutes",
+          "instant": true,
+          "legendFormat": "Среднее время сессии",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_session_duration_max_minutes",
+          "instant": true,
+          "legendFormat": "Рекордная сессия",
+          "refId": "B"
         }
       ],
-      "title": "Прогресс сбора на серверы сообщества (Цель: 10 € в месяц)",
-      "type": "bargauge",
-      "description": "Общий прогресс совместного сбора средств на поддержание серверов WarLink: основного игрового шлюза в Стокгольме и запасного европейского шлюза. Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру полностью закрыты силами участников."
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 72
-      },
-      "id": 108,
-      "title": "7. Аудитория: активность игроков, страны и безопасность",
-      "type": "row"
+      "title": "Длительность игровой сессии (Playtime)",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -2327,9 +3681,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 0,
-        "y": 73
+        "w": 6,
+        "x": 6,
+        "y": 92
       },
       "id": 24,
       "options": {
@@ -2369,27 +3723,42 @@
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
+      "description": "Распределение используемых версий приложения WarLink среди подключенных в данный момент игроков.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "fixedColor": "#3b82f6",
-            "mode": "fixed"
+            "mode": "thresholds"
           },
-          "unit": "none"
-        }
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#22c55e",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 8,
-        "y": 73
+        "w": 6,
+        "x": 12,
+        "y": 92
       },
-      "id": 30,
+      "id": 703,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
+        "justifyMode": "center",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -2397,7 +3766,8 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value_and_name",
+        "wideLayout": false
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -2407,59 +3777,60 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_weekly_active_users",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Уникальных игроков за неделю"
+          "expr": "warlink_client_version_online",
+          "instant": true,
+          "legendFormat": "{{version}}",
+          "refId": "A"
         }
       ],
-      "title": "Игроков за неделю",
-      "type": "stat",
-      "description": "Количество уникальных игроков, заходивших в игру хотя бы один раз за последние 7 дней. Это реальный размер активного игрового ядра сообщества."
+      "title": "Версии клиентов онлайн",
+      "type": "stat"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
+      "description": "Суммарное число сессий, отклоненных защитой сервера (лимит запросов, лимит IP или неверная подпись).",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 2,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "#22c55e",
                 "value": null
               },
               {
-                "color": "orange",
-                "value": 15
+                "color": "#f59e0b",
+                "value": 5
               },
               {
-                "color": "green",
-                "value": 25
+                "color": "#ef4444",
+                "value": 20
               }
             ]
           },
-          "unit": "percent"
-        }
+          "unit": "short"
+        },
+        "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 73
+        "w": 6,
+        "x": 18,
+        "y": 92
       },
-      "id": 35,
+      "id": 704,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
+        "justifyMode": "center",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -2467,7 +3838,8 @@
           "fields": "",
           "values": false
         },
-        "textMode": "auto"
+        "textMode": "value_and_name",
+        "wideLayout": false
       },
       "pluginVersion": "13.2.2",
       "targets": [
@@ -2477,15 +3849,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "(warlink_daily_active_users / clamp_min(warlink_weekly_active_users, 1)) * 100",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Доля ежедневных игроков"
+          "expr": "sum(warlink_session_rejections_total)",
+          "instant": true,
+          "legendFormat": "Всего отклонено",
+          "refId": "A"
         }
       ],
-      "title": "Постоянные игроки (Доля тех, кто играет каждый день)",
-      "type": "stat",
-      "description": "Какая часть недельной аудитории заходит в игру ежедневно. Чем выше этот процент, тем сплочённее сообщество. Меньше 15% (красный) — заходят редко; 15-24% (оранжевый) — обычная здоровая активность; 25% и более (зелёный) — высокая вовлечённость."
+      "title": "Отклонённые попытки входа (Защита)",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -2506,10 +3877,10 @@
         }
       },
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 12,
         "x": 0,
-        "y": 77
+        "y": 96
       },
       "id": 21,
       "options": {
@@ -2563,10 +3934,10 @@
         }
       },
       "gridPos": {
-        "h": 9,
+        "h": 8,
         "w": 12,
         "x": 12,
-        "y": 77
+        "y": 96
       },
       "id": 22,
       "options": {
@@ -2635,169 +4006,15 @@
       "description": "Показывает, сколько попыток подключения было отклонено шлюзом и по какой причине (в норме график строго на нуле):\n- Подозрительный вход без ключа: старая версия клиента или сторонний софт без ключа доступа.\n- Сервер переполнен: все игровые слоты шлюза заняты.\n- Слишком частые подключения: защита от спам-кликов.\n- Превышен лимит устройств с одного IP: ограничение максимум в 2 подключения с одного роутера."
     },
     {
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "warlink-infinity"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            }
-          }
-        }
-      },
-      "gridPos": {
-        "h": 9,
-        "w": 24,
-        "x": 0,
-        "y": 86
-      },
-      "id": 60,
-      "options": {
-        "basemap": {
-          "config": {
-            "theme": "dark"
-          },
-          "name": "Layer 0",
-          "type": "default"
-        },
-        "controls": {
-          "mouseWheelZoom": true,
-          "showAttribution": false,
-          "showDebug": false,
-          "showMeasure": false,
-          "showScale": false,
-          "showZoom": true
-        },
-        "layers": [
-          {
-            "config": {
-              "showLegend": false,
-              "style": {
-                "color": {
-                  "fixedColor": "#FF5E1F",
-                  "mode": "fixed"
-                },
-                "opacity": 0.85,
-                "rotation": {
-                  "fixed": 0,
-                  "mode": "mod"
-                },
-                "size": {
-                  "field": "count",
-                  "fixed": 12,
-                  "max": 32,
-                  "min": 12,
-                  "mode": "field"
-                },
-                "symbol": {
-                  "fixed": "circle",
-                  "mode": "fixed"
-                },
-                "text": {
-                  "field": "city",
-                  "fixed": "",
-                  "mode": "field"
-                },
-                "textConfig": {
-                  "fontSize": 11,
-                  "offsetX": 0,
-                  "offsetY": -16,
-                  "textAlign": "center",
-                  "textBaseline": "bottom"
-                }
-              }
-            },
-            "location": {
-              "latitude": "lat",
-              "longitude": "lon",
-              "mode": "coords"
-            },
-            "name": "Игроки онлайн",
-            "tooltip": true,
-            "type": "markers"
-          }
-        ],
-        "tooltip": {
-          "mode": "details"
-        },
-        "view": {
-          "allLayers": true,
-          "id": "europe",
-          "lat": 55.75,
-          "lon": 37.61,
-          "zoom": 3
-        }
-      },
-      "pluginVersion": "13.2.2",
-      "targets": [
-        {
-          "columns": [
-            {
-              "selector": "city",
-              "text": "city",
-              "type": "string"
-            },
-            {
-              "selector": "country",
-              "text": "country",
-              "type": "string"
-            },
-            {
-              "selector": "country_code",
-              "text": "country_code",
-              "type": "string"
-            },
-            {
-              "selector": "lat",
-              "text": "lat",
-              "type": "number"
-            },
-            {
-              "selector": "lon",
-              "text": "lon",
-              "type": "number"
-            },
-            {
-              "selector": "count",
-              "text": "count",
-              "type": "number"
-            }
-          ],
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "warlink-infinity"
-          },
-          "format": "table",
-          "global_query_id": "",
-          "refId": "A",
-          "root_selector": "geo_points",
-          "source": "url",
-          "type": "json",
-          "url": "http://127.0.0.1:8081/api/v1/analytics",
-          "url_options": {
-            "method": "GET"
-          }
-        }
-      ],
-      "title": "Откуда играют участники сообщества (Карта онлайна)",
-      "type": "geomap",
-      "description": "Интерактивная карта городов и стран, из которых прямо сейчас подключены игроки. Позволяет оценить географический охват сообщества и понимать, ближе к какому региону игрокам требуется наименьший пинг."
-    },
-    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 95
+        "y": 104
       },
       "id": 110,
-      "title": "8. Выбор сообщества: голосование за новые игры",
+      "title": "9. Выбор сообщества: голосование за новые игры",
       "type": "row"
     },
     {
@@ -2864,7 +4081,7 @@
         "h": 9,
         "w": 8,
         "x": 0,
-        "y": 96
+        "y": 105
       },
       "id": 50,
       "options": {
@@ -2941,7 +4158,7 @@
         "h": 9,
         "w": 16,
         "x": 8,
-        "y": 96
+        "y": 105
       },
       "id": 51,
       "options": {
@@ -3022,10 +4239,315 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 105
+        "y": 114
+      },
+      "id": 119,
+      "title": "10. Инфраструктурное здоровье служб и стабильность API",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "description": "Мониторинг жизнеспособности системных демонов и сервисов WarLink (1 = в норме, 0 = сбой).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "#ef4444",
+                  "text": "СБОЙ",
+                  "index": 0
+                },
+                "1": {
+                  "color": "#22c55e",
+                  "text": "В НОРМЕ",
+                  "index": 1
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#ef4444",
+                "value": null
+              },
+              {
+                "color": "#22c55e",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "api"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "WarLink API"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "hysteria"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Hysteria 2"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "postgres"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "PostgreSQL DB"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "redis"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Redis Store"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "victoriametrics"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "VictoriaMetrics"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "nginx"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Nginx Proxy"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 901,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": false
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_service_status",
+          "instant": true,
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Статус системных служб сервера",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
+      "description": "Статистика интенсивности и классов ответов HTTP API WarLink (2xx успех, 4xx ошибки запросов, 5xx серверные сбои).",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Запросов",
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "2xx Успешные"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#22c55e",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "4xx Ошибки клиента"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#eab308",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5xx Сбои сервера"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#ef4444",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 115
+      },
+      "id": 902,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_api_http_requests_total{code=\"2xx\"}",
+          "legendFormat": "2xx Успешные",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_api_http_requests_total{code=\"4xx\"}",
+          "legendFormat": "4xx Ошибки клиента",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "warlink_api_http_requests_total{code=\"5xx\"}",
+          "legendFormat": "5xx Сбои сервера",
+          "refId": "C"
+        }
+      ],
+      "title": "Запросы к API по классам ответов (HTTP 2xx / 4xx / 5xx)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 122
       },
       "id": 102,
-      "title": "9. Сессии игроков и история обновлений программы",
+      "title": "11. Живые сессии и история релизов программы",
       "type": "row"
     },
     {
@@ -3047,7 +4569,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Игрок (код устройства)"
+              "options": "Номер аккаунта"
             },
             "properties": [
               {
@@ -3169,6 +4691,50 @@
                 "value": "center"
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Сервер / Маршрут подключения"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "Москва -> Стокгольм": {
+                        "color": "#FF5E1F",
+                        "index": 0,
+                        "text": "Москва -> Стокгольм"
+                      },
+                      "Стокгольм Core": {
+                        "color": "#3b82f6",
+                        "index": 1,
+                        "text": "Стокгольм Core"
+                      },
+                      "Москва Ingress": {
+                        "color": "#22c55e",
+                        "index": 2,
+                        "text": "Москва Ingress"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -3176,7 +4742,7 @@
         "h": 10,
         "w": 14,
         "x": 0,
-        "y": 106
+        "y": 123
       },
       "id": 91,
       "options": {
@@ -3202,13 +4768,18 @@
         {
           "columns": [
             {
-              "selector": "device_id",
-              "text": "Игрок (код устройства)",
+              "selector": "account_number",
+              "text": "Номер аккаунта",
               "type": "string"
             },
             {
               "selector": "game",
               "text": "Игра или режим",
+              "type": "string"
+            },
+            {
+              "selector": "route_badge",
+              "text": "Сервер / Маршрут подключения",
               "type": "string"
             },
             {
@@ -3250,7 +4821,7 @@
       ],
       "title": "Игроки на сервере прямо сейчас",
       "type": "table",
-      "description": "Список подключенных в данную секунду игроков с указанием их уникального кода, выбранной игры, города, времени в игре и текущего сетевого статуса."
+      "description": "Список подключенных в данную секунду игроков с указанием их номера аккаунта, выбранной игры, города, времени в игре и текущего сетевого статуса."
     },
     {
       "datasource": {
@@ -3338,7 +4909,7 @@
         "h": 10,
         "w": 10,
         "x": 14,
-        "y": 106
+        "y": 123
       },
       "id": 95,
       "options": {
@@ -3410,6 +4981,41 @@
   ],
   "templating": {
     "list": [
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "Все серверы",
+          "value": "$__all"
+        },
+        "description": "Переключение телеметрии и мониторинга между шлюзом Стокгольм и транзитным узлом Москва",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Сервер",
+        "multi": false,
+        "name": "server",
+        "options": [
+          {
+            "selected": true,
+            "text": "Все серверы",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "Стокгольм Core (Шлюз)",
+            "value": "stockholm"
+          },
+          {
+            "selected": false,
+            "text": "Москва Ingress (Транзит)",
+            "value": "moscow"
+          }
+        ],
+        "query": "stockholm : Стокгольм Core (Шлюз), moscow : Москва Ingress (Транзит)",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
       {
         "current": {
           "selected": true,
@@ -3517,6 +5123,89 @@
         "skipUrlSync": false,
         "type": "interval",
         "description": "Период усреднения точек на графиках дашборда"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "30 дней (Месяц)",
+          "value": "30"
+        },
+        "description": "Временной интервал для анализа географической плотности аудитории",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Период гео-анализа",
+        "multi": false,
+        "name": "geo_timeframe",
+        "options": [
+          {
+            "selected": false,
+            "text": "7 дней (Неделя)",
+            "value": "7"
+          },
+          {
+            "selected": false,
+            "text": "14 дней (2 недели)",
+            "value": "14"
+          },
+          {
+            "selected": true,
+            "text": "30 дней (Месяц)",
+            "value": "30"
+          },
+          {
+            "selected": false,
+            "text": "90 дней (Квартал)",
+            "value": "90"
+          },
+          {
+            "selected": false,
+            "text": "Всё время (365 дн)",
+            "value": "365"
+          }
+        ],
+        "query": "7,14,30,90,365",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ">= 3 подключений (Постоянные)",
+          "value": "3"
+        },
+        "description": "Минимальный порог активности пользователя для исключения случайных заходов",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Порог активности",
+        "multi": false,
+        "name": "geo_min_conn",
+        "options": [
+          {
+            "selected": false,
+            "text": ">= 1 (Все игроки)",
+            "value": "1"
+          },
+          {
+            "selected": true,
+            "text": ">= 3 подключений (Постоянные)",
+            "value": "3"
+          },
+          {
+            "selected": false,
+            "text": ">= 5 подключений (Активные)",
+            "value": "5"
+          },
+          {
+            "selected": false,
+            "text": ">= 10 подключений (Хардкор)",
+            "value": "10"
+          }
+        ],
+        "query": "1,3,5,10",
+        "queryValue": "",
+        "skipUrlSync": false,
+        "type": "custom"
       }
     ]
   },
@@ -3534,7 +5223,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "WarLink GPN // Сетевая телеметрия и мониторинг",
+  "title": "WarLink • Stockholm GPN Telemetry",
   "uid": "warlink-telemetry",
-  "version": 2
+  "version": 5
 }

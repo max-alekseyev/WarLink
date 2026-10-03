@@ -192,7 +192,7 @@
             if (logChevron) logChevron.style.transform = 'rotate(180deg)';
 
             // Build sanitized diagnostic dump
-            const appVer = document.querySelector('.brand-version')?.textContent || 'v2.1.12';
+            const appVer = document.querySelector('.brand-version')?.textContent || 'v2.1.13';
             const acc = getAccountNumber();
             const gwPing = document.getElementById('gw-ping')?.textContent || '—';
             const freenet = document.getElementById('free-net-control')?.classList.contains('active') ? 'Активен' : 'Отключен';
