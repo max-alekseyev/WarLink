@@ -1,0 +1,24 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: Discord WarLink Alerts
+    receivers:
+      - uid: discord_warlink_alerts
+        type: discord
+        settings:
+          url: https://discord.com/api/webhooks/1555226074160308385/PLACEHOLDER_WEBHOOK_URL
+
+deleteContactPoints:
+  - orgId: 1
+    uid: dfzh7anmli3nka
+
+policies:
+  - orgId: 1
+    receiver: Discord WarLink Alerts
+    groupBy:
+      - grafana_folder
+      - alertname
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h

@@ -60,25 +60,25 @@
   "links": [
     {
       "asDropdown": false,
-      "icon": "cog",
+      "icon": "shield",
       "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Центр управления (Control Plane)",
-      "tooltip": "Открыть пульт параметров сервера, сброса сессий и уведомлений",
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "Панель управления (Directus)",
+      "tooltip": "Административный портал параметров ядра, лимитов слотов и депеш",
       "type": "link",
-      "url": "/d/warlink-control-plane"
+      "url": "https://warlink-hub.duckdns.org:8055/admin"
     },
     {
       "asDropdown": false,
-      "icon": "bolt",
+      "icon": "comment-alt",
       "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Центр тикетов (Support Desk)",
-      "tooltip": "Открыть операционный центр разбора баг-репортов и отправки депеш",
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "Служба поддержки (Тикеты)",
+      "tooltip": "Разбор инцидентов, журналов сбоев и отправка ответов игрокам",
       "type": "link",
-      "url": "/d/warlink-support-desk"
+      "url": "https://warlink-hub.duckdns.org:8055/admin/content/support_tickets"
     }
   ],
   "liveNow": false,
@@ -825,9 +825,9 @@
           "refId": "A"
         }
       ],
-      "title": "Прогресс сбора на серверы сообщества (Цель: 10 € в месяц)",
+      "title": "Прогресс сбора на серверы сообщества (Цель: 13 € в месяц)",
       "type": "bargauge",
-      "description": "Общий прогресс совместного сбора средств на поддержание серверов WarLink: основного игрового шлюза в Стокгольме и запасного европейского шлюза. Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру полностью закрыты силами участников."
+      "description": "Общий прогресс сбора средств на поддержание серверов WarLink: кластера из трех узлов (Стокгольм, Москва, Франкфурт). Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру (13 € / мес) полностью закрыты."
     },
     {
       "datasource": {
@@ -1109,6 +1109,16 @@
                   "mode": "fixed",
                   "fixedColor": "#9ca3af"
                 }
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Открыть спонсора в Directus",
+                    "url": "https://warlink-hub.duckdns.org:8055/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "targetBlank": true
+                  }
+                ]
               }
             ]
           },
@@ -1743,7 +1753,7 @@
           "steps": 64
         },
         "filterValues": {
-          "le": 1e-09
+          "le": 1e-9
         },
         "legend": {
           "show": true
@@ -1847,7 +1857,7 @@
         "y": 35
       },
       "id": 104,
-      "title": "4. Автоматическая сетевая телеметрия игроков (Транзит Москва vs Прямой Стокгольм)",
+      "title": "4. Автоматическая сетевая телеметрия игроков (Транзит Москва vs Прямой Франкфурт)",
       "type": "row"
     },
     {
@@ -1855,7 +1865,7 @@
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
-      "description": "Количество активных UDP-туннелей Hysteria 2 на шлюзе Стокгольм и транзитном узле Москва.",
+      "description": "Количество активных UDP-туннелей Hysteria 2 на шлюзе Франкфурт и входном узле Москва.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1881,7 +1891,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Стокгольм Core (Шлюз)"
+              "options": "Франкфурт Edge (Шлюз)"
             },
             "properties": [
               {
@@ -1940,8 +1950,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "max(warlink_active_sessions{server=\"stockholm\"}) or vector(0)",
-          "legendFormat": "Стокгольм Core (Шлюз)",
+          "expr": "max(warlink_active_sessions{server=\"frankfurt\"}) or vector(0)",
+          "legendFormat": "Франкфурт Edge (Шлюз)",
           "refId": "A"
         },
         {
@@ -1963,7 +1973,7 @@
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
-      "description": "Автоматический сравнительный мониторинг сетевой задержки (RTT) игроков при транзите через Москву и прямом подключении к Стокгольму.",
+      "description": "Автоматический сравнительный мониторинг сетевой задержки (RTT) игроков при транзите через Москву и прямом подключении к европейскому шлюзу Франкфурт.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1995,7 +2005,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Транзит (Москва -> Стокгольм)"
+              "options": "Транзит (Москва -> Франкфурт)"
             },
             "properties": [
               {
@@ -2010,7 +2020,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Прямой маршрут (Стокгольм Core)"
+              "options": "Прямой маршрут (Франкфурт Edge)"
             },
             "properties": [
               {
@@ -2072,7 +2082,7 @@
           },
           "editorMode": "code",
           "expr": "avg by (route_mode) (warlink_client_ping_ms{server=\"moscow\"}) or avg(warlink_player_ping_ms{route_mode=\"transit\"}) or (warlink_gateway_ping_ms + 1.8)",
-          "legendFormat": "Транзит (Москва -> Стокгольм)",
+          "legendFormat": "Транзит (Москва -> Франкфурт)",
           "refId": "A"
         },
         {
@@ -2081,8 +2091,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "avg by (route_mode) (warlink_client_ping_ms{server=\"stockholm\"}) or avg(warlink_player_ping_ms{route_mode=\"direct_stockholm\"}) or (warlink_gateway_ping_ms + 14.5)",
-          "legendFormat": "Прямой маршрут (Стокгольм Core)",
+          "expr": "avg by (route_mode) (warlink_client_ping_ms{server=\"frankfurt\"}) or avg(warlink_player_ping_ms{route_mode=\"direct_frankfurt\"}) or (warlink_gateway_ping_ms + 14.5)",
+          "legendFormat": "Прямой маршрут (Франкфурт Edge)",
           "refId": "B"
         },
         {
@@ -2092,11 +2102,11 @@
           },
           "editorMode": "code",
           "expr": "warlink_node_ping_ms{server=\"moscow\"}",
-          "legendFormat": "Межсерверный транзитный линк (МСК - СТО)",
+          "legendFormat": "Межсерверный транзитный линк (МСК - Франкфурт)",
           "refId": "C"
         }
       ],
-      "title": "Распределение пинга игроков по режимам (Транзит Москва vs Прямой Стокгольм)",
+      "title": "Распределение пинга игроков по режимам (Транзит Москва vs Прямой Франкфурт)",
       "type": "timeseries"
     },
     {
@@ -2168,7 +2178,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "max by (route_mode) (warlink_client_loss_ratio * 100) or max by (route_mode) (warlink_player_packet_loss_percent)",
+          "expr": "max by (route_mode) (warlink_client_loss_ratio{route_mode!=\"direct_stockholm\"} * 100) or max by (route_mode) (warlink_player_packet_loss_percent{route_mode!=\"direct_stockholm\"})",
           "format": "time_series",
           "legendFormat": "{{route_mode}}",
           "refId": "A"
@@ -2255,7 +2265,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Пинг напрямую (Стокгольм)"
+              "options": "Пинг напрямую (Франкфурт)"
             },
             "properties": [
               {
@@ -2352,15 +2362,15 @@
                 "value": [
                   {
                     "options": {
-                      "Москва -> Стокгольм": {
+                      "Москва -> Франкфурт": {
                         "color": "#FF5E1F",
                         "index": 0,
-                        "text": "Москва -> Стокгольм"
+                        "text": "Москва -> Франкфурт"
                       },
-                      "Стокгольм Core": {
+                      "Франкфурт Edge": {
                         "color": "#3b82f6",
                         "index": 1,
-                        "text": "Стокгольм Core"
+                        "text": "Франкфурт Edge"
                       },
                       "Москва Ingress": {
                         "color": "#22c55e",
@@ -2423,7 +2433,7 @@
             },
             {
               "selector": "direct_ping_ms",
-              "text": "Пинг напрямую (Стокгольм)",
+              "text": "Пинг напрямую (Франкфурт)",
               "type": "number"
             },
             {
@@ -4670,6 +4680,16 @@
               {
                 "id": "custom.width",
                 "value": 130
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Открыть профиль игрока в Directus",
+                    "url": "https://warlink-hub.duckdns.org:8055/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "targetBlank": true
+                  }
+                ]
               }
             ]
           },
@@ -4711,15 +4731,15 @@
                 "value": [
                   {
                     "options": {
-                      "Москва -> Стокгольм": {
+                      "Москва -> Франкфурт": {
                         "color": "#FF5E1F",
                         "index": 0,
-                        "text": "Москва -> Стокгольм"
+                        "text": "Москва -> Франкфурт"
                       },
-                      "Стокгольм Core": {
+                      "Франкфурт Edge": {
                         "color": "#3b82f6",
                         "index": 1,
-                        "text": "Стокгольм Core"
+                        "text": "Франкфурт Edge"
                       },
                       "Москва Core": {
                         "color": "#22c55e",
@@ -5108,10 +5128,10 @@
         "allValue": ".*",
         "current": {
           "selected": true,
-          "text": "Все серверы",
-          "value": ".*"
+          "text": "Франкфурт Edge (Шлюз)",
+          "value": "frankfurt"
         },
-        "description": "Переключение телеметрии и мониторинга между шлюзом Стокгольм и транзитным узлом Москва",
+        "description": "Переключение телеметрии и мониторинга между европейским шлюзом Франкфурт, российским узлом Москва и мастер-сервером Стокгольм",
         "hide": 0,
         "includeAll": true,
         "label": "Сервер",
@@ -5119,22 +5139,27 @@
         "name": "server",
         "options": [
           {
-            "selected": true,
+            "selected": false,
             "text": "Все серверы",
-            "value": ".*"
+            "value": "all"
           },
           {
-            "selected": false,
-            "text": "Стокгольм Core (Шлюз)",
-            "value": "stockholm"
+            "selected": true,
+            "text": "Франкфурт Edge (Шлюз)",
+            "value": "frankfurt"
           },
           {
             "selected": false,
             "text": "Москва Ingress (Транзит)",
             "value": "moscow"
+          },
+          {
+            "selected": false,
+            "text": "Стокгольм Core (Master)",
+            "value": "stockholm"
           }
         ],
-        "query": "Стокгольм Core (Шлюз) : stockholm, Москва Ingress (Транзит) : moscow",
+        "query": "Франкфурт Edge (Шлюз) : frankfurt, Москва Ingress (Транзит) : moscow, Стокгольм Core (Master) : stockholm",
         "queryValue": "",
         "skipUrlSync": false,
         "type": "custom"
@@ -5317,7 +5342,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "WarLink • Stockholm GPN Telemetry",
+  "title": "WarLink • Network Observability & Telemetry",
   "uid": "warlink-telemetry",
-  "version": 6
+  "version": 9
 }

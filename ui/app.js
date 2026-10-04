@@ -33,10 +33,11 @@ const GAME_ICON_FALLBACK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="cur
 // --- View Partials Loader ---
 async function loadPartials() {
     const mounts = document.querySelectorAll('[data-partial]');
+    const vParam = encodeURIComponent(window.WARLINK_VERSION || Date.now());
     await Promise.all(Array.from(mounts).map(async (el) => {
         const url = el.getAttribute('data-partial');
         try {
-            const resp = await fetch(url);
+            const resp = await fetch(`${url}?v=${vParam}`, { cache: 'no-store' });
             if (resp.ok) {
                 const html = await resp.text();
                 el.outerHTML = html;
@@ -220,13 +221,21 @@ async function toggleFreeInternet(e) {
                 updateFreeInternetUI(data.enabled);
             }
         } else {
+            const errData = await resp.json().catch(() => ({}));
             freeInternetEnabled = !newTarget;
             updateFreeInternetUI(freeInternetEnabled);
+            if (errData && errData.error) {
+                showToast(errData.error);
+                if (window.WarLinkAudio && typeof window.WarLinkAudio.playDenied === 'function') {
+                    window.WarLinkAudio.playDenied();
+                }
+            }
         }
     } catch (err) {
         console.error('Ошибка переключения комплексного режима:', err);
         freeInternetEnabled = !newTarget;
         updateFreeInternetUI(freeInternetEnabled);
+        showToast('Ошибка сети при переключении комплексного режима');
     } finally {
         isTogglingFreeNet = false;
         if (ctrl) {
@@ -253,8 +262,21 @@ function renderShowcase(games, activeId) {
     const grid = document.getElementById('showcase-grid');
     if (!grid) return;
 
-    // Sort: last played first
-    const sorted = [...cachedGames].sort((a, b) => (b.last_played || 0) - (a.last_played || 0));
+    // Strict priority for featured titles: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker (dnd)
+    const priorityOrder = {
+        'wardogs': 1,
+        'arc_raiders': 2,
+        'dark_and_darker': 3
+    };
+
+    const sorted = [...cachedGames].sort((a, b) => {
+        const pA = priorityOrder[a.id] || 999;
+        const pB = priorityOrder[b.id] || 999;
+        if (pA !== pB) {
+            return pA - pB;
+        }
+        return (b.last_played || 0) - (a.last_played || 0);
+    });
 
     // Avoid destroying and recreating DOM on every poll if state hasn't changed (prevents hover flickering)
     const stateKey = JSON.stringify(sorted) + '_' + activeId + '_' + isConnected + '_' + isBusy + '_' + launchingGameId + '_' + isVotingEnabled;
@@ -363,6 +385,13 @@ function handleGameContextMenu(e, gameId) {
 // 1-Click Game Action (One action, one screen)
 function onGameClick(gameId) {
     if (isBusy || isDownloadingDeps || isInitializing) return;
+
+    const targetGame = (cachedGames || []).find(g => g.id === gameId);
+    if (targetGame && (targetGame.status === 'crowdfunding' || gameId === 'bf6')) {
+        openDonateModalWithTab('boosty');
+        showToast('Открыт спецпроект Battlefield 6');
+        return;
+    }
 
     if (isConnected && selectedGameId === gameId) {
         // Currently connected to this game -> disconnect
@@ -734,6 +763,7 @@ function updateUI(data) {
 
     // Handle error notifications (e.g. 100/100 slots full or network failure)
     if (data.last_error) {
+        launchingGameId = null;
         if (data.last_error !== lastShownError) {
             lastShownError = data.last_error;
             showToast(data.last_error);
@@ -853,9 +883,13 @@ function updateUI(data) {
 
     if (typeof data.enable_donate === 'boolean') {
         isDonateEnabled = data.enable_donate;
+        window.isDonateEnabled = isDonateEnabled;
         if (btnDonate) {
             btnDonate.style.display = isDonateEnabled ? 'inline-flex' : 'none';
         }
+        document.querySelectorAll('.btn-author-donate, .btn-compact-donate, .account-donate-links').forEach(el => {
+            el.style.display = isDonateEnabled ? '' : 'none';
+        });
     }
 
     // Profile options in Settings
@@ -899,10 +933,17 @@ async function toggleConnect() {
             await fetch('/api/disconnect');
         } catch (e) {}
     } else {
+        lastShownError = '';
         launchingGameId = selectedGameId;
         renderShowcase(cachedGames, selectedGameId);
         try {
-            await fetch('/api/connect');
+            const resp = await fetch('/api/connect');
+            if (!resp.ok) {
+                const errData = await resp.json().catch(() => ({}));
+                if (errData && errData.error) {
+                    showToast(errData.error);
+                }
+            }
         } catch (e) {}
     }
     fetchStatus();
@@ -922,9 +963,10 @@ async function onProfileChange(val) {
 }
 
 const ROUTE_DESCRIPTIONS = {
-    'transit': 'Транзитный маршрут через Европу (~80 мс)',
-    'direct_stockholm': 'Прямое европейское подключение (~70 мс)',
-    'direct_moscow': 'Прямое подключение по России (минимальный пинг ~20 мс)'
+    'direct_moscow': 'Прямое подключение по России (минимальный пинг ~15-25 мс)',
+    'direct_frankfurt': 'Прямое европейское подключение, Франкфурт (~40-50 мс)',
+    'transit': 'Транзитный коридор через Москву во Франкфурт (~50-60 мс)',
+    'direct_stockholm': 'Прямое европейское подключение, Франкфурт (~40-50 мс)'
 };
 
 function updateRouteModeDescription(mode) {
@@ -944,7 +986,7 @@ async function onNetworkRouteModeChange(mode) {
         });
         const data = await res.json();
         if (data && data.success) {
-            const badge = mode === 'direct_stockholm' ? 'Стокгольм' : (mode === 'direct_moscow' ? 'Москва' : 'Мск → Стокгольм');
+            const badge = mode === 'direct_frankfurt' ? 'Франкфурт' : (mode === 'direct_moscow' ? 'Москва' : (mode === 'direct_stockholm' ? 'Франкфурт' : 'Мск → Франкфурт'));
             showToast('Маршрут переключен: ' + badge);
             if (typeof UIStore !== 'undefined') {
                 UIStore.invalidate('/api/status');
@@ -957,9 +999,9 @@ async function onNetworkRouteModeChange(mode) {
 
 // --- Quick Gateway Route Popover & Routing Feedback ---
 let currentRouteModes = [
-    { id: 'transit', title: '1. Клиент — Москва — Стокгольм — Игра', desc: 'Транзитный маршрут через Европу (~80 мс)', badge: 'Мск → Стокгольм' },
-    { id: 'direct_stockholm', title: '2. Клиент — Стокгольм — Игра', desc: 'Прямое европейское подключение (~70 мс)', badge: 'Стокгольм' },
-    { id: 'direct_moscow', title: '3. Клиент — Москва — Игра', desc: 'Прямое подключение по России (пинг ~20 мс)', badge: 'Москва' }
+    { id: 'direct_moscow', title: 'Москва', desc: 'Прямое подключение по России (пинг ~15-25 мс)', badge: 'Москва' },
+    { id: 'direct_frankfurt', title: 'Франкфурт', desc: 'Прямое европейское подключение (пинг ~40-50 мс)', badge: 'Франкфурт' },
+    { id: 'transit', title: 'Москва → Франкфурт', desc: 'Транзитный коридор через Москву во Франкфурт (~50-60 мс)', badge: 'Мск → Франкфурт' }
 ];
 
 async function toggleGatewayRoutePopover(e) {
@@ -1034,27 +1076,27 @@ const FEEDBACK_STEPS = [
     {
         mode: 'direct_moscow',
         title: '1. МОСКВА — ПРЯМОЙ УЗЕЛ РФ',
-        sub: 'Прямое подключение по России (минимальный пинг ~20 мс)',
-        label: 'Москва (~20 мс)'
+        sub: 'Прямое подключение по России (минимальный пинг ~15-25 мс)',
+        label: 'Москва'
     },
     {
-        mode: 'direct_stockholm',
-        title: '2. СТОКГОЛЬМ — ЕВРОПЕЙСКИЙ ШЛЮЗ',
-        sub: 'Прямое европейское подключение (~70 мс)',
-        label: 'Стокгольм (~70 мс)'
+        mode: 'direct_frankfurt',
+        title: '2. ФРАНКФУРТ — ЕВРОПЕЙСКИЙ ШЛЮЗ',
+        sub: 'Прямое европейское подключение (~40-50 мс)',
+        label: 'Франкфурт'
     },
     {
         mode: 'transit',
         title: '3. ТРАНЗИТ — ГИБРИДНЫЙ МАРШРУТ',
-        sub: 'Москва → Стокгольм (~80 мс)',
-        label: 'Транзит (~80 мс)'
+        sub: 'Москва → Франкфурт (~50-60 мс)',
+        label: 'Транзит'
     }
 ];
 
 let currentFeedbackStepIndex = 0;
 let feedbackDraft = {
     'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-    'direct_stockholm': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+    'direct_frankfurt': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
     'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
 };
 
@@ -1064,7 +1106,7 @@ function loadFeedbackDraftFromStorage() {
         if (raw) {
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
-                for (const k of ['direct_moscow', 'direct_stockholm', 'transit']) {
+                for (const k of ['direct_moscow', 'direct_frankfurt', 'direct_stockholm', 'transit']) {
                     if (parsed[k]) feedbackDraft[k] = Object.assign({}, feedbackDraft[k], parsed[k]);
                 }
             }
@@ -1081,7 +1123,7 @@ function saveFeedbackDraftToStorage() {
 function resetFeedbackDraft() {
     feedbackDraft = {
         'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-        'direct_stockholm': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+        'direct_frankfurt': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
         'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
     };
     try { localStorage.removeItem('warlink_routing_feedback_draft_v2'); } catch(e) {}
@@ -1151,9 +1193,9 @@ function renderFeedbackCurrentStep() {
     const gwTitle = document.getElementById('gw-title');
     const currentActiveText = (gwTitle ? gwTitle.textContent : '').toLowerCase();
     let isActive = false;
-    if (step.mode === 'transit' && (currentActiveText.includes('транзит') || currentActiveText.includes('->'))) isActive = true;
-    else if (step.mode === 'direct_stockholm' && currentActiveText.includes('стокгольм') && !currentActiveText.includes('->')) isActive = true;
-    else if (step.mode === 'direct_moscow' && currentActiveText.includes('москва') && !currentActiveText.includes('->')) isActive = true;
+    if (step.mode === 'transit' && (currentActiveText.includes('транзит') || currentActiveText.includes('->') || currentActiveText.includes('→'))) isActive = true;
+    else if ((step.mode === 'direct_frankfurt' || step.mode === 'direct_stockholm') && (currentActiveText.includes('франкфурт') || currentActiveText.includes('стокгольм')) && !currentActiveText.includes('->') && !currentActiveText.includes('→')) isActive = true;
+    else if (step.mode === 'direct_moscow' && currentActiveText.includes('москва') && !currentActiveText.includes('->') && !currentActiveText.includes('→')) isActive = true;
 
     // Status pills
     const pills = document.querySelectorAll('.rf-status-pill');
@@ -1385,7 +1427,7 @@ async function submitMultiRouteFeedback() {
             try { localStorage.removeItem('warlink_routing_feedback_draft_v2'); } catch(e) {}
             feedbackDraft = {
                 'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-                'direct_stockholm': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
+                'direct_frankfurt': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
                 'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
             };
 
@@ -1742,6 +1784,39 @@ async function openNotifAction(encodedURL) {
 }
 
 
+async function checkAnnouncements() {
+    try {
+        const res = await fetch('/api/announcements');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.success && data.announcement && data.announcement.active) {
+            const ann = data.announcement;
+            if (ann.type === 'toast' && ann.message) {
+                showToast(ann.message);
+            }
+        }
+    } catch(e) {}
+}
+
+// Global external link interceptor - guarantees that all links open via external browser/Steam and never inside WebView2
+document.addEventListener('click', (e) => {
+    const link = e.target.closest('a');
+    if (!link) return;
+    const href = link.getAttribute('href');
+    if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+    if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('steam://')) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof window.openSteamLink === 'function' && href.includes('steamcommunity.com')) {
+            window.openSteamLink(href);
+        } else if (typeof window.openExternal === 'function') {
+            window.openExternal(href);
+        } else {
+            fetch('/api/open-url?url=' + encodeURIComponent(href));
+        }
+    }
+}, true);
+
 // Initial boot
 document.addEventListener('DOMContentLoaded', async () => {
     // Render default state immediately before revealing window to eliminate layout shifts
@@ -1755,6 +1830,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     fetchStatus();
     fetchNotifications();
+    checkAnnouncements();
     if (typeof fetchAccountProfile === 'function') {
         fetchAccountProfile();
     }

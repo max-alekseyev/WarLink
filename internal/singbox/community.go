@@ -343,10 +343,6 @@ func UploadAvatar(account string, imgBytes []byte, filename string) (string, err
 	return result.AvatarURL, nil
 }
 
-// CreateCustomDonation creates a donation payment invoice for a custom amount (default SBP).
-func CreateCustomDonation(account, device string, amountRub int) (string, error) {
-	return CreateCustomDonationWithMethod(account, device, amountRub, "sbp")
-}
 
 // CreateCustomDonationWithMethod creates a payment invoice for a specified payment method.
 func CreateCustomDonationWithMethod(account, device string, amountRub int, paymentMethod string) (string, error) {

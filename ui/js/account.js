@@ -330,32 +330,46 @@ let currentDonateTab = 'server';
 
 function openExternal(url) {
     if (!url) return;
-    if (window.openExternalUrl) {
-        window.openExternalUrl(url);
-    } else {
-        fetch('/api/open-url?url=' + encodeURIComponent(url)).catch(() => {
-            window.open(url, '_blank');
-        });
-    }
+    fetch('/api/open-url?url=' + encodeURIComponent(url)).catch(() => {
+        window.open(url, '_blank');
+    });
 }
 
 function openBoostyLink(url) {
+    if (!url) return;
     openExternal(url);
     showToast('Страница Boosty открыта в браузере');
 }
 
+function openSteamLink(url) {
+    if (!url) return;
+    let target = url;
+    if (url.startsWith('https://steamcommunity.com') || url.startsWith('http://steamcommunity.com')) {
+        target = 'steam://openurl/' + url;
+    }
+    openExternal(target);
+    showToast('Профиль Steam открывается в клиенте');
+}
+
+window.openExternal = openExternal;
+window.openExternalUrl = openExternal;
+window.openBoostyLink = openBoostyLink;
+window.openSteamLink = openSteamLink;
+
 async function loadBoostyGoal() {
     try {
-        const res = await fetch('/api/boosty-goal');
+        const res = await fetch('/api/community-goal');
         if (!res.ok) return;
         const data = await res.json();
         if (data && data.success) {
-            const current = data.current_amount || 0;
-            const target = data.target_amount || 100000;
+            // 1. Author boosty goal
+            const author = data.author_boosty || {};
+            const current = author.current_amount || 0;
+            const target = author.target_amount || 100000;
             const pct = Math.min(100, Math.max(0, (current / target) * 100));
 
             const titleEl = document.getElementById('boosty-goal-title');
-            if (titleEl && data.title) titleEl.textContent = data.title;
+            if (titleEl && author.title) titleEl.textContent = author.title;
 
             const targetEl = document.getElementById('boosty-goal-target');
             if (targetEl) targetEl.textContent = target.toLocaleString('ru-RU') + ' ₽';
@@ -366,6 +380,29 @@ async function loadBoostyGoal() {
             const metaEl = document.getElementById('boosty-goal-text');
             if (metaEl) {
                 metaEl.textContent = `Собрано: ${current.toLocaleString('ru-RU')} ₽ из ${target.toLocaleString('ru-RU')} ₽ (${pct.toFixed(1)}%)`;
+            }
+
+            // 2. Battlefield 6 special project goal
+            if (data.special_projects && data.special_projects.length > 0) {
+                const bf6 = data.special_projects[0];
+                const bf6Target = bf6.target_amount_rub || 1600;
+                const bf6Current = bf6.current_amount_rub || 0;
+                const bf6Pct = Math.min(100, Math.max(0, bf6.percent || 0));
+
+                const bf6TargetEl = document.getElementById('donate-bf6-target');
+                if (bf6TargetEl) bf6TargetEl.textContent = bf6Target.toLocaleString('ru-RU') + ' ₽';
+
+                const bf6FillEl = document.getElementById('donate-bf6-fill');
+                if (bf6FillEl) bf6FillEl.style.width = Math.max(bf6Pct > 0 ? 2 : 0, bf6Pct) + '%';
+
+                const bf6TextEl = document.getElementById('donate-bf6-text');
+                if (bf6TextEl) {
+                    if (bf6.is_completed) {
+                        bf6TextEl.textContent = 'Цель достигнута! Игра получена разработчиком';
+                    } else {
+                        bf6TextEl.textContent = `Собрано: ${bf6Current.toLocaleString('ru-RU')} ₽ из ${bf6Target.toLocaleString('ru-RU')} ₽ (${bf6Pct.toFixed(1)}%)`;
+                    }
+                }
             }
         }
     } catch(e) {
@@ -380,6 +417,12 @@ function openDonateModal(e) {
 
 function openDonateModalWithTab(tab, e) {
     if (e) e.stopPropagation();
+    if (window.isDonateEnabled === false) {
+        if (typeof showToast === 'function') {
+            showToast('Прием пожертвований временно приостановлен');
+        }
+        return;
+    }
     const modal = document.getElementById('modal-donate-custom');
     if (modal) {
         modal.style.display = 'flex';

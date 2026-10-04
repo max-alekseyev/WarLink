@@ -132,7 +132,7 @@ function renderDossierSvg(data, secret = false, steamLinked = true, showMotto = 
     const steamBlock = (steamLinked && cleanSteamId) ? `
         <g transform="translate(0, 44)">
             <text x="0" y="0" font-family="'JetBrains Mono', monospace" font-size="7.5" font-weight="700" fill="#756e5c" letter-spacing="0.8">STEAM ID:</text>
-            <a href="${steamUrl || '#'}" target="_blank" class="steam-link-group" title="Открыть профиль Steam">
+            <a href="${steamUrl || '#'}" onclick="if (window.openSteamLink) { window.openSteamLink('${steamUrl}'); return false; }" class="steam-link-group" title="Открыть профиль Steam в клиенте">
                 <g transform="translate(0, 13)">
                     <text class="steam-text" x="0" y="0" font-family="'JetBrains Mono', monospace" font-size="9.5" font-weight="700" fill="#1b1c1a" letter-spacing="0">${cleanSteamId}</text>
                     <g transform="translate(${steamIconX}, -7)" class="steam-icon-ext" stroke="#68604f" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" fill="none">
@@ -620,7 +620,7 @@ function prepareDossierData(sponsor) {
 
     const cleanNick = (window.NobelCallsigns && window.NobelCallsigns.sanitizeNickname)
         ? window.NobelCallsigns.sanitizeNickname(sponsor.nickname, sponsor.account_number)
-        : (sponsor.nickname && !sponsor.nickname.includes('****') ? sponsor.nickname : 'Аноним');
+        : (sponsor.nickname && !sponsor.nickname.includes('****') ? sponsor.nickname : 'Оператор 101');
 
     let progressionData = null;
     if (sponsor.progression && (sponsor.progression.career_level > 0 || sponsor.progression.careerLevel > 0)) {

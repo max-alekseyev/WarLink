@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="310" height="28" viewBox="0 0 310 28" fill="none">
+  <rect width="310" height="28" rx="3" fill="#111111" stroke="#262626"/>
+  <rect width="90" height="28" rx="3" fill="#181818"/>
+  <circle cx="15" cy="14" r="3.5" fill="#2EA44F"/>
+  <text x="26" y="17.5" fill="#CCCCCC" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="10.5" font-weight="700" letter-spacing="0.5">ОНЛАЙН</text>
+  <g transform="translate(100, 9)">
+    <rect x="0" width="8" height="10" rx="1" fill="#FF5E1F"/>
+      <rect x="11" width="8" height="10" rx="1" fill="#FF5E1F"/>
+      <rect x="22" width="8" height="10" rx="1" fill="#FF5E1F"/>
+      <rect x="33" width="8" height="10" rx="1" fill="#FF5E1F"/>
+      <rect x="44" width="8" height="10" rx="1" fill="#FF5E1F"/>
+      <rect x="55" width="8" height="10" rx="1" fill="#FF5E1F"/>
+      <rect x="66" width="8" height="10" rx="1" fill="#262626"/>
+      <rect x="77" width="8" height="10" rx="1" fill="#262626"/>
+      <rect x="88" width="8" height="10" rx="1" fill="#262626"/>
+      <rect x="99" width="8" height="10" rx="1" fill="#262626"/>
+  </g>
+  <text x="218" y="17.5" fill="#FF5E1F" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="11" font-weight="700">39/61</text>
+  <text x="262" y="17.5" fill="#777777" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="10" font-weight="600">(64%)</text>
+</svg>

@@ -44,7 +44,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.1.13"
+var AppVersion = "v2.2.0"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -94,7 +94,6 @@ var (
 	procIsUserAnAdmin      = modShell32.NewProc("IsUserAnAdmin")
 	modDwmapi              = syscall.NewLazyDLL("dwmapi.dll")
 	procDwmExtendFrameIntoClientArea = modDwmapi.NewProc("DwmExtendFrameIntoClientArea")
-	procDwmSetWindowAttribute        = modDwmapi.NewProc("DwmSetWindowAttribute")
 	procIsIconic                     = modUser32.NewProc("IsIconic")
 	procSetCurrentProcessExplicitAppUserModelID = modShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
 )
@@ -117,11 +116,25 @@ var (
 	BlockedSteamGames = map[int]string{
 		3602290: "FEMBOY FUTA HOUSE",
 	}
+
+	// SupportedSteamGames содержит реестр AppID игр, уже добавленных в WarLink
+	SupportedSteamGames = map[int]string{
+		1867240: "WARDOGS",
+		1808500: "ARC Raiders",
+		2016590: "Dark and Darker",
+	}
 )
 
 func isBlockedSteamGame(appID int) bool {
 	_, blocked := BlockedSteamGames[appID]
 	return blocked
+}
+
+func isSupportedSteamGame(appID int) (bool, string) {
+	if title, ok := SupportedSteamGames[appID]; ok {
+		return true, title
+	}
+	return false, ""
 }
 
 func isRunningAsAdmin() bool {
@@ -1106,7 +1119,7 @@ func main() {
 		}
 		// First try standard ICMP ping (using Windows built-in ping.exe)
 		// This bypasses any TCP interception by TUN / local proxies and measures true physical round-trip.
-		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "800")
+		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "1000")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			HideWindow:    true,
 			CreationFlags: 0x08000000,
@@ -1137,24 +1150,35 @@ func main() {
 			}
 		}
 
-		// Fallback to TCP handshake if ICMP was blocked
+		// Fallback to TCP handshake if ICMP was blocked or dropped.
+		// Dial port 80 first (always open HTTP port across cluster nodes).
 		start := time.Now()
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 1200*time.Millisecond)
-		if err != nil {
-			conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 1200*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			ms := int(time.Since(start).Milliseconds())
+			if ms < 1 {
+				return 1
+			}
+			return ms
 		}
-		if err != nil {
-			return 0
+
+		// If port 80 failed, try port 443 with a clean timer (never accumulate previous timeout)
+		start = time.Now()
+		conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			ms := int(time.Since(start).Milliseconds())
+			if ms < 1 {
+				return 1
+			}
+			return ms
 		}
-		_ = conn.Close()
-		ms := int(time.Since(start).Milliseconds())
-		if ms < 1 {
-			return 1
-		}
-		return ms
+
+		return 0
 	}
 
-	// Background periodic poller for Stockholm Gateway status & real ping
+	// Background periodic poller for Stockholm/Frankfurt Gateway status & real ping
 	go func() {
 		pollGateway := func() {
 			serverIP := singbox.GetServerIP()
@@ -1162,7 +1186,25 @@ func main() {
 				rtt := measureGatewayRTT(serverIP)
 				state.mu.Lock()
 				if rtt > 0 {
-					state.gatewayRealPing = rtt
+					// Outlier filter: if sudden jump >400ms while baseline was low (<150ms),
+					// re-probe once immediately to discard isolated network drops or timeouts.
+					if rtt > 400 && state.gatewayRealPing > 0 && state.gatewayRealPing < 150 {
+						state.mu.Unlock()
+						recheck := measureGatewayRTT(serverIP)
+						state.mu.Lock()
+						if recheck > 0 && recheck < 250 {
+							rtt = recheck
+						} else {
+							// Filter out single anomaly
+							rtt = (state.gatewayRealPing*2 + rtt) / 3
+						}
+					}
+					if state.gatewayRealPing > 0 {
+						// Exponential moving average: smooth out jitter
+						state.gatewayRealPing = int(float64(state.gatewayRealPing)*0.7 + float64(rtt)*0.3)
+					} else {
+						state.gatewayRealPing = rtt
+					}
 				}
 				state.mu.Unlock()
 			}
@@ -1242,12 +1284,116 @@ func main() {
 	_ = mime.AddExtensionType(".webp", "image/webp")
 	_ = mime.AddExtensionType(".png", "image/png")
 
-	mux.Handle("/", http.FileServer(http.FS(subFS)))
-	staticCacheDir := filepath.Join(deps.GetCoreDir(), "cache", "static")
-	_ = os.MkdirAll(staticCacheDir, 0755)
-
 	exePath, _ := os.Executable()
 	exeDir := filepath.Dir(exePath)
+
+	uiCacheDir := filepath.Join(deps.GetCoreDir(), "cache", "ui")
+	_ = os.MkdirAll(uiCacheDir, 0755)
+
+	serveDynamicUI := func(w http.ResponseWriter, r *http.Request) {
+		relPath := strings.TrimPrefix(r.URL.Path, "/")
+		if relPath == "" || relPath == "/" {
+			relPath = "index.html"
+		}
+		if strings.Contains(relPath, "..") {
+			http.NotFound(w, r)
+			return
+		}
+
+		cachedPath := filepath.Join(uiCacheDir, filepath.FromSlash(relPath))
+
+		// 1. For dynamic views/html/js/css, query the Master Server CDN first
+		isDynamicView := strings.HasPrefix(relPath, "views/") ||
+			strings.HasSuffix(relPath, ".html") ||
+			strings.HasSuffix(relPath, ".js") ||
+			strings.HasSuffix(relPath, ".css")
+
+		if isDynamicView {
+			serverAPI := singbox.GetServerAPI()
+			if serverAPI == "" {
+				serverAPI = "http://138.124.103.99"
+			}
+			targetURL := fmt.Sprintf("%s/static/ui/%s", strings.TrimRight(serverAPI, "/"), relPath)
+
+			client := &http.Client{Timeout: 2 * time.Second}
+			httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+			if err == nil {
+				if info, statErr := os.Stat(cachedPath); statErr == nil {
+					httpReq.Header.Set("If-Modified-Since", info.ModTime().UTC().Format(http.TimeFormat))
+				}
+				resp, fetchErr := client.Do(httpReq)
+				if fetchErr == nil {
+					defer resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						data, readErr := io.ReadAll(resp.Body)
+						if readErr == nil && len(data) > 0 {
+							_ = os.MkdirAll(filepath.Dir(cachedPath), 0755)
+							_ = os.WriteFile(cachedPath, data, 0644)
+							w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+							if strings.HasSuffix(relPath, ".html") {
+								w.Header().Set("Content-Type", "text/html; charset=utf-8")
+							} else if strings.HasSuffix(relPath, ".js") {
+								w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+							} else if strings.HasSuffix(relPath, ".css") {
+								w.Header().Set("Content-Type", "text/css; charset=utf-8")
+							}
+							http.ServeContent(w, r, filepath.Base(relPath), time.Now(), bytes.NewReader(data))
+							return
+						}
+					} else if resp.StatusCode == http.StatusNotModified {
+						if info, statErr := os.Stat(cachedPath); statErr == nil && !info.IsDir() {
+							w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+							http.ServeFile(w, r, cachedPath)
+							return
+						}
+					}
+				}
+			}
+		}
+
+		// 2. Fallback A: Serve from local disk cache if available
+		if info, statErr := os.Stat(cachedPath); statErr == nil && !info.IsDir() {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			http.ServeFile(w, r, cachedPath)
+			return
+		}
+
+		// 3. Fallback B: Serve from local dev directory if present
+		for _, baseDir := range []string{exeDir, "."} {
+			devPath := filepath.Join(baseDir, "ui", filepath.FromSlash(relPath))
+			if info, err := os.Stat(devPath); err == nil && !info.IsDir() {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				http.ServeFile(w, r, devPath)
+				return
+			}
+		}
+
+		// 4. Fallback C: Serve embedded asset from subFS (uiFS)
+		file, err := subFS.Open(relPath)
+		if err == nil {
+			defer file.Close()
+			if stat, sErr := file.Stat(); sErr == nil && !stat.IsDir() {
+				if seeker, ok := file.(io.ReadSeeker); ok {
+					w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+					if strings.HasSuffix(relPath, ".html") {
+						w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					} else if strings.HasSuffix(relPath, ".js") {
+						w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+					} else if strings.HasSuffix(relPath, ".css") {
+						w.Header().Set("Content-Type", "text/css; charset=utf-8")
+					}
+					http.ServeContent(w, r, stat.Name(), stat.ModTime(), seeker)
+					return
+				}
+			}
+		}
+
+		http.NotFound(w, r)
+	}
+
+	mux.HandleFunc("/", serveDynamicUI)
+	staticCacheDir := filepath.Join(deps.GetCoreDir(), "cache", "static")
+	_ = os.MkdirAll(staticCacheDir, 0755)
 
 	serveStaticAsset := func(w http.ResponseWriter, r *http.Request, relPath string) {
 		relPath = strings.TrimPrefix(relPath, "/")
@@ -1352,12 +1498,12 @@ func main() {
 		gwDays := 0
 		gwDonateAmount := 100
 		routeMode := state.cfg.GetNetworkRouteMode()
-		gwBadge := "Москва -> Стокгольм"
-		gwLocation := "Транзит Москва -> Стокгольм"
+		gwBadge := "Москва → Франкфурт"
+		gwLocation := "Транзит Москва → Франкфурт"
 		switch routeMode {
-		case config.RouteModeDirectStockholm:
-			gwBadge = "Стокгольм"
-			gwLocation = "Стокгольм, Швеция"
+		case config.RouteModeDirectFrankfurt, config.RouteModeDirectStockholm:
+			gwBadge = "Франкфурт"
+			gwLocation = "Франкфурт, Германия"
 		case config.RouteModeDirectMoscow:
 			gwBadge = "Москва"
 			gwLocation = "Москва, Россия"
@@ -1369,8 +1515,8 @@ func main() {
 		isSponsor := state.cfg.AccountTier == "sponsor" || isAdmin
 		if state.gatewayStatus != nil {
 			gwDays = state.gatewayStatus.DaysLeft
-			if routeMode == config.RouteModeDirectStockholm && state.gatewayStatus.Location != "" {
-				gwLocation = state.gatewayStatus.Location
+			if (routeMode == config.RouteModeDirectStockholm || routeMode == config.RouteModeDirectFrankfurt) && state.gatewayStatus.Location != "" {
+				gwLocation = "Франкфурт, Германия"
 			}
 			if state.gatewayStatus.DonateAmountRub > 0 {
 				gwDonateAmount = state.gatewayStatus.DonateAmountRub
@@ -1804,6 +1950,7 @@ func main() {
 			"logs_gzip":      logsBase64,
 			"account_number": state.cfg.AccountNumber,
 			"device_id":      singbox.GetMachineGUID(),
+			"app_version":    AppVersion,
 			"summary":        fmt.Sprintf("Прикреплен свежий архив диагностики (%d файлов)", fileCount),
 		}
 		payloadBytes, _ := json.Marshal(payload)
@@ -2005,7 +2152,7 @@ func main() {
 	mux.HandleFunc("/api/boosty-goal", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		client := &http.Client{Timeout: 4 * time.Second}
-		resp, err := client.Get("https://138.124.103.99/api/v1/boosty-goal")
+		resp, err := client.Get("http://138.124.103.99/api/v1/boosty-goal")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success":        true,
@@ -2013,6 +2160,130 @@ func main() {
 				"target_amount":  100000,
 				"current_amount": 0,
 				"percent":        0.0,
+			})
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	mux.HandleFunc("/api/community-goal", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 4 * time.Second}
+		resp, err := client.Get("http://138.124.103.99/api/v1/community/goal")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"infrastructure": map[string]interface{}{
+					"title":               "Инфраструктура кластера (Стокгольм + Москва + Франкфурт)",
+					"target_amount_rub":   1690,
+					"target_amount_eur":   13.0,
+					"current_balance_rub": 1690,
+					"current_balance_eur": 13.0,
+					"days_left":           23,
+					"real_days_left":      30,
+					"target_days":         31,
+					"percent":             100.0,
+					"is_covered":          true,
+					"status_text":         "Оплачено на 23 дня (Стокгольм + Москва + Франкфурт в строю)",
+				},
+				"expansion": map[string]interface{}{
+					"id":                  "frankfurt",
+					"title":               "Шлюз Франкфурт (Германия)",
+					"role":                "В СТРОЮ",
+					"description":         "Европейский игровой узел с ультранизким пингом. Включен в базовую инфраструктуру кластера (13 € / мес).",
+					"target_amount_rub":   1690,
+					"target_amount_eur":   13.0,
+					"current_amount_rub":  1690,
+					"current_amount_eur":  13.0,
+					"percent":             100.0,
+					"is_covered":          true,
+					"is_active":           false,
+				},
+				"special_projects": []interface{}{
+					map[string]interface{}{
+						"id":                 "bf6",
+						"title":              "Battlefield 6 в WarLink",
+						"badge":              "СПЕЦПРОЕКТ",
+						"description":        "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
+						"target_amount_rub":  1600,
+						"base_price_rub":     3200,
+						"discount_price_rub": 1600,
+						"current_amount_rub": 0,
+						"percent":            0.0,
+						"is_completed":       false,
+						"boosty_url":         "https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link",
+						"boosty_label":       "Поддержать сбор на BF6",
+						"steam_url":          "https://steamcommunity.com/id/MaksimPaladin/",
+						"steam_label":        "Подарить в Steam",
+					},
+				},
+			})
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	mux.HandleFunc("/api/games/catalog", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 4 * time.Second}
+		resp, err := client.Get("http://138.124.103.99/api/v1/games/catalog")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"games": []interface{}{
+					map[string]interface{}{
+						"id":           "wardogs",
+						"title":        "WARDOGS",
+						"processes":    []string{"WardogsClient-Win64-Shipping.exe", "WardogsLauncher-Shipping.exe"},
+						"steam_app_id": 2645020,
+						"icon":         "wardogs_icon.png",
+						"status":       "active",
+						"is_default":   true,
+					},
+					map[string]interface{}{
+						"id":           "bf6",
+						"title":        "Battlefield 6",
+						"processes":    []string{"bf6.exe", "EAAntiCheat.GameService.exe"},
+						"steam_app_id": 0,
+						"icon":         "bf6_icon.png",
+						"status":       "crowdfunding",
+						"note":         "Идет сбор на копию игры",
+					},
+				},
+			})
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	mux.HandleFunc("/api/announcements", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 3 * time.Second}
+		resp, err := client.Get("http://138.124.103.99/api/v1/announcements")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "announcement": nil})
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(w, resp.Body)
+	})
+
+	mux.HandleFunc("/api/sponsors/tiers", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 3 * time.Second}
+		resp, err := client.Get("http://138.124.103.99/api/v1/sponsors/tiers")
+		if err != nil || resp.StatusCode != http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"tiers": []interface{}{
+					map[string]interface{}{"id": "recruit", "name": "Рекрут", "price_rub": 100, "role": "Спонсор"},
+					map[string]interface{}{"id": "operative", "name": "Оперативник", "price_rub": 500, "role": "Оперативник"},
+					map[string]interface{}{"id": "veteran", "name": "Ветеран", "price_rub": 1000, "role": "Ветеран"},
+					map[string]interface{}{"id": "general", "name": "Генерал", "price_rub": 5000, "role": "Генерал"},
+				},
 			})
 			return
 		}
@@ -2566,7 +2837,17 @@ func main() {
 			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 				err := state.eng.ToggleFreeInternet(body.Enabled)
 				if err != nil {
+					state.mu.Lock()
+					state.lastConnectError = err.Error()
+					state.mu.Unlock()
 					appendLog(fmt.Sprintf("[ERROR] Ошибка режима «Комплексный режим»: %v", err))
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"error":   err.Error(),
+						"enabled": false,
+					})
+					return
 				}
 			}
 		}
@@ -2762,6 +3043,14 @@ func main() {
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректный запрос"})
 				return
 			}
+			if isSupported, supTitle := isSupportedSteamGame(req.SteamAppID); isSupported {
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("Игра «%s» уже официально поддерживается в WarLink!", supTitle),
+				})
+				return
+			}
 			if isBlockedSteamGame(req.SteamAppID) {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2809,22 +3098,22 @@ func main() {
 			currentMode := state.cfg.GetNetworkRouteMode()
 			modes := []map[string]string{
 				{
-					"id":          config.RouteModeTransit,
-					"title":       "1. Клиент — Москва — Стокгольм — Игра",
-					"description": "Транзитный маршрут через Европу (~80 мс)",
-					"badge":       "Мск → Стокгольм",
-				},
-				{
-					"id":          config.RouteModeDirectStockholm,
-					"title":       "2. Клиент — Стокгольм — Игра",
-					"description": "Прямое европейское подключение (~70 мс)",
-					"badge":       "Стокгольм",
-				},
-				{
 					"id":          config.RouteModeDirectMoscow,
-					"title":       "3. Клиент — Москва — Игра",
+					"title":       "1. Клиент — Москва — Игра",
 					"description": "Прямое подключение по России (минимальный пинг ~20 мс)",
 					"badge":       "Москва",
+				},
+				{
+					"id":          config.RouteModeTransit,
+					"title":       "2. Клиент — Москва — Франкфурт — Игра",
+					"description": "Транзитный маршрут через Европу (~80 мс)",
+					"badge":       "Москва → Франкфурт",
+				},
+				{
+					"id":          config.RouteModeDirectFrankfurt,
+					"title":       "3. Клиент — Франкфурт — Игра",
+					"description": "Прямое европейское подключение (~70 мс)",
+					"badge":       "Франкфурт",
 				},
 			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2842,29 +3131,41 @@ func main() {
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректный запрос"})
 				return
 			}
-			if req.Mode != config.RouteModeTransit && req.Mode != config.RouteModeDirectStockholm && req.Mode != config.RouteModeDirectMoscow {
+			if req.Mode != config.RouteModeTransit && req.Mode != config.RouteModeDirectStockholm && req.Mode != config.RouteModeDirectMoscow && req.Mode != config.RouteModeDirectFrankfurt {
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Неизвестный режим маршрутизации"})
 				return
 			}
 
+			// Alias direct_stockholm to direct_frankfurt
+			if req.Mode == config.RouteModeDirectStockholm {
+				req.Mode = config.RouteModeDirectFrankfurt
+			}
+
 			oldMode := state.cfg.GetNetworkRouteMode()
 			state.cfg.SetNetworkRouteMode(req.Mode)
 			singbox.SetNetworkRouteMode(req.Mode)
+			go singbox.ReleaseSession()
 			singbox.InvalidateSession()
 
 			appendLog(fmt.Sprintf("[NET] Изменен режим маршрутизации: %s -> %s", oldMode, req.Mode))
 
-			// If connected, seamlessly reconnect with new gateway target
-			if state.eng.IsConnected() {
+			// If connected or Free Internet active, seamlessly reconnect with new gateway target
+			if state.eng.IsConnected() || state.eng.IsFreeInternetActive() {
 				go func() {
 					state.mu.Lock()
 					state.isBusy = true
 					state.mu.Unlock()
 					appendLog("[NET] Переподключение к новому шлюзу...")
-					_ = state.eng.Disconnect()
-					time.Sleep(300 * time.Millisecond)
-					_ = state.eng.ConnectPipeline(nil)
+					if state.eng.IsConnected() {
+						_ = state.eng.Disconnect()
+						time.Sleep(300 * time.Millisecond)
+						_ = state.eng.ConnectPipeline(nil)
+					} else if state.eng.IsFreeInternetActive() {
+						_ = state.eng.ToggleFreeInternet(false)
+						time.Sleep(300 * time.Millisecond)
+						_ = state.eng.ToggleFreeInternet(true)
+					}
 					state.mu.Lock()
 					state.isBusy = false
 					state.mu.Unlock()

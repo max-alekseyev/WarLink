@@ -1,45 +1,39 @@
 # ==============================================================================
-# WARLINK PROFILE: WARDOGS
+# WARLINK PROFILE: Dark and Darker
 # Strict Game Routing & Server-Side Whitelist
 # ==============================================================================
-name: WARDOGS
+name: Dark and Darker
 
 # Game Processes (Client-side routing filter)
-process: WardogsClient-Win64-Shipping.exe
-process: WardogsLauncher-Shipping.exe
-process: wardogs.exe
-process: wardogs-win64-shipping.exe
-process: wardogslauncher.exe
-process: elytra-launcher.exe
-process: elytraclient.exe
-process: crashpad_handler.exe
-process: service.exe
-process: control.exe
-process: Elytra-Setup.exe
+process: DungeonCrawler.exe
+process: DungeonCrawler-Win64-Shipping.exe
+process: Tavern.exe
+process: TavernDart.exe
+process: TavernWorker.exe
+process: Blacksmith.exe
+process: CrashReportClient.exe
+process: EpicWebHelper.exe
 
 # Game Backend & Platform Domains
-domain: pragmaengine.com
-domain: bulkhead.net
-domain: wardogs.com
-domain: elytra.ac
-domain: anybrain.gg
+domain: darkanddarker.com
+domain: darkanddarker.io
+domain: ironmace.com
+domain: lunatichigh.net
+domain: live-gateway.lunatichigh.net
+domain: tavern.ironmace.com
 domain: vivox.com
 domain: epicgames.dev
 domain: epicgames.com
 domain: unrealengine.com
 domain: amazonaws.com
-domain: akamaitechnologies.com
-domain: akamaiedge.net
-domain: akamai.net
-domain: edgekey.net
-domain: edgesuite.net
 domain: cloudfront.net
-domain: fastly.net
 domain: cloudflare.com
 domain: sectigo.com
 domain: digicert.com
+domain: chasmtracker.com
+domain: anybrain.gg
 
-# Vivox Voice Chat Subnets (Restricted strictly to HTTPS and voice UDP RTP)
+# Vivox Voice Chat Subnets
 ip: 85.236.96.0/19, tcp/443
 ip: 85.236.96.0/19, udp/54000-55000
 ip: 85.236.96.0/19, udp/12000-65000
@@ -59,34 +53,74 @@ ip: 108.180.0.0/15, udp/12000-65000
 ip: 185.180.12.0/22, tcp/443
 ip: 185.180.12.0/22, udp/12000-65000
 
-# AWS Global Accelerator & Pragma Backend Edge (Matchmaking & Backend Telemetry)
+# AWS Global Accelerator & Ironmace Game Gateway Edge (Gateway TCP 20000-20500, 30000-30500, 80, 443, 8888, UDP 10000-65535)
 ip: 52.223.0.0/16, tcp/443
+ip: 52.223.0.0/16, tcp/20000-20500
+ip: 52.223.0.0/16, tcp/30000-30500
+ip: 52.223.0.0/16, tcp/8888
+ip: 52.223.0.0/16, tcp/80
 ip: 52.223.0.0/16, udp/10000-65535
 ip: 76.223.0.0/16, tcp/443
+ip: 76.223.0.0/16, tcp/20000-20500
+ip: 76.223.0.0/16, tcp/30000-30500
+ip: 76.223.0.0/16, tcp/8888
+ip: 76.223.0.0/16, tcp/80
 ip: 76.223.0.0/16, udp/10000-65535
 ip: 13.248.0.0/16, tcp/443
+ip: 13.248.0.0/16, tcp/20000-20500
+ip: 13.248.0.0/16, tcp/30000-30500
+ip: 13.248.0.0/16, tcp/8888
+ip: 13.248.0.0/16, tcp/80
 ip: 13.248.0.0/16, udp/10000-65535
 ip: 99.83.0.0/16, tcp/443
+ip: 99.83.0.0/16, tcp/20000-20500
+ip: 99.83.0.0/16, tcp/30000-30500
+ip: 99.83.0.0/16, tcp/8888
+ip: 99.83.0.0/16, tcp/80
 ip: 99.83.0.0/16, udp/10000-65535
 ip: 35.71.0.0/16, tcp/443
+ip: 35.71.0.0/16, tcp/20000-20500
+ip: 35.71.0.0/16, tcp/30000-30500
+ip: 35.71.0.0/16, tcp/8888
+ip: 35.71.0.0/16, tcp/80
 ip: 35.71.0.0/16, udp/10000-65535
 ip: 15.197.0.0/16, tcp/443
+ip: 15.197.0.0/16, tcp/20000-20500
+ip: 15.197.0.0/16, tcp/30000-30500
+ip: 15.197.0.0/16, tcp/8888
+ip: 15.197.0.0/16, tcp/80
 ip: 15.197.0.0/16, udp/10000-65535
 ip: 75.2.0.0/16, tcp/443
+ip: 75.2.0.0/16, tcp/20000-20500
+ip: 75.2.0.0/16, tcp/30000-30500
+ip: 75.2.0.0/16, tcp/8888
+ip: 75.2.0.0/16, tcp/80
 ip: 75.2.0.0/16, udp/10000-65535
 
-# AWS Dedicated Match & Voice Servers (Global & EU Regions)
+# Dedicated AWS Match Servers (EU & Global)
 ip: 52.0.0.0/12, tcp/443
+ip: 52.0.0.0/12, tcp/20000-20500
+ip: 52.0.0.0/12, tcp/30000-30500
 ip: 52.0.0.0/12, udp/10000-65535
 ip: 52.16.0.0/12, tcp/443
+ip: 52.16.0.0/12, tcp/20000-20500
+ip: 52.16.0.0/12, tcp/30000-30500
 ip: 52.16.0.0/12, udp/10000-65535
 ip: 54.0.0.0/12, tcp/443
+ip: 54.0.0.0/12, tcp/20000-20500
+ip: 54.0.0.0/12, tcp/30000-30500
 ip: 54.0.0.0/12, udp/10000-65535
 ip: 54.16.0.0/12, tcp/443
+ip: 54.16.0.0/12, tcp/20000-20500
+ip: 54.16.0.0/12, tcp/30000-30500
 ip: 54.16.0.0/12, udp/10000-65535
 ip: 18.192.0.0/12, tcp/443
+ip: 18.192.0.0/12, tcp/20000-20500
+ip: 18.192.0.0/12, tcp/30000-30500
 ip: 18.192.0.0/12, udp/10000-65535
 ip: 18.208.0.0/12, tcp/443
+ip: 18.208.0.0/12, tcp/20000-20500
+ip: 18.208.0.0/12, tcp/30000-30500
 ip: 18.208.0.0/12, udp/10000-65535
 ip: 3.64.0.0/12, tcp/443
 ip: 3.64.0.0/12, udp/10000-65535
@@ -102,13 +136,14 @@ ip: 34.240.0.0/13, tcp/443
 ip: 34.240.0.0/13, udp/10000-65535
 ip: 18.200.0.0/14, tcp/443
 ip: 18.200.0.0/14, udp/10000-65535
+ip: 15.207.0.0/16, tcp/443
+ip: 15.207.0.0/16, udp/10000-65535
+ip: 43.205.0.0/16, tcp/443
+ip: 43.205.0.0/16, udp/10000-65535
+ip: 150.171.0.0/16, tcp/443
+ip: 150.171.0.0/16, udp/10000-65535
 
-# Dynamic Match & Voice UDP Ports
+# Voice STUN, SIP & RTC Dynamic Ports
 udp: 54000-55000
 udp: 3478-3479
 udp: 5060-5062
-udp: 4000-4500
-udp: 20000-20100
-udp: 7777-7788
-udp: 15000-15100
-udp: 27015-27030

@@ -204,9 +204,8 @@ func probeDirect(target string, timeout time.Duration) (int, bool) {
 	}
 	_ = conn.Close()
 	elapsed := int(time.Since(start).Milliseconds())
-	if elapsed <= 1 {
-		// Connection was intercepted or answered locally by loopback/TUN driver, discard false 1ms reading
-		return 0, false
+	if elapsed < 1 {
+		elapsed = 1
 	}
 	return elapsed, true
 }

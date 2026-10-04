@@ -1495,22 +1495,23 @@ html, body {
 /* --- Functional Toast Notification (Dark Cloudflare Utility) --- */
 .ui-toast {
     position: fixed;
-    bottom: 44px;
+    bottom: 50px;
     left: 50%;
     transform: translateX(-50%);
-    background-color: #181818;
-    border: 1px solid rgba(255, 94, 31, 0.45);
+    background-color: #1a1a1a;
+    border: 1px solid var(--action);
     border-radius: var(--radius-strict);
-    padding: 6px 12px;
+    padding: 8px 16px;
     display: flex;
     align-items: center;
     gap: 8px;
-    z-index: 999;
+    z-index: 99999;
     pointer-events: none;
     animation: toastFadeIn 0.15s ease;
-    max-width: 480px;
+    max-width: 520px;
     width: max-content;
     box-sizing: border-box;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
 }
 
 .ui-toast.toast-hiding {
@@ -2194,9 +2195,7 @@ html, body {
 .donate-modal-card {
     width: 480px;
     max-width: calc(100vw - 20px);
-    height: 384px;
-    max-height: 384px;
-    min-height: 384px;
+    max-height: calc(100vh - 40px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -2213,13 +2212,31 @@ html, body {
 .donate-modal-card .modal-body {
     flex: 1;
     min-height: 0;
-    overflow: hidden;
-    padding-right: 0;
-    padding-bottom: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 3px;
+    padding-bottom: 4px;
     display: flex;
     flex-direction: column;
     gap: 6px;
     box-sizing: border-box;
+}
+
+.donate-modal-card .modal-body::-webkit-scrollbar {
+    width: 4px;
+}
+
+.donate-modal-card .modal-body::-webkit-scrollbar-track {
+    background: #111111;
+}
+
+.donate-modal-card .modal-body::-webkit-scrollbar-thumb {
+    background: #333333;
+    border-radius: 2px;
+}
+
+.donate-modal-card .modal-body::-webkit-scrollbar-thumb:hover {
+    background: var(--action);
 }
 
 .donate-perks-box {
@@ -2454,212 +2471,253 @@ html, body {
     transform: scale(1.08);
 }
 
-/* --- Boosty 100,000 RUB Goal Card --- */
-.boosty-goal-card {
-    background: #141414;
-    border: 1px solid #282828;
-    border-left: 3px solid var(--action);
+/* --- Boosty Redesigned Modular Layout (Dark Cloudflare Utility) --- */
+.boosty-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+/* 1. Special Project BF6 */
+.boosty-spec-box {
+    background: #151515;
+    border: 1px solid rgba(255, 94, 31, 0.35);
     border-radius: var(--radius-strict);
-    padding: 8px 10px;
+    padding: 7px 9px;
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    cursor: pointer;
-    transition: all 0.15s ease;
+    gap: 4px;
 }
-
-.boosty-goal-card:hover {
-    background: #181818;
-    border-color: #3a3a3a;
-    border-left-color: #ff7843;
-}
-
-.boosty-goal-top {
+.boosty-spec-header {
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items: flex-start;
-    gap: 8px;
 }
-
-.boosty-goal-title-wrap {
+.boosty-spec-title-wrap {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 6px;
 }
-
-.boosty-goal-badge {
-    font-size: 9px;
+.boosty-spec-badge {
+    font-size: 8.5px;
     font-weight: 700;
+    padding: 1px 5px;
+    background: rgba(255, 94, 31, 0.15);
     color: var(--action);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
+    border-radius: 2px;
+    letter-spacing: 0.5px;
 }
-
-.boosty-goal-title {
+.boosty-spec-title {
     font-size: 11px;
     font-weight: 700;
-    color: #ffffff;
+    color: #FFF;
+}
+.boosty-spec-price {
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.price-active { color: var(--action); }
+.price-old {
+    font-size: 10px;
+    color: #666;
+    text-decoration: line-through;
+}
+.boosty-spec-desc {
+    font-size: 9.5px;
+    color: var(--text-muted);
     line-height: 1.25;
 }
-
-.boosty-goal-amount {
-    text-align: right;
-    flex-shrink: 0;
-}
-
-.boosty-goal-target {
-    font-size: 13px;
-    font-weight: 800;
-    color: #ffffff;
-}
-
-.boosty-goal-bar-wrap {
+.boosty-bar-wrap {
     display: flex;
-    flex-direction: column;
-    gap: 3px;
-    margin-top: 1px;
+    align-items: center;
+    gap: 8px;
 }
-
-.boosty-goal-bar {
-    width: 100%;
+.boosty-bar-track {
+    flex: 1;
     height: 5px;
-    background: #1e1e1e;
-    border-radius: 2px;
+    background: #202020;
+    border-radius: 1px;
     overflow: hidden;
 }
-
-.boosty-goal-bar-fill {
+.boosty-bar-fill {
     height: 100%;
     background: var(--action);
-    border-radius: 2px;
-    transition: width 0.3s ease;
 }
-
-.boosty-goal-meta {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+.boosty-bar-pct {
     font-size: 9.5px;
     color: var(--text-muted);
+    white-space: nowrap;
 }
-
-.boosty-goal-link-label {
-    color: var(--action);
-    font-weight: 600;
-}
-
-/* --- Boosty One-Time Donation Card --- */
-.boosty-onetime-wrap {
+.boosty-spec-btns {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 8px 10px;
-    background: #161616;
-    border: 1px solid rgba(255, 94, 31, 0.3);
-    border-radius: var(--radius-strict);
-}
-
-.boosty-onetime-info {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-}
-
-.boosty-onetime-title {
-    font-size: 11px;
-    font-weight: 700;
-    color: #ffffff;
-}
-
-.boosty-onetime-sub {
-    font-size: 9.5px;
-    color: var(--text-muted);
-}
-
-.boosty-onetime-action-btn {
-    height: 26px;
-    padding: 0 12px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-}
-
-/* --- 4 Boosty Recurring Tiers --- */
-.boosty-levels-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 5px;
+    gap: 6px;
     margin-top: 2px;
 }
+.btn-boosty-action {
+    flex: 1;
+    height: 24px;
+    background: rgba(255, 94, 31, 0.12);
+    border: 1px solid var(--action);
+    color: #FFF;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border-radius: var(--radius-strict);
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.btn-boosty-action:hover {
+    background: rgba(255, 94, 31, 0.22);
+}
+.btn-steam-action {
+    flex: 1;
+    height: 24px;
+    background: #1c1c1c;
+    border: 1px solid #333;
+    color: #DDD;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border-radius: var(--radius-strict);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.btn-steam-action:hover {
+    background: #242424;
+    border-color: #555;
+    color: #FFF;
+}
 
-.boosty-level-card {
-    background: #141414;
+/* 2. Main Goal + One-Time Donate */
+.boosty-main-goal-box {
+    background: #151515;
     border: 1px solid var(--border-base);
     border-radius: var(--radius-strict);
-    padding: 6px 8px;
+    padding: 7px 9px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.boosty-goal-top {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
-    transition: border-color 0.15s ease, background 0.15s ease;
 }
-
-.boosty-level-card:hover {
-    border-color: #383838;
-    background: #181818;
-}
-
-.boosty-level-info {
+.boosty-goal-info {
     display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
+    align-items: center;
+    gap: 6px;
 }
-
-.boosty-level-name {
+.badge-dim {
+    font-size: 8.5px;
+    font-weight: 700;
+    padding: 1px 5px;
+    background: #222;
+    color: #AAA;
+    border-radius: 2px;
+}
+.boosty-goal-name {
     font-size: 10.5px;
     font-weight: 700;
-    color: #ffffff;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    color: #EEE;
+}
+.boosty-goal-target {
+    font-size: 11px;
+    font-weight: 700;
+    color: #FFF;
+}
+.boosty-goal-bottom {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 1px;
+}
+.btn-boosty-donate-now {
+    height: 24px;
+    padding: 0 12px;
+    background: var(--action);
+    border: none;
+    color: #000;
+    font-size: 10px;
+    font-weight: 800;
+    border-radius: var(--radius-strict);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
+}
+.btn-boosty-donate-now:hover {
+    background: #ff7740;
 }
 
-.boosty-level-price {
-    font-size: 10.5px;
+/* 3. Subscriptions Row */
+.boosty-subs-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 1px;
+}
+.boosty-subs-label {
+    font-size: 9px;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.boosty-subs-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 5px;
+}
+.boosty-sub-card {
+    background: #161616;
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-strict);
+    padding: 6px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.boosty-sub-card:hover {
+    background: #1c1c1c;
+    border-color: var(--action);
+}
+.sub-card-rank {
+    font-size: 10px;
+    font-weight: 700;
+    color: #DDD;
+}
+.sub-card-cost {
+    font-size: 10px;
     font-weight: 700;
     color: var(--action);
 }
-
-.boosty-btn-sub {
-    height: 22px;
-    padding: 0 8px;
-    font-size: 10px;
-    font-weight: 700;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    border-radius: 2px;
-    background: #1f1f1f;
-    border: 1px solid #333333;
-    color: #dddddd;
-    cursor: pointer;
-    text-decoration: none;
-    flex-shrink: 0;
-    white-space: nowrap;
-    transition: all 0.15s ease;
+.sub-per {
+    font-size: 8.5px;
+    font-weight: 400;
+    color: #666;
 }
 
-.boosty-btn-sub:hover {
-    background: var(--action);
-    border-color: var(--action);
-    color: #ffffff;
+/* 4. Footer Note */
+.boosty-footer-hint {
+    font-size: 9px;
+    color: #555;
+    line-height: 1.25;
+    text-align: center;
+    margin-top: 1px;
 }
 
 /* --- Header Avatar Button --- */
@@ -2826,6 +2884,116 @@ html, body {
     gap: 8px;
 }
 
+.compact-goal-strip {
+    height: 34px;
+    min-height: 34px;
+    padding: 0 10px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+}
+
+.compact-strip-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.compact-node-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+}
+
+.compact-flags {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+}
+
+.compact-node-title {
+    color: var(--text-muted);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.compact-mini-bar {
+    width: 38px;
+    height: 4px;
+    background: #222222;
+    border-radius: 1px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.compact-mini-fill {
+    height: 100%;
+    background: var(--action);
+    transition: width 0.3s ease;
+}
+
+.compact-node-item.covered .compact-mini-fill {
+    background: #00FF66;
+}
+
+.compact-node-pct {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.compact-node-item.covered .compact-node-pct {
+    color: #00FF66;
+}
+
+.compact-strip-divider {
+    color: #444444;
+    font-size: 11px;
+}
+
+.compact-strip-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.compact-period-label {
+    font-size: 9.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.btn-compact-donate {
+    height: 22px;
+    padding: 0 8px;
+    background: transparent;
+    border: 1px solid rgba(255, 94, 31, 0.4);
+    color: var(--action);
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: var(--radius-strict);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.btn-compact-donate:hover {
+    background: rgba(255, 94, 31, 0.15);
+    border-color: var(--action);
+    color: #FFFFFF;
+}
+
 .goal-header {
     display: flex;
     align-items: center;
@@ -2987,6 +3155,97 @@ html, body {
     align-items: center;
     font-size: 9px;
     color: var(--text-muted);
+}
+
+.goal-special-card {
+    grid-column: 1 / -1;
+    background-color: #141414;
+    border: 1px solid rgba(255, 94, 31, 0.25);
+    border-radius: var(--radius-strict);
+    padding: 9px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.goal-special-card.completed {
+    border-color: rgba(16, 185, 129, 0.35);
+}
+
+.goal-special-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.goal-special-badge {
+    background: rgba(255, 94, 31, 0.12);
+    border: 1px solid rgba(255, 94, 31, 0.3);
+    color: var(--action);
+    font-size: 8.5px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 2px;
+    letter-spacing: 0.5px;
+}
+
+.goal-special-card.completed .goal-special-badge {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #10b981;
+}
+
+.goal-special-desc {
+    font-size: 9.5px;
+    color: #999999;
+    line-height: 1.35;
+}
+
+.goal-special-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+}
+
+.btn-special-boosty {
+    background: var(--action);
+    color: #000;
+    font-weight: 700;
+    font-size: 10px;
+    padding: 5px 10px;
+    border-radius: 2px;
+    border: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: opacity 0.15s ease;
+}
+
+.btn-special-boosty:hover {
+    opacity: 0.9;
+}
+
+.btn-special-steam {
+    background: #1a1a1a;
+    border: 1px solid var(--border-subtle);
+    color: #e0e0e0;
+    font-weight: 600;
+    font-size: 10px;
+    padding: 5px 10px;
+    border-radius: 2px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-special-steam:hover {
+    border-color: #666;
+    color: #fff;
 }
 
 /* --- Sponsors Categories Tabs --- */

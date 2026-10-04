@@ -57,7 +57,7 @@ var BenchmarkTargets = []EndpointCheck{
 	{Name: "SteamCommunity", Host: "steamcommunity.com", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: true},
 	{Name: "EpicGamesEOS", Host: "api.epicgames.dev", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: true},
 	{Name: "EasyAntiCheat", Host: "modules.easyanticheat.net", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: false},
-	{Name: "CloudflareWarpUDP", Host: "162.159.192.1", Port: 2408, IsUDP: true},
+	{Name: "WarLinkHysteriaUDP", Host: "85.192.24.254", Port: 443, IsUDP: true},
 	{Name: "YouTubeWeb", Host: "www.youtube.com", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: true},
 	{Name: "YouTubeShort", Host: "youtu.be", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: true},
 	{Name: "YouTubeImage", Host: "i.ytimg.com", Port: 443, CheckHTTP: true, CheckTLS2: true, CheckTLS3: true},
@@ -317,6 +317,7 @@ func formatResultLine(r CheckResult) string {
 	return fmt.Sprintf("%s%s | Ping: %s", namePad, protoStr, pingStr)
 }
 
+
 func probeAllEndpoints(targets []EndpointCheck) []CheckResult {
 	return probeAllEndpointsWithTimeout(targets, 800*time.Millisecond)
 }
@@ -335,10 +336,6 @@ func probeAllEndpointsWithTimeout(targets []EndpointCheck, timeout time.Duration
 
 	wg.Wait()
 	return results
-}
-
-func probeSingle(t EndpointCheck) CheckResult {
-	return probeSingleWithTimeout(t, 800*time.Millisecond)
 }
 
 func probeSingleWithTimeout(t EndpointCheck, timeout time.Duration) CheckResult {

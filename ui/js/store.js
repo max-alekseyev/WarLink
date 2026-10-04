@@ -1,4 +1,4 @@
-// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.1.13
+// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.2.0
 
 class UIStoreClass {
     constructor() {

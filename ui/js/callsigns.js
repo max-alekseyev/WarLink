@@ -28,21 +28,42 @@
         return h >>> 0;
     }
 
-    function getDeterministicNobelCallsign(seed) {
-        if (!seed) return "Аноним";
-        const h1 = hashStr(seed + "_laureate");
-        const h2 = hashStr(seed + "_city");
-        const lau = NOBEL_LAUREATES[h1 % NOBEL_LAUREATES.length];
-        const city = NOBEL_CITIES[h2 % NOBEL_CITIES.length];
-        return lau + " " + city;
+    function isLegacyTwoWordCallsign(name) {
+        if (!name || typeof name !== 'string') return false;
+        const parts = name.trim().split(/\s+/);
+        if (parts.length !== 2) return false;
+        return NOBEL_LAUREATES.includes(parts[0]) && NOBEL_CITIES.includes(parts[1]);
+    }
+
+    function getDeterministicNobelCallsign(seed, usedSet = null) {
+        if (!seed) return "Оператор 101";
+        let attempt = 0;
+        while (attempt < 1000) {
+            const salt = attempt === 0 ? "_v2" : `_attempt_${attempt}`;
+            const h1 = hashStr(seed + "_laureate" + salt);
+            const h2 = hashStr(seed + "_city" + salt);
+            const h3 = hashStr(seed + "_num" + salt);
+            const lau = NOBEL_LAUREATES[h1 % NOBEL_LAUREATES.length];
+            const city = NOBEL_CITIES[h2 % NOBEL_CITIES.length];
+            const num = (h3 % 900) + 100; // 100..999 (strictly 3 digits)
+            const candidate = `${lau} ${city} ${num}`;
+            if (!usedSet || !usedSet.has(candidate)) {
+                if (usedSet) usedSet.add(candidate);
+                return candidate;
+            }
+            attempt++;
+        }
+        return "Оператор 999";
     }
 
     window.NobelCallsigns = {
         getDeterministic: getDeterministicNobelCallsign,
-        sanitizeNickname: function(nick, accNumber) {
-            if (!nick || nick.includes('****') || /^\d{4}-/.test(nick) || nick === 'Спонсор WarLink') {
-                return accNumber ? getDeterministicNobelCallsign(accNumber) : 'Аноним';
+        isLegacyTwoWord: isLegacyTwoWordCallsign,
+        sanitizeNickname: function(nick, accNumber, usedSet = null) {
+            if (!nick || nick.includes('****') || /^\d{4}-/.test(nick) || nick === 'Спонсор WarLink' || isLegacyTwoWordCallsign(nick)) {
+                return accNumber ? getDeterministicNobelCallsign(accNumber, usedSet) : 'Оператор 101';
             }
+            if (usedSet) usedSet.add(nick);
             return nick;
         }
     };

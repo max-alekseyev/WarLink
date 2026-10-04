@@ -1,0 +1,53 @@
+name: Update Live Online Badge
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/update-badge.yml'
+      - 'scripts/generate_online_badge.py'
+
+permissions:
+  contents: write
+
+jobs:
+  update-badge:
+    name: Generate and Publish Online Badge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Generate Online Badge SVG
+        env:
+          OFFICIAL_GATEWAY_IP: ${{ secrets.OFFICIAL_GATEWAY_IP }}
+          WARLINK_STATUS_URL: ${{ secrets.WARLINK_STATUS_URL }}
+        run: |
+          python scripts/generate_online_badge.py assets/badge_online.svg
+
+      - name: Deploy Badge to Dedicated Branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Copy generated badge to temporary location
+          cp assets/badge_online.svg /tmp/online.svg
+          
+          # Switch to orphan branch badges
+          git checkout --orphan badges
+          git rm -rf . > /dev/null 2>&1 || true
+          
+          # Place badge at root of badges branch
+          cp /tmp/online.svg online.svg
+          git add online.svg
+          git commit -m "chore(badge): update live gateway online telemetry"
+          git push origin badges --force

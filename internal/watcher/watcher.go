@@ -83,6 +83,8 @@ var BuiltinAliases = map[string][]string{
 	"553850":  {"helldivers2.exe"},
 	"1091500": {"cyberpunk2077.exe"},
 	"1245620": {"eldenring.exe"},
+	"1808500": {"pioneergame.exe", "pioneergame-win64-shipping.exe", "discovery.exe", "discovery-win64-shipping.exe", "arcraiders.exe", "arcraiders-win64-shipping.exe"},
+	"2016590": {"dungeoncrawler.exe", "dungeoncrawler-win64-shipping.exe", "tavern.exe", "taverndart.exe", "tavernworker.exe", "blacksmith.exe"},
 }
 
 // NormalizeGameToken strips common game engine suffixes to find the root name
@@ -355,7 +357,7 @@ func SelectBestProcess(names []string) string {
 	var best string
 	for _, n := range names {
 		lower := strings.ToLower(n)
-		isLauncher := strings.Contains(lower, "launcher") || strings.Contains(lower, "setup") || strings.Contains(lower, "update")
+		isLauncher := strings.Contains(lower, "launcher") || strings.Contains(lower, "setup") || strings.Contains(lower, "update") || strings.Contains(lower, "installer") || strings.Contains(lower, "anticheat")
 		isClient := strings.Contains(lower, "client") || strings.Contains(lower, "shipping")
 
 		if best == "" {
@@ -364,7 +366,7 @@ func SelectBestProcess(names []string) string {
 		}
 
 		bestLower := strings.ToLower(best)
-		bestIsLauncher := strings.Contains(bestLower, "launcher") || strings.Contains(bestLower, "setup") || strings.Contains(bestLower, "update")
+		bestIsLauncher := strings.Contains(bestLower, "launcher") || strings.Contains(bestLower, "setup") || strings.Contains(bestLower, "update") || strings.Contains(bestLower, "installer") || strings.Contains(bestLower, "anticheat")
 
 		if bestIsLauncher && !isLauncher {
 			best = n
@@ -434,11 +436,6 @@ func IsAnyProcessRunning(targets []string, normalizedTitle string) (bool, string
 	return false, ""
 }
 
-// IsProcessRunning retains backward compatibility
-func IsProcessRunning(targetName string) bool {
-	running, _ := IsAnyProcessRunning([]string{strings.ToLower(targetName)}, NormalizeGameToken(targetName))
-	return running
-}
 
 func (w *GameWatcher) Start() {
 	w.mu.Lock()
@@ -480,11 +477,13 @@ func (w *GameWatcher) Start() {
 				if running {
 					w.missCount = 0
 					lowerProc := strings.ToLower(procName)
-					isProcLauncher := strings.Contains(lowerProc, "launcher") || strings.Contains(lowerProc, "setup") || strings.Contains(lowerProc, "update")
+					isProcLauncher := strings.Contains(lowerProc, "launcher") || strings.Contains(lowerProc, "setup") || strings.Contains(lowerProc, "update") || strings.Contains(lowerProc, "installer") || strings.Contains(lowerProc, "anticheat")
 					isProcClient := strings.Contains(lowerProc, "client")
 
 					// Update activeTarget: if it was empty, or if activeTarget was a launcher and now we have a game client/main binary
-					if w.activeTarget == "" || (!isProcLauncher && strings.Contains(strings.ToLower(w.activeTarget), "launcher")) || isProcClient {
+					activeLower := strings.ToLower(w.activeTarget)
+					activeIsLauncher := strings.Contains(activeLower, "launcher") || strings.Contains(activeLower, "setup") || strings.Contains(activeLower, "installer") || strings.Contains(activeLower, "anticheat")
+					if w.activeTarget == "" || (!isProcLauncher && activeIsLauncher) || isProcClient {
 						w.activeTarget = procName
 					}
 
@@ -515,8 +514,13 @@ func (w *GameWatcher) Start() {
 				} else {
 					if w.wasRunning {
 						w.missCount++
-						// 6 consecutive misses (6s) = confirmed exit, allowing launcher -> client handoff without closing tunnel
-						if w.missCount >= 6 {
+						// Consecutive misses: 15s for launchers/bootstraps/installers, 8s for active clients
+						maxMisses := 8
+						activeLower := strings.ToLower(w.activeTarget)
+						if strings.Contains(activeLower, "launcher") || strings.Contains(activeLower, "setup") || strings.Contains(activeLower, "installer") || strings.Contains(activeLower, "anticheat") || strings.Contains(activeLower, "pioneer") || strings.Contains(activeLower, "discovery") {
+							maxMisses = 15
+						}
+						if w.missCount >= maxMisses {
 							w.wasRunning = false
 							w.missCount = 0
 							closedProc := w.activeTarget
@@ -537,14 +541,6 @@ func (w *GameWatcher) Start() {
 	}()
 }
 
-func (w *GameWatcher) Reset() {
-	w.mu.Lock()
-	w.wasRunning = false
-	w.missCount = 0
-	w.activeTarget = ""
-	w.lastReportedProc = ""
-	w.mu.Unlock()
-}
 
 func (w *GameWatcher) Stop() {
 	w.mu.Lock()

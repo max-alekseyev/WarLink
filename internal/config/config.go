@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,9 +30,10 @@ type GameProfile struct {
 var DefaultServerIP = "138.124.103.99"
 
 const (
-	RouteModeTransit         = "transit"          // 1. Клиент — Москва — Стокгольм — Игра
-	RouteModeDirectStockholm = "direct_stockholm" // 2. Клиент — Стокгольм — Игра
+	RouteModeTransit         = "transit"          // 1. Клиент — Москва — Франкфурт — Игра
+	RouteModeDirectFrankfurt = "direct_frankfurt" // 2. Клиент — Франкфурт — Игра
 	RouteModeDirectMoscow    = "direct_moscow"    // 3. Клиент — Москва — Игра
+	RouteModeDirectStockholm = "direct_stockholm" // Обратная совместимость
 )
 
 type Config struct {
@@ -113,8 +115,46 @@ func DefaultGames() []GameProfile {
 			},
 			PreferredAlt: "Автокалибровка (Circular Adaptive)",
 			LaunchCount:  0,
-			IconURL:      "/wardogs_icon.png",
+			IconURL:      "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/1867240/6829090332535af8637c4b6e1dddf3ee8ec3d134.ico",
 			LastPlayed:   time.Now().Unix(),
+			IsDefault:    true,
+			Autolaunch:   true,
+		},
+		{
+			ID:           "arc_raiders",
+			Title:        "ARC Raiders",
+			SteamAppID:   "1808500",
+			ProcessNames: []string{
+				"PioneerGame.exe",
+				"PioneerGame-Win64-Shipping.exe",
+				"Discovery.exe",
+				"Discovery-Win64-Shipping.exe",
+				"ArcRaiders.exe",
+				"ArcRaiders-Win64-Shipping.exe",
+			},
+			PreferredAlt: "Автокалибровка (Circular Adaptive)",
+			LaunchCount:  0,
+			IconURL:      "https://shared.fastly.steamstatic.com/community_assets/images/apps/1808500/c284e73b6f3321864805d66f99924a0da9f0b219.ico",
+			LastPlayed:   time.Now().Unix() - 100,
+			IsDefault:    true,
+			Autolaunch:   true,
+		},
+		{
+			ID:           "dark_and_darker",
+			Title:        "Dark and Darker",
+			SteamAppID:   "2016590",
+			ProcessNames: []string{
+				"DungeonCrawler.exe",
+				"DungeonCrawler-Win64-Shipping.exe",
+				"Tavern.exe",
+				"TavernDart.exe",
+				"TavernWorker.exe",
+				"Blacksmith.exe",
+			},
+			PreferredAlt: "Автокалибровка (Circular Adaptive)",
+			LaunchCount:  0,
+			IconURL:      "https://shared.fastly.steamstatic.com/community_assets/images/apps/2016590/4f519f3cd01554e7a59945ac296ac8e301b00728.ico",
+			LastPlayed:   time.Now().Unix() - 200,
 			IsDefault:    true,
 			Autolaunch:   true,
 		},
@@ -177,18 +217,56 @@ func Load() *Config {
 		}
 	}
 
-	// Ensure games list is initialized
+	// Ensure games list is initialized and contains default games
 	if len(cfg.Games) == 0 {
 		cfg.Games = DefaultGames()
 	} else {
+		existingMap := make(map[string]int)
 		for i, g := range cfg.Games {
+			existingMap[g.ID] = i
 			if g.ID == "wardogs" {
 				cfg.Games[i].SteamAppID = "1867240"
-				if cfg.Games[i].IconURL == "" {
+				if cfg.Games[i].IconURL == "" || cfg.Games[i].IconURL == "/wardogs_icon.png" {
 					cfg.Games[i].IconURL = "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/1867240/6829090332535af8637c4b6e1dddf3ee8ec3d134.ico"
 				}
 			}
 		}
+		for _, defG := range DefaultGames() {
+			if idx, found := existingMap[defG.ID]; !found {
+				cfg.Games = append(cfg.Games, defG)
+			} else {
+				if cfg.Games[idx].IconURL == "" {
+					cfg.Games[idx].IconURL = defG.IconURL
+				}
+				if cfg.Games[idx].SteamAppID == "" {
+					cfg.Games[idx].SteamAppID = defG.SteamAppID
+				}
+				if len(cfg.Games[idx].ProcessNames) == 0 {
+					cfg.Games[idx].ProcessNames = defG.ProcessNames
+				}
+			}
+		}
+
+		// Enforce canonical priority order: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker, then custom games
+		priorityOrder := map[string]int{
+			"wardogs":         1,
+			"arc_raiders":     2,
+			"dark_and_darker": 3,
+		}
+		sort.SliceStable(cfg.Games, func(i, j int) bool {
+			pI := priorityOrder[cfg.Games[i].ID]
+			if pI == 0 {
+				pI = 999
+			}
+			pJ := priorityOrder[cfg.Games[j].ID]
+			if pJ == 0 {
+				pJ = 999
+			}
+			if pI != pJ {
+				return pI < pJ
+			}
+			return cfg.Games[i].LastPlayed > cfg.Games[j].LastPlayed
+		})
 	}
 	if cfg.SelectedGameID == "" {
 		cfg.SelectedGameID = cfg.Games[0].ID
@@ -539,7 +617,7 @@ func (c *Config) SetNetworkRouteMode(mode string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch mode {
-	case RouteModeDirectStockholm, RouteModeDirectMoscow:
+	case RouteModeDirectFrankfurt, RouteModeDirectMoscow, RouteModeDirectStockholm:
 		c.NetworkRouteMode = mode
 	default:
 		c.NetworkRouteMode = RouteModeTransit

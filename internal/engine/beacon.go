@@ -162,16 +162,21 @@ func probeEndpoint(ip string, ports []string, timeout time.Duration) (int, bool)
 	return 0, false
 }
 
-// CollectSnapshot probes both gateways and active game meter in parallel.
-func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, stockholmPing int, stockholmOK bool, inGamePing int, jitter int, lossPct int, matchServer string, routeMode string) {
+// CollectSnapshot probes all gateways and active game meter in parallel.
+func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, frankfurtPing int, frankfurtOK bool, stockholmPing int, stockholmOK bool, inGamePing int, jitter int, lossPct int, matchServer string, routeMode string) {
 	routeMode = singbox.GetNetworkRouteMode()
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
-		moscowPing, moscowOK = probeEndpoint(singbox.MoscowIngressIP, []string{"443", "80", "8443"}, 1500*time.Millisecond)
+		moscowPing, moscowOK = probeEndpoint(singbox.MoscowIngressIP, []string{"80", "443"}, 1500*time.Millisecond)
+	}()
+
+	go func() {
+		defer wg.Done()
+		frankfurtPing, frankfurtOK = probeEndpoint(singbox.FrankfurtEdgeIP, []string{"80", "443"}, 1500*time.Millisecond)
 	}()
 
 	go func() {
@@ -199,6 +204,11 @@ func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, stockholm
 
 	if isGameActive && inGamePing > 0 {
 		lossPct = tunnelLoss
+		if tunnelLoss >= 80 {
+			// If game UDP packets are actively flowing with valid inGamePing,
+			// a high TCP probe loss indicates a probe firewall drop, not real game packet loss.
+			lossPct = 0
+		}
 		if jitter <= 0 {
 			jitter = tunnelJitter
 		}
@@ -214,6 +224,12 @@ func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, stockholm
 			} else if tunnelPing > 0 {
 				inGamePing = tunnelPing + 30
 			}
+		case config.RouteModeDirectFrankfurt:
+			if frankfurtOK && frankfurtPing > 0 {
+				inGamePing = frankfurtPing + 25
+			} else if tunnelPing > 0 {
+				inGamePing = tunnelPing + 25
+			}
 		case config.RouteModeDirectStockholm:
 			if stockholmOK && stockholmPing > 0 {
 				inGamePing = stockholmPing + 30
@@ -224,9 +240,9 @@ func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, stockholm
 			fallthrough
 		default:
 			if moscowOK && moscowPing > 0 {
-				inGamePing = moscowPing + 30
-			} else if stockholmOK && stockholmPing > 0 {
-				inGamePing = stockholmPing + 30
+				inGamePing = moscowPing + 35
+			} else if frankfurtOK && frankfurtPing > 0 {
+				inGamePing = frankfurtPing + 25
 			} else if tunnelPing > 0 {
 				inGamePing = tunnelPing + 30
 			}
@@ -237,7 +253,7 @@ func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, stockholm
 }
 
 func (b *AutoBeacon) sendBeacon(isFinal bool) {
-	moscowPing, moscowOK, stockholmPing, stockholmOK, inGamePing, jitter, lossPct, matchServer, routeMode := b.CollectSnapshot()
+	moscowPing, moscowOK, frankfurtPing, frankfurtOK, stockholmPing, stockholmOK, inGamePing, jitter, lossPct, matchServer, routeMode := b.CollectSnapshot()
 
 	b.mu.Lock()
 	gameID := b.currentGameID
@@ -308,6 +324,7 @@ func (b *AutoBeacon) sendBeacon(isFinal bool) {
 		"route_mode":           routeMode,
 		"status":               status,
 		"ping_moscow_ms":       moscowPing,
+		"ping_frankfurt_ms":    frankfurtPing,
 		"ping_stockholm_ms":    stockholmPing,
 		"in_game_ping":         inGamePing,
 		"jitter_ms":            jitter,
@@ -323,6 +340,7 @@ func (b *AutoBeacon) sendBeacon(isFinal bool) {
 		"timestamp":            time.Now().Unix(),
 		"telemetry_data": map[string]interface{}{
 			"moscow_ok":       moscowOK,
+			"frankfurt_ok":    frankfurtOK,
 			"stockholm_ok":    stockholmOK,
 			"avg_ping_ms":     avgPing,
 			"min_ping_ms":     minPing,

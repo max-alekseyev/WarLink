@@ -2,10 +2,25 @@
 // МОДУЛЬ ГОЛОСОВАНИЯ СООБЩЕСТВА ЗА ИГРЫ STEAM
 // ============================================================================
 
+// Реестр AppID игр, официально добавленных в WarLink (не подлежат голосованию)
+const SUPPORTED_STEAM_APP_IDS = new Map([
+    [1867240, 'WARDOGS'],
+    [1808500, 'ARC Raiders'],
+    [2016590, 'Dark and Darker'],
+]);
+
 // Реестр AppID игр, запрещенных к добавлению в голосование сообщества
 const BLOCKED_STEAM_APP_IDS = new Set([
     3602290, // FEMBOY FUTA HOUSE
 ]);
+
+function isSupportedSteamGame(appId) {
+    return SUPPORTED_STEAM_APP_IDS.has(parseInt(appId));
+}
+
+function getSupportedSteamGameTitle(appId) {
+    return SUPPORTED_STEAM_APP_IDS.get(parseInt(appId)) || 'Игра';
+}
 
 function isBlockedSteamGame(appId) {
     return BLOCKED_STEAM_APP_IDS.has(parseInt(appId));
@@ -135,7 +150,7 @@ function renderVoteAutocomplete(items) {
         if (!it) return false;
         const id = parseInt(it.id);
         const name = (it.name || '').toLowerCase();
-        if (id === 1867240 || name.includes('wardogs')) return false;
+        if (isSupportedSteamGame(id)) return false;
         if (isBlockedSteamGame(id)) return false;
         return true;
     });
@@ -200,6 +215,10 @@ function getActiveAccountNumber() {
 async function submitProposedGame() {
     if (!selectedSteamGame || !selectedSteamGame.id) return;
     const appId = parseInt(selectedSteamGame.id);
+    if (isSupportedSteamGame(appId)) {
+        showToast(`Игра «${getSupportedSteamGameTitle(appId)}» уже официально поддерживается в WarLink!`);
+        return;
+    }
     if (isBlockedSteamGame(appId)) {
         showToast('Данная игра внесена в список запрещенных к добавлению в голосование.');
         return;
@@ -367,7 +386,7 @@ function renderCommunityVotes(data) {
 
     const games = (data.games || []).filter(g => {
         if (!g) return false;
-        return !isBlockedSteamGame(g.steam_app_id);
+        return !isSupportedSteamGame(g.steam_app_id) && !isBlockedSteamGame(g.steam_app_id);
     });
     if (games.length === 0) {
         listEl.innerHTML = '<div style="color: var(--text-muted); font-size: 11px; padding: 14px 0; text-align: center;">Пока нет предложенных игр. Найдите игру выше и будьте первым!</div>';

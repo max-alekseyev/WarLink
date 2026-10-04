@@ -60,25 +60,25 @@
   "links": [
     {
       "asDropdown": false,
-      "icon": "cog",
+      "icon": "shield",
       "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Центр управления (Control Plane)",
-      "tooltip": "Открыть пульт параметров сервера, сброса сессий и уведомлений",
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "Панель управления (Directus)",
+      "tooltip": "Административный портал параметров ядра, лимитов слотов и депеш",
       "type": "link",
-      "url": "/d/warlink-control-plane"
+      "url": "https://warlink-hub.duckdns.org:8055/admin"
     },
     {
       "asDropdown": false,
-      "icon": "bolt",
+      "icon": "comment-alt",
       "includeVars": false,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Центр тикетов (Support Desk)",
-      "tooltip": "Открыть операционный центр разбора баг-репортов и отправки депеш",
+      "keepTime": false,
+      "targetBlank": true,
+      "title": "Служба поддержки (Тикеты)",
+      "tooltip": "Разбор инцидентов, журналов сбоев и отправка ответов игрокам",
       "type": "link",
-      "url": "/d/warlink-support-desk"
+      "url": "https://warlink-hub.duckdns.org:8055/admin/content/support_tickets"
     }
   ],
   "liveNow": false,
@@ -146,14 +146,13 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_active_sessions",
-          "range": true,
+          "expr": "sum(warlink_active_sessions{server=~\"$server\"}) or vector(0)",
           "refId": "A"
         }
       ],
       "title": "Игроки онлайн прямо сейчас",
       "type": "stat",
-      "description": "Показывает количество пользователей, подключенных к шлюзу в данную секунду. В норме число сессий находится в пределах от 0 до 100 (максимальный объем игрового пула шлюза)."
+      "description": "Текущее количество подключенных игроков с фильтрацией по узлу сети ($server)."
     },
     {
       "datasource": {
@@ -232,7 +231,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_server_days_left",
+          "expr": "max(warlink_server_days_left)",
           "legendFormat": "Оплаченный период",
           "range": true,
           "refId": "A"
@@ -243,7 +242,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_server_runway_days",
+          "expr": "max(warlink_server_runway_days)",
           "legendFormat": "Запас с учетом баланса",
           "range": true,
           "refId": "B"
@@ -317,7 +316,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_aeza_balance_rub + warlink_aeza_bonus_rub",
+          "expr": "max(warlink_aeza_balance_rub + warlink_aeza_bonus_rub)",
           "legendFormat": "Баланс в рублях",
           "range": true,
           "refId": "A"
@@ -328,7 +327,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "(warlink_aeza_balance_eur_cents + warlink_aeza_bonus_eur_cents) / 100",
+          "expr": "max((warlink_aeza_balance_eur_cents + warlink_aeza_bonus_eur_cents) / 100)",
           "legendFormat": "Баланс в евро",
           "range": true,
           "refId": "B"
@@ -397,8 +396,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_node_ping_ms{server=~\"$server\"}",
-          "legendFormat": "{{server}}",
+          "expr": "avg(warlink_node_ping_ms{server=~\"$server\"})",
+          "legendFormat": "Отклик",
           "refId": "A"
         }
       ],
@@ -467,7 +466,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "100 - (avg by (server, node_name) (rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100)",
+          "expr": "100 - (avg by (server, node_name) (rate(node_cpu_seconds_total{server=~\"$server\", node_name!=\"\", mode=\"idle\"}[$__rate_interval])) * 100)",
           "legendFormat": "{{node_name}}",
           "refId": "A"
         }
@@ -552,8 +551,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "sum by (server, node_name) (node_memory_MemTotal_bytes{server=~\"$server\"} - node_memory_MemAvailable_bytes{server=~\"$server\"})",
-          "legendFormat": "Занято: {{node_name}}",
+          "expr": "sum(node_memory_MemTotal_bytes{server=~\"$server\"} - node_memory_MemAvailable_bytes{server=~\"$server\"})",
+          "legendFormat": "Занято",
           "refId": "A"
         },
         {
@@ -562,8 +561,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "sum by (server, node_name) (node_memory_MemTotal_bytes{server=~\"$server\"})",
-          "legendFormat": "Всего: {{node_name}}",
+          "expr": "sum(node_memory_MemTotal_bytes{server=~\"$server\"})",
+          "legendFormat": "Всего",
           "refId": "B"
         }
       ],
@@ -647,9 +646,8 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_disk_used_gb * 1024 * 1024 * 1024",
+          "expr": "sum(node_filesystem_size_bytes{mountpoint=\"/\", fstype=\"ext4\", server=~\"$server\"} - node_filesystem_free_bytes{mountpoint=\"/\", fstype=\"ext4\", server=~\"$server\"})",
           "legendFormat": "Занято",
-          "range": true,
           "refId": "A"
         },
         {
@@ -658,15 +656,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_disk_total_gb * 1024 * 1024 * 1024",
-          "legendFormat": "Всего доступно",
-          "range": true,
+          "expr": "sum(node_filesystem_size_bytes{mountpoint=\"/\", fstype=\"ext4\", server=~\"$server\"})",
+          "legendFormat": "Всего",
           "refId": "B"
         }
       ],
       "title": "Хранилище диска (NVMe)",
       "type": "stat",
-      "description": "Показывает заполненность дискового пространства сервера (SSD/NVMe). При заполнении свыше 85% требуется плановая очистка старых системных логов или расширение тарифа VPS для предотвращения остановки базы данных PostgreSQL."
+      "description": "Показывает заполненность дискового пространства сервера (SSD/NVMe) с переключением узлов ($server)."
     },
     {
       "collapsed": false,
@@ -823,15 +820,14 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_cluster_coverage_percent",
-          "range": true,
-          "refId": "A",
-          "legendFormat": "Выполнение цели"
+          "expr": "max(warlink_cluster_coverage_percent)",
+          "legendFormat": "Выполнение цели",
+          "refId": "A"
         }
       ],
-      "title": "Прогресс сбора на серверы сообщества (Цель: 10 € в месяц)",
+      "title": "Прогресс сбора на серверы сообщества (Цель: 13 € в месяц)",
       "type": "bargauge",
-      "description": "Общий прогресс совместного сбора средств на поддержание серверов WarLink: основного игрового шлюза в Стокгольме и запасного европейского шлюза. Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру полностью закрыты силами участников."
+      "description": "Общий прогресс сбора средств на поддержание серверов WarLink: кластера из трех узлов (Стокгольм, Москва, Франкфурт). Зелёная зона (100%) означает, что ежемесячные расходы на инфраструктуру (13 € / мес) полностью закрыты."
     },
     {
       "datasource": {
@@ -1113,6 +1109,16 @@
                   "mode": "fixed",
                   "fixedColor": "#9ca3af"
                 }
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Открыть спонсора в Directus",
+                    "url": "https://warlink-hub.duckdns.org:8055/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "targetBlank": true
+                  }
+                ]
               }
             ]
           },
@@ -1859,6 +1865,124 @@
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
+      "description": "Количество активных UDP-туннелей Hysteria 2 на шлюзе Стокгольм и транзитном узле Москва.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#22c55e",
+                "value": null
+              },
+              {
+                "color": "#FF5E1F",
+                "value": 100
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Стокгольм Core (Шлюз)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#3b82f6",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Москва Ingress (Транзит)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FF5E1F",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 36
+      },
+      "id": 413,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": false
+      },
+      "pluginVersion": "13.2.2",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_active_sessions{server=\"stockholm\"}) or vector(0)",
+          "legendFormat": "Стокгольм Core (Шлюз)",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_active_sessions{server=\"moscow\"}) or vector(0)",
+          "legendFormat": "Москва Ingress (Транзит)",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "VictoriaMetrics"
+          },
+          "editorMode": "code",
+          "expr": "max(warlink_active_sessions{server=\"frankfurt\"}) or vector(0)",
+          "legendFormat": "Франкфурт Edge (Шлюз)",
+          "refId": "C"
+        }
+      ],
+      "title": "Игроки по узлам сети (Hysteria 2)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "VictoriaMetrics"
+      },
       "description": "Автоматический сравнительный мониторинг сетевой задержки (RTT) игроков при транзите через Москву и прямом подключении к Стокгольму.",
       "fieldConfig": {
         "defaults": {
@@ -1937,8 +2061,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 0,
+        "w": 10,
+        "x": 6,
         "y": 36
       },
       "id": 410,
@@ -1967,7 +2091,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "avg(warlink_player_ping_ms{route_mode=\"transit\"}) or (warlink_gateway_ping_ms + 1.8)",
+          "expr": "avg by (route_mode) (warlink_client_ping_ms{server=\"moscow\"}) or avg(warlink_player_ping_ms{route_mode=\"transit\"}) or (warlink_gateway_ping_ms + 1.8)",
           "legendFormat": "Транзит (Москва -> Стокгольм)",
           "refId": "A"
         },
@@ -1977,7 +2101,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "avg(warlink_player_ping_ms{route_mode=\"direct_stockholm\"}) or (warlink_gateway_ping_ms + 14.5)",
+          "expr": "avg by (route_mode) (warlink_client_ping_ms{server=\"stockholm\"}) or avg(warlink_player_ping_ms{route_mode=\"direct_stockholm\"}) or (warlink_gateway_ping_ms + 14.5)",
           "legendFormat": "Прямой маршрут (Стокгольм Core)",
           "refId": "B"
         },
@@ -2000,7 +2124,7 @@
         "type": "prometheus",
         "uid": "VictoriaMetrics"
       },
-      "description": "Тепловая карта стабильности передачи и потерь UDP пакетов (Packet Loss) в игровых потоках WARDOGS.",
+      "description": "Тепловая карта потерь сетевых пакетов по маршрутам (0% означает идеальное качество связи без потерь).",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -2015,8 +2139,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 16,
         "y": 36
       },
       "id": 411,
@@ -2030,13 +2154,15 @@
           "mode": "scheme",
           "reverse": false,
           "scale": "exponential",
-          "scheme": "Oranges"
+          "scheme": "Oranges",
+          "min": 0,
+          "max": 5
         },
         "exemplars": {
           "color": "rgba(255,0,0,0.7)"
         },
         "filterValues": {
-          "le": 1e-9
+          "le": 0.05
         },
         "legend": {
           "show": true
@@ -2062,21 +2188,10 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_player_packet_loss_percent",
+          "expr": "max by (route_mode) (warlink_client_loss_ratio * 100) or max by (route_mode) (warlink_player_packet_loss_percent)",
           "format": "time_series",
-          "legendFormat": "Потери: {{route_mode}}",
+          "legendFormat": "{{route_mode}}",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "VictoriaMetrics"
-          },
-          "editorMode": "code",
-          "expr": "rate(warlink_udp_rcvbuf_errors_total[1m]) * 0",
-          "format": "time_series",
-          "legendFormat": "Дропы сокет-буферов ядра",
-          "refId": "B"
         }
       ],
       "title": "Тепловая карта потерь пакетов (Packet Loss)",
@@ -2499,7 +2614,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "warlink_active_sessions",
+          "expr": "sum(warlink_active_sessions{server=~\"$server\"}) or vector(0)",
           "legendFormat": "Игроков в сети (левая шкала)",
           "refId": "A"
         },
@@ -2569,7 +2684,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "(1 - rate(node_cpu_seconds_total{server=~\"$server\", mode=\"idle\"}[$__rate_interval])) * 100",
+          "expr": "(1 - rate(node_cpu_seconds_total{server=~\"$server\", node_name!=\"\", mode=\"idle\"}[$__rate_interval])) * 100",
           "legendFormat": "{{node_name}} • Ядро {{cpu}}",
           "refId": "A"
         }
@@ -2660,7 +2775,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "sum by (server, node_name) (rate(node_network_receive_bytes_total{device=\"net0\", server=~\"$server\"}[$__rate_interval]))",
+          "expr": "sum by (server, node_name) (rate(node_network_receive_bytes_total{device=\"net0\", server=~\"$server\", node_name!=\"\"}[$__rate_interval]))",
           "legendFormat": "Входящая (RX): {{node_name}}",
           "refId": "A"
         },
@@ -2670,7 +2785,7 @@
             "uid": "VictoriaMetrics"
           },
           "editorMode": "code",
-          "expr": "sum by (server, node_name) (rate(node_network_transmit_bytes_total{device=\"net0\", server=~\"$server\"}[$__rate_interval]))",
+          "expr": "sum by (server, node_name) (rate(node_network_transmit_bytes_total{device=\"net0\", server=~\"$server\", node_name!=\"\"}[$__rate_interval]))",
           "legendFormat": "Исходящая (TX): {{node_name}}",
           "refId": "B"
         }
@@ -4573,15 +4688,18 @@
             },
             "properties": [
               {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#22c55e",
-                  "mode": "fixed"
-                }
+                "id": "custom.width",
+                "value": 130
               },
               {
-                "id": "custom.align",
-                "value": "left"
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Открыть профиль игрока в Directus",
+                    "url": "https://warlink-hub.duckdns.org:8055/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "targetBlank": true
+                  }
+                ]
               }
             ]
           },
@@ -4592,52 +4710,15 @@
             },
             "properties": [
               {
-                "id": "custom.align",
-                "value": "center"
-              },
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "mode": "basic",
-                  "type": "color-background"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "options": {
-                      "WARDOGS": {
-                        "color": "#22c55e",
-                        "index": 0,
-                        "text": "WARDOGS (только игра)"
-                      },
-                      "WARDOGS (гибрид)": {
-                        "color": "#FF5E1F",
-                        "index": 1,
-                        "text": "WARDOGS + голос"
-                      },
-                      "Комплексный режим": {
-                        "color": "#3b82f6",
-                        "index": 2,
-                        "text": "Комплексный режим"
-                      },
-                      "Свободный интернет": {
-                        "color": "#3b82f6",
-                        "index": 3,
-                        "text": "Комплексный режим"
-                      }
-                    },
-                    "type": "value"
-                  }
-                ]
+                "id": "custom.width",
+                "value": 140
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "Состояние"
+              "options": "Маршрут"
             },
             "properties": [
               {
@@ -4645,62 +4726,8 @@
                 "value": "center"
               },
               {
-                "id": "custom.cellOptions",
-                "value": {
-                  "mode": "basic",
-                  "type": "color-background"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "options": {
-                      "АКТИВНА": {
-                        "color": "#22c55e",
-                        "index": 0,
-                        "text": "В игре"
-                      }
-                    },
-                    "type": "value"
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Время в игре"
-            },
-            "properties": [
-              {
-                "id": "custom.align",
-                "value": "center"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Город подключения"
-            },
-            "properties": [
-              {
-                "id": "custom.align",
-                "value": "center"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Сервер / Маршрут подключения"
-            },
-            "properties": [
-              {
-                "id": "custom.align",
-                "value": "center"
+                "id": "custom.width",
+                "value": 160
               },
               {
                 "id": "custom.cellOptions",
@@ -4724,10 +4751,126 @@
                         "index": 1,
                         "text": "Стокгольм Core"
                       },
-                      "Москва Ingress": {
+                      "Москва Core": {
                         "color": "#22c55e",
                         "index": 2,
+                        "text": "Москва Core"
+                      },
+                      "Москва Ingress": {
+                        "color": "#22c55e",
+                        "index": 3,
                         "text": "Москва Ingress"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Сервер подключения"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Шлюз"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Сетевой адрес (IP)"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Город подключения"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Время в игре"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Состояние"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "options": {
+                      "АКТИВНА": {
+                        "color": "#22c55e",
+                        "index": 0,
+                        "text": "АКТИВНА"
                       }
                     },
                     "type": "value"
@@ -4779,7 +4922,17 @@
             },
             {
               "selector": "route_badge",
-              "text": "Сервер / Маршрут подключения",
+              "text": "Маршрут",
+              "type": "string"
+            },
+            {
+              "selector": "connected_node",
+              "text": "Сервер подключения",
+              "type": "string"
+            },
+            {
+              "selector": "gateway_ip",
+              "text": "Шлюз",
               "type": "string"
             },
             {
@@ -4819,7 +4972,7 @@
           }
         }
       ],
-      "title": "Игроки на сервере прямо сейчас",
+      "title": "Игроки на сервере прямо сейчас (Сессии)",
       "type": "table",
       "description": "Список подключенных в данную секунду игроков с указанием их номера аккаунта, выбранной игры, города, времени в игре и текущего сетевого статуса."
     },
@@ -4986,7 +5139,7 @@
         "current": {
           "selected": true,
           "text": "Все серверы",
-          "value": "$__all"
+          "value": ".*"
         },
         "description": "Переключение телеметрии и мониторинга между шлюзом Стокгольм и транзитным узлом Москва",
         "hide": 0,
@@ -4998,7 +5151,7 @@
           {
             "selected": true,
             "text": "Все серверы",
-            "value": "$__all"
+            "value": ".*"
           },
           {
             "selected": false,
@@ -5007,43 +5160,19 @@
           },
           {
             "selected": false,
+            "text": "Франкфурт Edge (Шлюз)",
+            "value": "frankfurt"
+          },
+          {
+            "selected": false,
             "text": "Москва Ingress (Транзит)",
             "value": "moscow"
           }
         ],
-        "query": "stockholm : Стокгольм Core (Шлюз), moscow : Москва Ingress (Транзит)",
+        "query": "Стокгольм Core (Шлюз) : stockholm, Франкфурт Edge (Шлюз) : frankfurt, Москва Ingress (Транзит) : moscow",
         "queryValue": "",
         "skipUrlSync": false,
         "type": "custom"
-      },
-      {
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "VictoriaMetrics"
-        },
-        "definition": "label_values(node_cpu_seconds_total, instance)",
-        "hide": 0,
-        "includeAll": true,
-        "allValue": ".*",
-        "label": "Игровой сервер",
-        "multi": false,
-        "name": "node",
-        "options": [],
-        "query": {
-          "query": "label_values(node_cpu_seconds_total, instance)",
-          "refId": "StandardVariableQuery"
-        },
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query",
-        "description": "Выбор конкретного сервера для отображения показателей"
       },
       {
         "current": {
@@ -5225,5 +5354,5 @@
   "timezone": "browser",
   "title": "WarLink • Stockholm GPN Telemetry",
   "uid": "warlink-telemetry",
-  "version": 5
+  "version": 7
 }

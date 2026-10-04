@@ -123,7 +123,7 @@ function updateCommunityGoalTimer() {
     }
 }
 
-function updateCommunityGoal(sponsors) {
+async function updateCommunityGoal(sponsors) {
     updateCommunityGoalVisibility();
     updateCommunityGoalTimer();
 
@@ -131,88 +131,103 @@ function updateCommunityGoal(sponsors) {
         goalCountdownTimer = setInterval(updateCommunityGoalTimer, 1000);
     }
 
-    const stockFillEl = document.getElementById('stockholm-progress-fill');
-    const stockTextEl = document.getElementById('stockholm-progress-text');
-    const stockPctEl = document.getElementById('stockholm-progress-pct');
-    const stockNode = document.getElementById('goal-node-stockholm');
+    const infraFillEl = document.getElementById('infra-progress-fill');
+    const infraTextEl = document.getElementById('infra-progress-text');
+    const infraPctEl = document.getElementById('infra-progress-pct');
+    const infraNode = document.getElementById('goal-node-infra');
 
     const frankFillEl = document.getElementById('frankfurt-progress-fill');
     const frankTextEl = document.getElementById('frankfurt-progress-text');
     const frankPctEl = document.getElementById('frankfurt-progress-pct');
     const frankNode = document.getElementById('goal-node-frankfurt');
 
-    if (!stockFillEl || !frankFillEl) return;
+    const bf6FillEl = document.getElementById('bf6-progress-fill');
+    const bf6TextEl = document.getElementById('bf6-progress-text');
+    const bf6PctEl = document.getElementById('bf6-progress-pct');
+    const bf6Card = document.getElementById('goal-special-bf6');
+    const bf6TargetLabel = document.getElementById('bf6-target-label');
 
-    const now = Date.now();
-    if (now < OCT_START_MSK) {
-        // До 1 октября 00:00 МСК сбор еще не стартовал
-        stockFillEl.style.width = '0%';
-        if (stockTextEl) stockTextEl.textContent = 'Собрано: 0 € из 2 €';
-        if (stockPctEl) stockPctEl.textContent = '0%';
-        if (stockNode) stockNode.classList.remove('covered', 'target');
+    try {
+        const res = await fetch('/api/community-goal');
+        if (res.ok) {
+            const data = await res.json();
+            if (data && data.success) {
+                // 1. Unified Cluster infrastructure (13 EUR / 1690 RUB / mo)
+                if (data.infrastructure && infraFillEl) {
+                    const infra = data.infrastructure;
+                    const pct = Math.min(100, Math.max(0, infra.percent || 0));
+                    infraFillEl.style.width = pct + '%';
+                    if (infraTextEl) {
+                        infraTextEl.textContent = 'Баланс: ' + (infra.current_balance_rub || 0).toLocaleString('ru-RU') + ' ₽ (' + infra.days_left + ' дн.)';
+                    }
+                    if (infraPctEl) {
+                        infraPctEl.textContent = pct + '%';
+                    }
+                    if (infraNode) {
+                        infraNode.title = 'Инфраструктура кластера: Стокгольм + Москва + Франкфурт (13 € / мес)';
+                        const titleSpan = infraNode.querySelector('.compact-node-title');
+                        if (titleSpan) {
+                            titleSpan.textContent = 'Инфраструктура кластера (13 € / мес):';
+                        }
+                        const flagsCont = infraNode.querySelector('.compact-flags');
+                        if (flagsCont && flagsCont.children.length === 2) {
+                            const deFlag = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                            deFlag.setAttribute('class', 'node-flag');
+                            deFlag.setAttribute('width', '12');
+                            deFlag.setAttribute('height', '9');
+                            deFlag.setAttribute('viewBox', '0 0 16 11');
+                            deFlag.setAttribute('fill', 'none');
+                            deFlag.innerHTML = '<rect width="16" height="3.67" rx="1" fill="#202020"/><rect y="3.67" width="16" height="3.67" fill="#DD1111"/><rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>';
+                            flagsCont.appendChild(deFlag);
+                        }
+                        if (infra.is_covered || pct >= 100) {
+                            infraNode.classList.add('covered');
+                            infraNode.classList.remove('target');
+                        } else {
+                            infraNode.classList.remove('covered');
+                            infraNode.classList.add('target');
+                        }
+                    }
+                }
 
-        frankFillEl.style.width = '0%';
-        if (frankTextEl) frankTextEl.textContent = 'Собрано: 0 € из 12 €';
-        if (frankPctEl) frankPctEl.textContent = '0%';
-        if (frankNode) frankNode.classList.remove('covered', 'target');
-        return;
-    }
+                // If legacy DOM has separate Frankfurt strip item, hide it and divider
+                if (frankNode) {
+                    frankNode.style.display = 'none';
+                    const divEl = document.querySelector('.compact-strip-divider');
+                    if (divEl) divEl.style.display = 'none';
+                }
 
-    // Начиная с 1 октября 00:00 МСК: Модель А (Накопительный фонд)
-    let octPoolRub = (typeof window.octoberPoolRub === 'number') ? window.octoberPoolRub : 0;
-    if (typeof window.octoberPoolRub !== 'number' && Array.isArray(sponsors)) {
-        sponsors.forEach(s => {
-            const sDate = s.created_at ? new Date(s.created_at).getTime() : 0;
-            if (sDate >= OCT_START_MSK) {
-                octPoolRub += (s.total_donated_rub || 0);
+                // 3. Battlefield 6 Special Project
+                if (data.special_projects && data.special_projects.length > 0 && bf6FillEl) {
+                    const bf6 = data.special_projects[0];
+                    const pct = Math.min(100, Math.max(0, bf6.percent || 0));
+                    bf6FillEl.style.width = pct + '%';
+                    if (bf6TargetLabel) {
+                        bf6TargetLabel.textContent = (bf6.target_amount_rub || 1600).toLocaleString('ru-RU') + ' ₽';
+                    }
+                    if (bf6TextEl) {
+                        if (bf6.is_completed) {
+                            bf6TextEl.textContent = 'Цель достигнута! Игра получена разработчиком';
+                        } else {
+                            bf6TextEl.textContent = 'Собрано: ' + (bf6.current_amount_rub || 0).toLocaleString('ru-RU') + ' ₽ из ' + (bf6.target_amount_rub || 1600).toLocaleString('ru-RU') + ' ₽';
+                        }
+                    }
+                    if (bf6PctEl) {
+                        bf6PctEl.textContent = pct + '%';
+                    }
+                    if (bf6Card) {
+                        if (bf6.is_completed) {
+                            bf6Card.classList.add('completed');
+                        } else {
+                            bf6Card.classList.remove('completed');
+                        }
+                    }
+                }
+                return;
             }
-        });
-    }
-
-    const stockholmCostRub = 200; // 2 €
-    const frankfurtCostRub = 1200; // 12 €
-
-    if (octPoolRub < stockholmCostRub) {
-        const stockEuro = (octPoolRub / 100).toFixed(octPoolRub % 100 === 0 ? 0 : 1);
-        const stockPct = Math.min(99, Math.round((octPoolRub / stockholmCostRub) * 100));
-
-        stockFillEl.style.width = `${stockPct}%`;
-        if (stockTextEl) stockTextEl.textContent = `Собрано: ${stockEuro} € из 2 €`;
-        if (stockPctEl) stockPctEl.textContent = `${stockPct}%`;
-        if (stockNode) {
-            stockNode.classList.remove('covered');
-            stockNode.classList.add('target');
         }
-
-        frankFillEl.style.width = '0%';
-        if (frankTextEl) frankTextEl.textContent = 'Собрано: 0 € из 12 €';
-        if (frankPctEl) frankPctEl.textContent = '0%';
-        if (frankNode) frankNode.classList.remove('covered', 'target');
-    } else {
-        stockFillEl.style.width = '100%';
-        if (stockTextEl) stockTextEl.textContent = 'Собрано: 2 € из 2 €';
-        if (stockPctEl) stockPctEl.textContent = '100%';
-        if (stockNode) {
-            stockNode.classList.add('covered');
-            stockNode.classList.remove('target');
-        }
-
-        const extraRub = octPoolRub - stockholmCostRub;
-        const frankfurtEuro = Math.min(12, Math.floor(extraRub / 100));
-        const frankPct = Math.min(100, Math.round((extraRub / frankfurtCostRub) * 100));
-
-        frankFillEl.style.width = `${frankPct}%`;
-        if (frankTextEl) frankTextEl.textContent = `Собрано: ${frankfurtEuro} € из 12 €`;
-        if (frankPctEl) frankPctEl.textContent = `${frankPct}%`;
-        if (frankNode) {
-            if (frankPct >= 100) {
-                frankNode.classList.add('covered');
-                frankNode.classList.remove('target');
-            } else {
-                frankNode.classList.remove('covered');
-                frankNode.classList.add('target');
-            }
-        }
+    } catch (err) {
+        console.warn('Failed to load server community goals:', err);
     }
 }
 
@@ -269,6 +284,7 @@ function renderSponsors(sponsors) {
     }
 
     const currentKeys = new Set();
+    const usedCallsigns = new Set();
 
     displayedSponsors.forEach((s) => {
         const originalIdx = cachedSponsors ? cachedSponsors.indexOf(s) : 0;
@@ -276,8 +292,8 @@ function renderSponsors(sponsors) {
         currentKeys.add(sponsorKey);
 
         const cleanNick = (window.NobelCallsigns && window.NobelCallsigns.sanitizeNickname)
-            ? window.NobelCallsigns.sanitizeNickname(s.nickname, s.account_number)
-            : (s.nickname && !s.nickname.includes('****') ? s.nickname : 'Аноним');
+            ? window.NobelCallsigns.sanitizeNickname(s.nickname, s.account_number, usedCallsigns)
+            : (s.nickname && !s.nickname.includes('****') ? s.nickname : 'Оператор 101');
         const nick = escapeHtml(cleanNick);
         const isSecret = Boolean(s.hide_donation_amount || s.is_secret || s.secret_donations);
         let metaText = `Спонсор сервера • ${escapeHtml(s.joined_date || '')}`;

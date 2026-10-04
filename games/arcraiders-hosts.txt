@@ -1,45 +1,41 @@
 # ==============================================================================
-# WARLINK PROFILE: WARDOGS
+# WARLINK PROFILE: ARC Raiders
 # Strict Game Routing & Server-Side Whitelist
 # ==============================================================================
-name: WARDOGS
+name: ARC Raiders
 
 # Game Processes (Client-side routing filter)
-process: WardogsClient-Win64-Shipping.exe
-process: WardogsLauncher-Shipping.exe
-process: wardogs.exe
-process: wardogs-win64-shipping.exe
-process: wardogslauncher.exe
-process: elytra-launcher.exe
-process: elytraclient.exe
-process: crashpad_handler.exe
-process: service.exe
-process: control.exe
-process: Elytra-Setup.exe
+process: PioneerGame.exe
+process: PioneerGame-Win64-Shipping.exe
+process: Discovery.exe
+process: Discovery-Win64-Shipping.exe
+process: ArcRaiders.exe
+process: ArcRaiders-Win64-Shipping.exe
 
 # Game Backend & Platform Domains
-domain: pragmaengine.com
-domain: bulkhead.net
-domain: wardogs.com
-domain: elytra.ac
-domain: anybrain.gg
-domain: vivox.com
+domain: embark.net
+domain: es-pio.net
+domain: es-discovery.net
+domain: embark.games
+domain: embark-studios.com
+domain: embarkstudios.com
+domain: embark.services
+domain: playarcraiders.com
+domain: arcraiders.com
+domain: embarkbackend.net
 domain: epicgames.dev
 domain: epicgames.com
 domain: unrealengine.com
+domain: vivox.com
 domain: amazonaws.com
-domain: akamaitechnologies.com
-domain: akamaiedge.net
-domain: akamai.net
-domain: edgekey.net
-domain: edgesuite.net
 domain: cloudfront.net
 domain: fastly.net
 domain: cloudflare.com
+domain: anybrain.gg
 domain: sectigo.com
 domain: digicert.com
 
-# Vivox Voice Chat Subnets (Restricted strictly to HTTPS and voice UDP RTP)
+# Vivox Voice Chat Subnets
 ip: 85.236.96.0/19, tcp/443
 ip: 85.236.96.0/19, udp/54000-55000
 ip: 85.236.96.0/19, udp/12000-65000
@@ -59,7 +55,7 @@ ip: 108.180.0.0/15, udp/12000-65000
 ip: 185.180.12.0/22, tcp/443
 ip: 185.180.12.0/22, udp/12000-65000
 
-# AWS Global Accelerator & Pragma Backend Edge (Matchmaking & Backend Telemetry)
+# AWS Matchmaking & Embark Services Edge
 ip: 52.223.0.0/16, tcp/443
 ip: 52.223.0.0/16, udp/10000-65535
 ip: 76.223.0.0/16, tcp/443
@@ -75,7 +71,11 @@ ip: 15.197.0.0/16, udp/10000-65535
 ip: 75.2.0.0/16, tcp/443
 ip: 75.2.0.0/16, udp/10000-65535
 
-# AWS Dedicated Match & Voice Servers (Global & EU Regions)
+# AWS Dedicated Match Servers (Global & EU Regions)
+ip: 15.207.0.0/16, tcp/443
+ip: 15.207.0.0/16, udp/10000-65535
+ip: 43.205.0.0/16, tcp/443
+ip: 43.205.0.0/16, udp/10000-65535
 ip: 52.0.0.0/12, tcp/443
 ip: 52.0.0.0/12, udp/10000-65535
 ip: 52.16.0.0/12, tcp/443
@@ -102,13 +102,30 @@ ip: 34.240.0.0/13, tcp/443
 ip: 34.240.0.0/13, udp/10000-65535
 ip: 18.200.0.0/14, tcp/443
 ip: 18.200.0.0/14, udp/10000-65535
+ip: 150.171.0.0/16, tcp/443
+ip: 150.171.0.0/16, udp/10000-65535
 
-# Dynamic Match & Voice UDP Ports
+# Google Cloud Platform (Embark Studios Global Edge & Matchmaking)
+ip: 34.160.0.0/12, tcp/443
+ip: 34.160.0.0/12, udp/10000-65535
+ip: 34.32.0.0/12, tcp/443
+ip: 34.32.0.0/12, udp/10000-65535
+ip: 34.144.0.0/12, tcp/443
+ip: 34.144.0.0/12, udp/10000-65535
+ip: 34.96.0.0/12, tcp/443
+ip: 34.96.0.0/12, udp/10000-65535
+ip: 34.64.0.0/12, tcp/443
+ip: 34.64.0.0/12, udp/10000-65535
+ip: 35.184.0.0/13, tcp/443
+ip: 35.184.0.0/13, udp/10000-65535
+ip: 35.200.0.0/13, tcp/443
+ip: 35.200.0.0/13, udp/10000-65535
+ip: 35.208.0.0/12, tcp/443
+ip: 35.208.0.0/12, udp/10000-65535
+ip: 35.240.0.0/13, tcp/443
+ip: 35.240.0.0/13, udp/10000-65535
+
+# Dedicated Voice STUN & SIP UDP Ports
 udp: 54000-55000
 udp: 3478-3479
 udp: 5060-5062
-udp: 4000-4500
-udp: 20000-20100
-udp: 7777-7788
-udp: 15000-15100
-udp: 27015-27030

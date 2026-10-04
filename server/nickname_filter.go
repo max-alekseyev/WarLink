@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -136,7 +137,49 @@ var (
 		regexp.MustCompile(`(?i)(?:^|[^0-9])88[_\-\s/]?14(?:[^0-9]|$)`),
 		regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:c18|combat18)(?:[^a-z0-9]|$)`),
 	}
+
+	rulesMu              sync.RWMutex
+	dynamicProfanities   []string
+	dynamicImpersonation []string
+	dynamicWhitelist     []string
 )
+
+// LoadDynamicNicknameRules loads active moderation rules from PostgreSQL table nickname_rules.
+func LoadDynamicNicknameRules(db *sql.DB) {
+	if db == nil {
+		return
+	}
+	rows, err := db.Query("SELECT pattern, rule_type FROM nickname_rules WHERE is_active = true")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var profs, imps, whites []string
+	for rows.Next() {
+		var pat, rType string
+		if err := rows.Scan(&pat, &rType); err == nil {
+			pat = strings.ToLower(strings.TrimSpace(pat))
+			if pat == "" {
+				continue
+			}
+			switch rType {
+			case "profanity":
+				profs = append(profs, pat)
+			case "impersonation":
+				imps = append(imps, pat)
+			case "whitelist":
+				whites = append(whites, pat)
+			}
+		}
+	}
+
+	rulesMu.Lock()
+	dynamicProfanities = profs
+	dynamicImpersonation = imps
+	dynamicWhitelist = whites
+	rulesMu.Unlock()
+}
 
 // StripInvisibleCharacters removes zero-width, bidirectional overrides, and invisible runes.
 func StripInvisibleCharacters(s string) string {
@@ -288,6 +331,15 @@ func GenerateDeterministicVariants(nick string) []string {
 // IsWhitelisted checks if the matched token is a legitimate benign word.
 func IsWhitelisted(token string) bool {
 	tokenLower := strings.ToLower(token)
+	rulesMu.RLock()
+	dynWhites := dynamicWhitelist
+	rulesMu.RUnlock()
+
+	for _, safe := range dynWhites {
+		if strings.Contains(tokenLower, safe) {
+			return true
+		}
+	}
 	for _, safe := range safeWordsWhitelist {
 		if strings.Contains(tokenLower, safe) {
 			return true
@@ -345,8 +397,18 @@ func FastValidateNickname(nick string) error {
 
 	variants := GenerateDeterministicVariants(cleaned)
 
+	rulesMu.RLock()
+	dynImps := dynamicImpersonation
+	dynProfs := dynamicProfanities
+	rulesMu.RUnlock()
+
 	// Check impersonation of administration / system
 	for _, v := range variants {
+		for _, imp := range dynImps {
+			if strings.Contains(v, imp) {
+				return fmt.Errorf("этот никнейм зарезервирован администрацией WarLink")
+			}
+		}
 		for _, imp := range reservedImpersonation {
 			if strings.Contains(v, imp) {
 				return fmt.Errorf("этот никнейм зарезервирован администрацией WarLink")
@@ -361,6 +423,14 @@ func FastValidateNickname(nick string) error {
 
 	// Check profanities
 	for _, v := range variants {
+		for _, prof := range dynProfs {
+			if strings.Contains(v, prof) {
+				if IsWhitelisted(v) || IsWhitelisted(cleaned) {
+					continue
+				}
+				return fmt.Errorf("никнейм содержит недопустимые или нецензурные выражения")
+			}
+		}
 		for _, prof := range forbiddenProfanities {
 			if strings.Contains(v, prof) {
 				// Verify if this is a false positive

@@ -540,7 +540,8 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 	foundDynamoDB := false
 	foundMatchUDP := false
 	foundWardogsProcess := false
-	foundLauncherDirect := false
+	foundLauncherTunnel := false
+	foundAntiCheatDirect := false
 	foundSniff := false
 	foundFakeIPPool := false
 
@@ -567,8 +568,11 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 			if p == "WardogsClient-Win64-Shipping.exe" && r.Outbound == "hy2-stockholm" {
 				foundWardogsProcess = true
 			}
-			if p == "WardogsLauncher-Shipping.exe" && r.Outbound == "direct" {
-				foundLauncherDirect = true
+			if p == "WardogsLauncher-Shipping.exe" && r.Outbound == "hy2-stockholm" {
+				foundLauncherTunnel = true
+			}
+			if p == "EasyAntiCheat.exe" && r.Outbound == "direct" {
+				foundAntiCheatDirect = true
 			}
 		}
 	}
@@ -579,8 +583,11 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 	if !foundFakeIPPool {
 		t.Errorf("expected 198.18.0.0/15 FakeIP pool routed to hy2-stockholm")
 	}
-	if !foundLauncherDirect {
-		t.Errorf("expected WardogsLauncher-Shipping.exe routed to direct for real IPs")
+	if !foundLauncherTunnel {
+		t.Errorf("expected WardogsLauncher-Shipping.exe routed to hy2-stockholm tunnel")
+	}
+	if !foundAntiCheatDirect {
+		t.Errorf("expected EasyAntiCheat.exe routed to direct for real IPs")
 	}
 	if !foundDynamoDB {
 		t.Errorf("expected DynamoDB region probe domains in routing rules routed to direct")

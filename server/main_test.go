@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -464,15 +465,15 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	if sess == nil {
 		t.Fatalf("expected session to be created")
 	}
-	if sess.RouteMode != "direct_stockholm" {
-		t.Errorf("expected RouteMode 'direct_stockholm', got '%s'", sess.RouteMode)
+	if sess.RouteMode != "direct_frankfurt" {
+		t.Errorf("expected RouteMode 'direct_frankfurt', got '%s'", sess.RouteMode)
 	}
 
 	// 2. Telemetry Beacon update
 	beacon := TelemetryBeaconPayload{
 		DeviceID:           "dev-123",
 		AccountNumber:      "1111-2222-3333-4444",
-		AppVersion:         "v2.1.13",
+		AppVersion:         "v2.2.0",
 		RouteMode:          "transit",
 		Status:             "beacon",
 		PingMoscowMs:       24,
@@ -518,5 +519,192 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	}
 }
 
+func TestCommunityGoalsCluster(t *testing.T) {
+	state := &AppState{
+		cachedDisplayDays:  23,
+		cachedRealDaysLeft: 30,
+		cachedPrice:        1690,
+		cachedVPSDetails: []VPSServerDetail{
+			{
+				ID:        1,
+				Name:      "decisive-amber",
+				IP:        "138.124.103.99",
+				DaysLeft:  46,
+				PriceRub:  385,
+				PriceEur:  3.5,
+				Status:    "active",
+			},
+			{
+				ID:        2,
+				Name:      "minor-orange",
+				IP:        "45.12.63.85",
+				DaysLeft:  30,
+				PriceRub:  528,
+				PriceEur:  4.75,
+				Status:    "active",
+			},
+			{
+				ID:        3,
+				Name:      "mechanical-azure",
+				IP:        "85.192.24.254",
+				DaysLeft:  30,
+				PriceRub:  528,
+				PriceEur:  4.75,
+				Status:    "active",
+			},
+		},
+	}
+	atomic.StoreUint64(&state.metricAezaBalanceRub, 1690)
+	atomic.StoreUint64(&state.metricAezaBalanceEurCents, 1300)
 
+	goals := state.getCommunityGoals()
+	if !goals.Success {
+		t.Fatalf("expected goals.Success to be true")
+	}
 
+	// 1. Cluster infrastructure checks (13 EUR / 1690 RUB)
+	if goals.Infrastructure.TargetAmountRub != 1690 {
+		t.Errorf("expected target 1690 RUB, got %d", goals.Infrastructure.TargetAmountRub)
+	}
+	if goals.Infrastructure.TargetAmountEur != 13.0 {
+		t.Errorf("expected target 13.0 EUR, got %.1f", goals.Infrastructure.TargetAmountEur)
+	}
+	if goals.Infrastructure.DaysLeft != 23 {
+		t.Errorf("expected displayed days 23 (-7 buffer), got %d", goals.Infrastructure.DaysLeft)
+	}
+	if goals.Infrastructure.RealDaysLeft != 30 {
+		t.Errorf("expected real days 30, got %d", goals.Infrastructure.RealDaysLeft)
+	}
+	if !goals.Infrastructure.IsCovered {
+		t.Errorf("expected infrastructure to be covered")
+	}
+	if len(goals.Infrastructure.Nodes) != 3 {
+		t.Errorf("expected 3 nodes, got %d", len(goals.Infrastructure.Nodes))
+	}
+
+	// 2. Expansion Frankfurt is now covered / active in cluster
+	if goals.Expansion.Role != "В СТРОЮ" {
+		t.Errorf("expected Frankfurt role 'В СТРОЮ', got '%s'", goals.Expansion.Role)
+	}
+	if !goals.Expansion.IsCovered {
+		t.Errorf("expected Frankfurt to be covered in cluster")
+	}
+
+	// 3. Special Project BF6 checks (independent, with Steam & Boosty links)
+	if len(goals.SpecialProjects) == 0 {
+		t.Fatalf("expected at least 1 special project")
+	}
+	bf6 := goals.SpecialProjects[0]
+	if bf6.ID != "bf6" {
+		t.Errorf("expected ID 'bf6', got '%s'", bf6.ID)
+	}
+	if bf6.TargetAmountRub != 1600 {
+		t.Errorf("expected discount price 1600 RUB, got %d", bf6.TargetAmountRub)
+	}
+	if bf6.BasePriceRub != 3200 {
+		t.Errorf("expected base price 3200 RUB, got %d", bf6.BasePriceRub)
+	}
+	if !strings.Contains(bf6.BoostyURL, "832459") {
+		t.Errorf("expected Boosty target link, got '%s'", bf6.BoostyURL)
+	}
+	if !strings.Contains(bf6.SteamURL, "MaksimPaladin") {
+		t.Errorf("expected Steam profile link, got '%s'", bf6.SteamURL)
+	}
+}
+
+func TestGamesCatalog(t *testing.T) {
+	state := &AppState{}
+	catalog := state.getGamesCatalog()
+	if len(catalog) < 4 {
+		t.Fatalf("expected at least 4 games in default catalog, got %d", len(catalog))
+	}
+
+	foundWardogs := false
+	foundBF6 := false
+	for _, g := range catalog {
+		if g.ID == "wardogs" {
+			foundWardogs = true
+			if len(g.Processes) == 0 || g.Processes[0] != "WardogsClient-Win64-Shipping.exe" {
+				t.Errorf("unexpected wardogs processes: %v", g.Processes)
+			}
+		}
+		if g.ID == "bf6" {
+			foundBF6 = true
+			if g.Status != "crowdfunding" {
+				t.Errorf("expected bf6 status 'crowdfunding', got '%s'", g.Status)
+			}
+		}
+	}
+	if !foundWardogs {
+		t.Errorf("wardogs not found in catalog")
+	}
+	if !foundBF6 {
+		t.Errorf("bf6 not found in catalog")
+	}
+}
+
+func TestDPIStrategies(t *testing.T) {
+	state := &AppState{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/dpi/strategies", nil)
+	w := httptest.NewRecorder()
+	state.handleDPIStrategies(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Success    bool              `json:"success"`
+		Strategies []DPIStrategyItem `json:"strategies"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+	if len(resp.Strategies) != 10 {
+		t.Errorf("expected 10 strategies, got %d", len(resp.Strategies))
+	}
+}
+
+func TestSupportedGamesRejection(t *testing.T) {
+	state := &AppState{
+		enableVoting: true,
+	}
+
+	testCases := []struct {
+		appID int
+		title string
+	}{
+		{1867240, "WARDOGS"},
+		{1808500, "ARC Raiders"},
+		{2016590, "Dark and Darker"},
+	}
+
+	for _, tc := range testCases {
+		isSup, name := state.isSupportedSteamGame(tc.appID, tc.title)
+		if !isSup {
+			t.Errorf("expected appID %d (%s) to be recognized as supported game", tc.appID, tc.title)
+		}
+		if name == "" {
+			t.Errorf("expected non-empty title for appID %d", tc.appID)
+		}
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"device_id":    "test_dev",
+			"steam_app_id": tc.appID,
+			"title":        tc.title,
+			"icon_url":     "https://example.com/icon.jpg",
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/votes", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		state.handleVotes(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for supported game %d, got %d", tc.appID, w.Code)
+		}
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		errMsg, _ := resp["error"].(string)
+		if !strings.Contains(errMsg, "уже официально поддерживается в WarLink") {
+			t.Errorf("expected error message to mention support, got %q", errMsg)
+		}
+	}
+}

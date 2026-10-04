@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.1.13</span>
+                <span class="brand-version">v2.2.0</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Complex Mode (DPI) -->
@@ -148,15 +148,6 @@
                 </div>
             </div>
 
-            <!-- Toast Notification (Non-blocking alert banner) -->
-            <div id="ui-toast" class="ui-toast" style="display: none;">
-                <svg class="toast-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="12" y1="8" x2="12" y2="12"/>
-                    <line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                <span id="ui-toast-msg" class="toast-msg"></span>
-            </div>
         </main>
 
         <!-- Quick Route Selector Popover (Bottom Left) -->
@@ -182,7 +173,7 @@
         <footer class="gateway-footer">
             <div class="gateway-footer-left" id="gw-footer-left" onclick="toggleGatewayRoutePopover(event)" title="Сменить маршрут подключения">
                 <span class="gateway-dot"></span>
-                <span id="gw-title" class="gateway-title">Москва -> Стокгольм</span>
+                <span id="gw-title" class="gateway-title">Москва → Франкфурт</span>
                 <svg id="gw-chevron" class="gw-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
                 <span class="gateway-sep">•</span>
                 <span id="gw-ping" class="gateway-meta"><span class="skeleton" style="width: 36px; height: 10px;"></span></span>
@@ -233,6 +224,16 @@
             </svg>
             <span>Удалить</span>
         </button>
+    </div>
+
+    <!-- Toast Notification (Top-Level Global Layer) -->
+    <div id="ui-toast" class="ui-toast" style="display: none;">
+        <svg class="toast-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span id="ui-toast-msg" class="toast-msg"></span>
     </div>
 
     <!-- Modular Script Bundle -->

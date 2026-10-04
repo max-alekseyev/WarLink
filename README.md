@@ -2,17 +2,15 @@
   <img src="assets/warlink_header.svg" alt="WarLink — Автономный оптимизатор игрового сетевого маршрута" width="100%">
 </p>
 <p align="center">
-  <a href="https://store.steampowered.com/app/1867240/"><img src="https://img.shields.io/badge/Game-WARDOGS_(Steam)-orange?style=flat-square&logo=steam&logoColor=white" alt="Steam WARDOGS"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/Лицензия-MIT-FF5E1F?style=flat-square" alt="Лицензия MIT"></a>
-  <a href="https://github.com/max-alekseyev/WarLink/discussions"><img src="https://img.shields.io/badge/Сообщество-Discussions-purple?style=flat-square" alt="Discussions"></a>
-  <a href="https://github.com/max-alekseyev/WarLink/stargazers"><img src="https://img.shields.io/github/stars/max-alekseyev/WarLink?style=flat-square&logo=github&color=FF5E1F&label=%D0%97%D0%B2%D0%B5%D0%B7%D0%B4%D1%8B" alt="Звезды GitHub"></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.1.13"><img src="https://img.shields.io/badge/Релиз-v2.1.13-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.1.13"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.2.0"><img src="https://img.shields.io/badge/Релиз-v2.2.0-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.2.0"></a>
   <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe"><img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe"></a>
+  <img src="https://raw.githubusercontent.com/max-alekseyev/WarLink/badges/online.svg" alt="Онлайн игрового шлюза" height="28">
+</p>
+<p align="center">
   <img src="https://img.shields.io/badge/Размер-~32_МБ-2d333b?style=for-the-badge" alt="Size">
   <a href="https://github.com/max-alekseyev/WarLink/releases"><img src="https://img.shields.io/github/downloads/max-alekseyev/WarLink/total?style=for-the-badge&color=0969da&label=Downloads" alt="Downloads"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/stargazers"><img src="https://img.shields.io/github/stars/max-alekseyev/WarLink?style=for-the-badge&logo=github&color=FF5E1F&label=%D0%97%D0%B2%D0%B5%D0%B7%D0%B4%D1%8B" alt="Звезды GitHub"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Лицензия-MIT-2d333b?style=for-the-badge" alt="Лицензия MIT"></a>
 </p>
 
 <p align="center">
@@ -28,7 +26,7 @@
 - Ошибки «Connection lost / Server unreachable» при загрузке карты
 - Высокий пинг, подергивания и внезапная потеря пакетов (packet loss)
 
-**WarLink v2.1.13** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
+**WarLink v2.2.0** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
 
 ---
 
@@ -41,7 +39,7 @@
 
 ---
 
-## Ключевые возможности WarLink v2.1.13
+## Ключевые возможности WarLink v2.2.0
 
 - **Реворк профиля в стиле 2026 года:** компактный Hero-блок идентичности оператора и сегментированная навигация по вкладкам (Персонализация, Discord, Устройства, Поддержка) без бесконечного скролла-одностраничника.
 - **Интеграция с Discord и WarLink Core Bot:** автоматическая выдача роли верифицированного бойца, роли спонсора и динамических ролей карьерных уровней WARDOGS на официальном сервере. Автоматическое копирование кода привязки в буфер обмена и удобная кнопка перехода в сообщество.

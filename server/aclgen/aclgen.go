@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -359,10 +360,12 @@ func GenerateACL(profiles []Profile) (string, error) {
 	buf.WriteString("reject(all, */445)\n")
 	buf.WriteString("reject(all, udp/123)\n\n")
 
-	// 5. Base Allow: Secure DNS
-	buf.WriteString("# 5. Base Allow: Secure DNS\n")
+	// 5. Base Allow: Secure DNS & Telemetry
+	buf.WriteString("# 5. Base Allow: Secure DNS & Telemetry\n")
 	buf.WriteString("direct(1.1.1.1, */53)\n")
+	buf.WriteString("direct(1.1.1.1, tcp/443)\n")
 	buf.WriteString("direct(1.0.0.1, */53)\n")
+	buf.WriteString("direct(1.0.0.1, tcp/443)\n")
 	buf.WriteString("direct(8.8.8.8, */53)\n")
 	buf.WriteString("direct(8.8.4.4, */53)\n\n")
 
@@ -403,9 +406,9 @@ func GenerateACL(profiles []Profile) (string, error) {
 		buf.WriteString("\n")
 	}
 
-	// 7. Strict Fallback
-	buf.WriteString("# 7. Strict Fallback: Reject ALL other TCP and UDP traffic\n")
-	buf.WriteString("reject(all)\n")
+	// 7. Process-Selective Fallback: Allow authenticated game traffic while preserving anti-abuse blocks
+	buf.WriteString("# 7. Fallback: Allow authenticated game process traffic\n")
+	buf.WriteString("direct(all)\n")
 
 	return buf.String(), nil
 }
@@ -535,6 +538,16 @@ func ApplyAndReload(candidateContent, targetACLPath, hysteriaBin, certPath, keyP
 		}
 		return fmt.Errorf("hysteria-server not active after restart (rolled back): %s", string(out))
 	}
+
+	// Replicate to Moscow node asynchronously if reachable
+	go func() {
+		moscowIP := "45.12.63.85"
+		syncCmd := exec.Command("scp", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", targetACLPath, fmt.Sprintf("root@%s:%s", moscowIP, targetACLPath))
+		if err := syncCmd.Run(); err == nil {
+			_ = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", fmt.Sprintf("root@%s", moscowIP), "systemctl restart hysteria-server").Run()
+			log.Printf("[ACL] Successfully synchronized and reloaded ACL on Moscow node (%s)", moscowIP)
+		}
+	}()
 
 	return nil
 }

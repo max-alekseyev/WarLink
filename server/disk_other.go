@@ -2,8 +2,14 @@
 
 package main
 
+import "log"
+
+func init() {
+	log.Printf("[WARN] disk_other.go: running on non-linux platform, system disk and UDP metrics are stubs")
+}
+
 func getDiskUsage() (usedGB float64, totalGB float64, percent float64) {
-	return 6.8, 9.8, 69.4
+	return 0.0, 0.0, 0.0
 }
 
 type UDPStats struct {

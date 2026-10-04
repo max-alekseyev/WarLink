@@ -529,7 +529,7 @@ async def update_discord_ticket_thread(ticket_id: int):
     admin_reply = t.get("admin_reply", "")
     cat = t.get("category", "other")
     cat_title = CATEGORY_NAMES.get(cat, cat)
-    ver = t.get("app_version", "v2.1.13")
+    ver = t.get("app_version", "v2.2.0")
 
     target_thread = await get_ticket_thread(ticket_id)
     if not target_thread:
@@ -622,7 +622,7 @@ async def handle_new_ticket_event(ticket_id: int):
     t = data.get("ticket", {})
     acc = t.get("account_number", "Не указан")
     dev = t.get("device_id", "none")
-    ver = t.get("app_version", "v2.1.13")
+    ver = t.get("app_version", "v2.2.0")
     cat = t.get("category", "other")
     cat_title = CATEGORY_NAMES.get(cat, cat)
     comment = t.get("user_comment", "Без комментария")
@@ -858,7 +858,7 @@ async def live_monitor_task():
         active_slots = data.get("active_sessions", 0)
         max_slots = data.get("max_sessions", 61)
         latency = data.get("ping_hint_ms", 25)
-        version = data.get("version", "v2.1.13")
+        version = data.get("version", "v2.2.0")
 
         embed.add_field(name="Швеция: Стокгольм", value=f"{latency:.0f} ms", inline=True)
         embed.add_field(name="Загрузка слотов", value=f"{active_slots} / {max_slots}", inline=True)

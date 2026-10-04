@@ -14,79 +14,47 @@
         </div>
     </div>
     <div class="details-content">
-        <!-- Community Goal & Server Support Box -->
-        <div class="community-goal-box">
-            <div class="goal-header">
-                <div class="goal-title-wrap">
-                    <span class="goal-label">Обеспечение инфраструктуры</span>
-                    <span class="goal-sub">Шлюзы поддерживаются силами игрового сообщества</span>
-                </div>
-                <div id="goal-timer-wrap" class="goal-timer-badge">
-                    <span id="goal-timer-label">Старт статистики с 1 октября:</span>
-                    <span id="goal-timer-countdown" class="goal-timer-time font-mono">--:--:--</span>
+        <!-- Ultra-compact Infrastructure Goal Strip (Variant A: 34px height) -->
+        <div class="community-goal-box compact-goal-strip">
+            <div class="compact-strip-left font-mono">
+                <div class="compact-node-item covered" id="goal-node-infra" title="Обслуживание инфраструктуры кластера: Стокгольм + Москва + Франкфурт (13 € / мес)">
+                    <div class="compact-flags">
+                        <!-- Швеция (Стокгольм Master) -->
+                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
+                            <rect width="16" height="11" rx="1" fill="#005293"/>
+                            <rect x="5" width="2" height="11" fill="#FFCD00"/>
+                            <rect y="4.5" width="16" height="2" fill="#FFCD00"/>
+                        </svg>
+                        <!-- Россия (Москва Ingress Edge) -->
+                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
+                            <rect width="16" height="3.67" rx="1" fill="#FFFFFF"/>
+                            <rect y="3.67" width="16" height="3.67" fill="#0039A6"/>
+                            <rect y="7.33" width="16" height="3.67" rx="1" fill="#D52B1E"/>
+                        </svg>
+                        <!-- Германия (Франкфурт Gaming Edge) -->
+                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
+                            <rect width="16" height="3.67" rx="1" fill="#202020"/>
+                            <rect y="3.67" width="16" height="3.67" fill="#DD1111"/>
+                            <rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>
+                        </svg>
+                    </div>
+                    <span class="compact-node-title">Инфраструктура кластера (13 € / мес):</span>
+                    <div class="compact-mini-bar" style="width: 50px;">
+                        <div id="infra-progress-fill" class="compact-mini-fill" style="width: 100%;"></div>
+                    </div>
+                    <span id="infra-progress-pct" class="compact-node-pct">100%</span>
                 </div>
             </div>
-            
-            <div class="goal-nodes-grid">
-                <!-- 1. Stockholm Node -->
-                <div id="goal-node-stockholm" class="goal-node-item">
-                    <div class="node-item-top">
-                        <div class="node-identity">
-                            <svg class="node-flag" width="16" height="11" viewBox="0 0 16 11" fill="none">
-                                <rect width="16" height="11" rx="1" fill="#005293"/>
-                                <rect x="5" width="2" height="11" fill="#FFCD00"/>
-                                <rect y="4.5" width="16" height="2" fill="#FFCD00"/>
-                            </svg>
-                            <div class="node-name-wrap">
-                                <span class="node-name">Стокгольм</span>
-                                <span class="node-role font-mono">ОСНОВНОЙ ШЛЮЗ</span>
-                            </div>
-                        </div>
-                        <div class="node-cost-wrap font-mono">
-                            <span class="node-cost">2 €</span>
-                            <span class="node-period">/ мес</span>
-                        </div>
-                    </div>
-                    <div class="node-progress-wrap">
-                        <div class="node-progress-bar">
-                            <div id="stockholm-progress-fill" class="node-progress-fill" style="width: 0%;"></div>
-                        </div>
-                        <div class="node-progress-labels font-mono">
-                            <span id="stockholm-progress-text">Собрано: 0 € из 2 €</span>
-                            <span id="stockholm-progress-pct">0%</span>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- 2. Frankfurt Node -->
-                <div id="goal-node-frankfurt" class="goal-node-item">
-                    <div class="node-item-top">
-                        <div class="node-identity">
-                            <svg class="node-flag" width="16" height="11" viewBox="0 0 16 11" fill="none">
-                                <rect width="16" height="3.67" rx="1" fill="#202020"/>
-                                <rect y="3.67" width="16" height="3.67" fill="#DD1111"/>
-                                <rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>
-                            </svg>
-                            <div class="node-name-wrap">
-                                <span class="node-name">Франкфурт</span>
-                                <span class="node-role font-mono">РЕЗЕРВНЫЙ УЗЕЛ</span>
-                            </div>
-                        </div>
-                        <div class="node-cost-wrap font-mono">
-                            <span class="node-cost">12 €</span>
-                            <span class="node-period">/ мес</span>
-                        </div>
-                    </div>
-                    <div class="node-progress-wrap">
-                        <div class="node-progress-bar">
-                            <div id="frankfurt-progress-fill" class="node-progress-fill" style="width: 0%;"></div>
-                        </div>
-                        <div class="node-progress-labels font-mono">
-                            <span id="frankfurt-progress-text">Собрано: 0 € из 12 €</span>
-                            <span id="frankfurt-progress-pct">0%</span>
-                        </div>
-                    </div>
-                </div>
+            <div class="compact-strip-right font-mono">
+                <span id="goal-timer-wrap" class="compact-period-label">
+                    <span id="goal-timer-label" style="display:none;"></span>
+                    <span id="goal-timer-countdown">Октябрь 2026</span>
+                </span>
+                <button type="button" class="btn-compact-donate" onclick="openDonateModalWithTab('server', event)">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    <span>Поддержать шлюз</span>
+                </button>
             </div>
         </div>
 

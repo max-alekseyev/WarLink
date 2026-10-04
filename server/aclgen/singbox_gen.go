@@ -74,8 +74,7 @@ var CRLDomains = []string{
 // DirectGameDomains contains domains that must route directly (bypassing Hysteria tunnel and FakeIP)
 // for maximum speed, compatibility, and anti-cheat validation.
 var DirectGameDomains = []string{
-	// Anti-cheat / game CDN
-	"elytra.ac",
+	// Anti-cheat / PKI endpoints (CRL/OCSP)
 	"certainly.com",
 	"pki.goog",
 	// Steam
@@ -123,6 +122,11 @@ var DirectLauncherProcesses = []string{
 	"beservice.exe",
 	"faceitclient.exe",
 	"faceitservice.exe",
+	"AntiCheatInstaller.exe",
+	"anticheatinstaller.exe",
+	"denuvo-anti-cheat-update-service.exe",
+	"denuvo-anti-cheat-crash-report.exe",
+	"denuvo-anti-cheat.exe",
 }
 
 // WardogsGameProcesses contains process names for WARDOGS dedicated game client and launcher.
@@ -333,17 +337,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			},
 			Outbound: "direct",
 		},
-		// 2. All plain HTTP (port 80) routes direct for instant CRL/OCSP revocation checks
-		{
-			Port:     []int{80},
-			Outbound: "direct",
-		},
-		// 3. Direct game & anti-cheat domains route direct
-		{
-			DomainSuffix: DirectGameDomains,
-			Outbound:     "direct",
-		},
-		// 4. Never route loopback, private RFC1918, or link-local subnets through tunnel
+		// 2. Never route loopback, private RFC1918, or link-local subnets through tunnel
 		{
 			IPCIDR: []string{
 				"127.0.0.0/8",
@@ -357,19 +351,19 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			},
 			Outbound: "direct",
 		},
-		// 4b. Never route NTP (UDP 123) through tunnel
+		// 3. Never route NTP (UDP 123) through tunnel
 		{
 			Network:  "udp",
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 5. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
 			Outbound: "hy2-stockholm",
 		},
-		// 5b. Game launchers and anti-cheat processes route direct when connecting to real IPs
+		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
 			ProcessName: DirectLauncherProcesses,
 			Outbound:    "direct",
@@ -387,6 +381,29 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			Outbound: "direct",
 		})
 	}
+
+	// 7. Route specified target game processes to hy2-stockholm with HIGHEST PRIORITY!
+	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
+	// MUST go through tunnel!
+	if len(allProcesses) > 0 {
+		rules = append(rules, SingBoxRouteRule{
+			ProcessName: allProcesses,
+			Outbound:    "hy2-stockholm",
+		})
+	}
+
+	// 8. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
+	rules = append(rules, SingBoxRouteRule{
+		DomainSuffix: CRLDomains,
+		Port:         []int{80},
+		Outbound:     "direct",
+	})
+
+	// 9. Direct game domains (Steam downloads, CDN) for non-game processes route direct
+	rules = append(rules, SingBoxRouteRule{
+		DomainSuffix: DirectGameDomains,
+		Outbound:     "direct",
+	})
 
 	if includeWebServices {
 		rules = append(rules, SingBoxRouteRule{
@@ -424,43 +441,35 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		})
 	}
 
-	// Route WARDOGS dedicated match servers (AWS GameLift UDP 4000-4500, e.g. port 4192) through Stockholm gateway
-	// to bypass Russian TSPU/ISP packet drops and ensure stable match connectivity.
-	// Steam Datagram Relay (SDR) ping relays stay direct.
+	// Dedicated match UDP ports for WARDOGS
+	rules = append(rules, SingBoxRouteRule{
+		Network:   "udp",
+		PortRange: []string{"4000:4500"},
+		Outbound:  "hy2-stockholm",
+	})
+
+	// Discord Voice WebRTC UDP media strictly for Discord processes routes direct
 	rules = append(rules,
 		SingBoxRouteRule{
-			Network:   "udp",
-			PortRange: []string{"4000:4500"},
-			Outbound:  "hy2-stockholm",
+			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+			Network:     "udp",
+			Port:        []int{3478},
+			Outbound:    "direct",
 		},
 		SingBoxRouteRule{
-			Network:   "udp",
-			PortRange: []string{"27000:27200"},
-			Outbound:  "direct",
+			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+			Network:     "udp",
+			PortRange:   []string{"19294:19344", "50000:50100"},
+			Outbound:    "direct",
 		},
 	)
 
-	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-50100, 3478) routes direct
-	rules = append(rules,
-		SingBoxRouteRule{
-			Network:  "udp",
-			Port:     []int{3478},
-			Outbound: "direct",
-		},
-		SingBoxRouteRule{
-			Network:   "udp",
-			PortRange: []string{"19294:19344", "50000:50100"},
-			Outbound:  "direct",
-		},
-	)
-
-	// Route specified target processes to hy2-stockholm
-	if len(allProcesses) > 0 {
-		rules = append(rules, SingBoxRouteRule{
-			ProcessName: allProcesses,
-			Outbound:    "hy2-stockholm",
-		})
-	}
+	// Steam Datagram Relay (SDR) ping relays for Steam client
+	rules = append(rules, SingBoxRouteRule{
+		Network:   "udp",
+		PortRange: []string{"27000:27200"},
+		Outbound:  "direct",
+	})
 
 	// Default fallback to direct
 	rules = append(rules, SingBoxRouteRule{
@@ -468,14 +477,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	})
 
 	var dnsRules []SingBoxDNSRule
-	dnsRules = append(dnsRules, SingBoxDNSRule{
-		DomainSuffix: CRLDomains,
-		Server:       "dns-local",
-	})
-	dnsRules = append(dnsRules, SingBoxDNSRule{
-		DomainSuffix: DirectGameDomains,
-		Server:       "dns-local",
-	})
+	// 1. Antigravity & local daemons -> dns-local
 	dnsRules = append(dnsRules, SingBoxDNSRule{
 		ProcessName: append([]string{
 			"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
@@ -483,17 +485,28 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		}, DirectLauncherProcesses...),
 		Server: "dns-local",
 	})
+	// 2. CRL domains -> dns-local
+	dnsRules = append(dnsRules, SingBoxDNSRule{
+		DomainSuffix: CRLDomains,
+		Server:       "dns-local",
+	})
+	// 3. Vivox voice chat -> dns-remote (resolves real IP of voice servers via 1.1.1.1 through tunnel)
 	dnsRules = append(dnsRules, SingBoxDNSRule{
 		DomainSuffix: []string{"vivox.com"},
 		Server:       "dns-remote",
 	})
-
+	// 4. Target game processes -> dns-fakeip (all queries from game EXEs get FakeIP and resolve remotely)
 	if len(allProcesses) > 0 {
 		dnsRules = append(dnsRules, SingBoxDNSRule{
 			ProcessName: allProcesses,
 			Server:      "dns-fakeip",
 		})
 	}
+	// 5. Direct game domains (for non-game processes, e.g. steam.exe) -> dns-local
+	dnsRules = append(dnsRules, SingBoxDNSRule{
+		DomainSuffix: DirectGameDomains,
+		Server:       "dns-local",
+	})
 
 	var fakeDomains []string
 	if includeWebServices {
@@ -549,7 +562,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		Tag:         "hy2-stockholm",
 		Server:      targetServer,
 		ServerPorts: normalizeServerPorts(serverPorts),
-		HopInterval: "10m",
+		HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
 		UpMbps:      100,
 		DownMbps:    100,
 		Password:    token,

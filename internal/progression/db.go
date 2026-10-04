@@ -192,12 +192,6 @@ func SyncWithServer(serverAPI string, cacheDir string) error {
 	return nil
 }
 
-// GetUnlocksForRole returns all unlock items for a given role sorted by level.
-func (db *Database) GetUnlocksForRole(role string) []UnlockItem {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.unlocksByRole[strings.ToLower(role)]
-}
 
 // GetAllUnlocks returns all unlocks across all roles.
 func (db *Database) GetAllUnlocks() []UnlockItem {

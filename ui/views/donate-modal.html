@@ -24,102 +24,96 @@
             </div>
 
             <!-- TAB 1: Автору на Boosty (Default & Prominent) -->
-            <div id="donate-panel-boosty">
-                <!-- 100,000 RUB Target Goal Card -->
-                <div class="boosty-goal-card" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
+            <div id="donate-panel-boosty" class="boosty-panel">
+                <!-- 1. Special Project BF6 -->
+                <div class="boosty-spec-box">
+                    <div class="boosty-spec-header">
+                        <div class="boosty-spec-title-wrap">
+                            <span class="boosty-spec-badge font-mono">СПЕЦПРОЕКТ</span>
+                            <span class="boosty-spec-title">Battlefield 6 в WarLink</span>
+                        </div>
+                        <div class="boosty-spec-price font-mono">
+                            <span id="donate-bf6-target" class="price-active">1 600 ₽</span>
+                            <span class="price-old">3 200 ₽</span>
+                        </div>
+                    </div>
+                    <div class="boosty-spec-desc">
+                        Сбор на копию игры для снятия сетевых дампов и настройки.
+                    </div>
+                    <div class="boosty-bar-wrap">
+                        <div class="boosty-bar-track">
+                            <div id="donate-bf6-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                        </div>
+                        <span id="donate-bf6-text" class="boosty-bar-pct font-mono">0% (0 / 1 600 ₽)</span>
+                    </div>
+                    <div class="boosty-spec-btns font-mono">
+                        <button type="button" class="btn-boosty-action" onclick="openBoostyLink('https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link')">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            <span>Поддержать сбор на BF6</span>
+                        </button>
+                        <button type="button" class="btn-steam-action" onclick="openSteamLink('https://steamcommunity.com/id/MaksimPaladin/')">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.811c0 .052.005.105.005.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 14.819C1.903 20.099 6.702 24 12.021 24c6.627 0 12-5.373 12-12s-5.373-12-12.042-12zm4.463 11.891c-1.638 0-2.969-1.332-2.969-2.97 0-1.638 1.331-2.97 2.969-2.97 1.637 0 2.969 1.332 2.969 2.97 0 1.638-1.332 2.97-2.969 2.97zm-7.616 5.867c-1.023 0-1.854-.83-1.854-1.854 0-.46.168-.881.449-1.209l3.076 1.272c-.104.996-.902 1.791-1.671 1.791z"/></svg>
+                            <span>Подарить в Steam</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Main Goal + One-Time Donate -->
+                <div class="boosty-main-goal-box">
                     <div class="boosty-goal-top">
-                        <div class="boosty-goal-title-wrap">
-                            <span class="boosty-goal-badge font-mono">ЦЕЛЬ СБОРА</span>
-                            <span id="boosty-goal-title" class="boosty-goal-title">WarLink | Поддержка дальнейшей разработки | Долги</span>
+                        <div class="boosty-goal-info">
+                            <span class="badge-dim font-mono">ЦЕЛЬ АВТОРА</span>
+                            <span id="boosty-goal-title" class="boosty-goal-name">WarLink | Поддержка дальнейшей разработки</span>
                         </div>
-                        <div class="boosty-goal-amount font-mono">
-                            <span id="boosty-goal-target" class="boosty-goal-target">100 000 ₽</span>
-                        </div>
+                        <span id="boosty-goal-target" class="boosty-goal-target font-mono">100 000 ₽</span>
                     </div>
-                    <div class="boosty-goal-bar-wrap">
-                        <div class="boosty-goal-bar">
-                            <div id="boosty-goal-fill" class="boosty-goal-bar-fill" style="width: 0%;"></div>
+                    <div class="boosty-goal-bottom">
+                        <div class="boosty-bar-wrap" style="flex: 1;">
+                            <div class="boosty-bar-track">
+                                <div id="boosty-goal-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                            </div>
+                            <span id="boosty-goal-text" class="boosty-bar-pct font-mono">0% (0 / 100 000 ₽)</span>
                         </div>
-                        <div class="boosty-goal-meta font-mono">
-                            <span id="boosty-goal-text">Собрано: 0 ₽ из 100 000 ₽ (0%)</span>
-                            <span class="boosty-goal-link-label">Сделать взнос →</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Prominent One-Time Donation Card -->
-                <div class="boosty-onetime-wrap">
-                    <div class="boosty-onetime-info">
-                        <span class="boosty-onetime-title">Разовый донат любой суммой на Boosty</span>
-                        <span class="boosty-onetime-sub">Прямой донат без подписки на форму оплаты</span>
-                    </div>
-                    <button type="button" class="btn btn-primary btn-sm boosty-onetime-action-btn font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                        ЗАДОНАТИТЬ
-                    </button>
-                </div>
-
-                <!-- Subscriptions Header -->
-                <div style="font-size: 9.5px; font-weight: 700; color: #888888; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px;">
-                    ЕЖЕМЕСЯЧНЫЕ ПОДПИСКИ НА РАЗРАБОТКУ
-                </div>
-
-                <!-- 4 Boosty Subscription Tiers Grid -->
-                <div class="boosty-levels-grid">
-                    <!-- 1. Рекрут -->
-                    <div class="boosty-level-card">
-                        <div class="boosty-level-info">
-                            <span class="boosty-level-name">Рекрут | WarLink</span>
-                            <span class="boosty-level-price font-mono">100 ₽ / мес</span>
-                        </div>
-                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link')">
-                            Подписаться
-                        </button>
-                    </div>
-
-                    <!-- 2. Оперативник -->
-                    <div class="boosty-level-card">
-                        <div class="boosty-level-info">
-                            <span class="boosty-level-name">Оперативник | WarLink</span>
-                            <span class="boosty-level-price font-mono">500 ₽ / мес</span>
-                        </div>
-                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link')">
-                            Подписаться
-                        </button>
-                    </div>
-
-                    <!-- 3. Ветеран -->
-                    <div class="boosty-level-card">
-                        <div class="boosty-level-info">
-                            <span class="boosty-level-name">Ветеран | WarLink</span>
-                            <span class="boosty-level-price font-mono">1 000 ₽ / мес</span>
-                        </div>
-                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link')">
-                            Подписаться
-                        </button>
-                    </div>
-
-                    <!-- 4. Генерал -->
-                    <div class="boosty-level-card">
-                        <div class="boosty-level-info">
-                            <span class="boosty-level-name">Генерал | WarLink</span>
-                            <span class="boosty-level-price font-mono">5 000 ₽ / мес</span>
-                        </div>
-                        <button type="button" class="boosty-btn-sub font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link')">
-                            Подписаться
+                        <button type="button" class="btn-boosty-donate-now font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            <span>ЗАДОНАТИТЬ</span>
                         </button>
                     </div>
                 </div>
 
-                <div style="font-size: 9px; color: #666666; line-height: 1.3; margin-top: 2px;">
-                    Большое тебе спасибо, друг! Донат на Boosty идет напрямую автору. Не привязан к серверам и не начисляет автоматический статус шлюза.
+                <!-- 3. Subscriptions Row -->
+                <div class="boosty-subs-wrap">
+                    <div class="boosty-subs-label font-mono">ЕЖЕМЕСЯЧНЫЕ ПОДПИСКИ НА РАЗРАБОТКУ:</div>
+                    <div class="boosty-subs-row font-mono">
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Рекрут</span>
+                            <span class="sub-card-cost">100 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Оперативник</span>
+                            <span class="sub-card-cost">500 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Ветеран</span>
+                            <span class="sub-card-cost">1 000 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Генерал</span>
+                            <span class="sub-card-cost">5 000 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Footer Note -->
+                <div class="boosty-footer-hint font-mono">
+                    Благодарю за поддержку! Донат на Boosty идет напрямую автору.
                 </div>
             </div>
 
             <!-- TAB 2: Серверный шлюз (СБП, Карты) -->
             <div id="donate-panel-server" style="display: none;">
                 <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 2px; line-height: 1.3;">
-                    Софинансирование серверной инфраструктуры и шлюзов сообщества.
+                    Софинансирование серверной инфраструктуры сообщества.
                 </div>
                 <div class="donate-perks-box">
                     <div class="donate-perk-item">

@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	ServerAppVersion     = "v2.1.13"
+	ServerAppVersion     = "v2.2.0"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
@@ -54,18 +54,34 @@ const (
 	MaxActiveSessions    = 61 // 50 Free + 10 Sponsor + 1 Dedicated Admin
 	MaxSessionsPerIP     = 2
 	SessionTTL           = 24 * time.Hour
-	SessionInactivityTTL = 5 * time.Minute
+	SessionInactivityTTL = 45 * time.Minute
 	PerUserRateDownBps   = 12500000 // 100 Mbps in bytes/sec
 	PerUserRateUpBps     = 6250000  // 50 Mbps in bytes/sec
+	SafetyBufferDays             = 7
+	MonthlyInfrastructureCostRub = 1690
+	MonthlyInfrastructureCostEur = 13.0
 )
 
 var (
-	// TrustedIngressIPs defines reverse proxy / edge Ingress PoP nodes (e.g. Moscow node)
-	// that forward client traffic to the Stockholm gateway.
+	// TrustedIngressIPs defines reverse proxy / edge Ingress/Egress PoP nodes (e.g. Moscow and Frankfurt nodes)
+	// that forward client traffic to the Master Control Plane.
 	TrustedIngressIPs = map[string]bool{
-		"45.12.63.85": true,
+		"45.12.63.85":   true,
+		"85.192.24.254": true,
 	}
 )
+
+type VPSServerDetail struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	IP        string    `json:"ip"`
+	ExpiresAt string    `json:"expires_at"`
+	DueDate   time.Time `json:"due_date"`
+	DaysLeft  int       `json:"days_left"`
+	PriceEur  float64   `json:"price_eur"`
+	PriceRub  int       `json:"price_rub"`
+	Status    string    `json:"status"`
+}
 
 type ServerConfig struct {
 	ServerIP              string `json:"server_ip"`
@@ -226,9 +242,13 @@ type AppState struct {
 	profiles     []aclgen.Profile
 	sessions     map[string]*SessionInfo // token -> SessionInfo
 	deviceTokens map[string]string       // device_id -> token
-	cachedDue    time.Time
-	cachedDueStr string
-	rateLimiter  *IPRateLimiter
+	cachedDue          time.Time
+	cachedDueStr       string
+	cachedRealDue      time.Time
+	cachedRealDaysLeft int
+	cachedDisplayDays  int
+	cachedVPSDetails   []VPSServerDetail
+	rateLimiter        *IPRateLimiter
 	db           *sql.DB
 	rdb          *redis.Client
 
@@ -246,8 +266,10 @@ type AppState struct {
 	loadMu       sync.RWMutex
 
 	// Edge Ingress RTT tracking
-	moscowPingRTT float64
-	moscowPingMu  sync.RWMutex
+	moscowPingRTT    float64
+	moscowPingMu     sync.RWMutex
+	frankfurtPingRTT float64
+	frankfurtPingMu  sync.RWMutex
 
 	// Background client beacon metrics cache
 	beaconMu            sync.RWMutex
@@ -257,6 +279,8 @@ type AppState struct {
 	enableDonate        bool
 	enableVoting        bool
 	enableCommunityGoal bool
+	drainMode           bool
+	lastSettingsLoad    time.Time
 	featureMu           sync.RWMutex
 
 	// Telemetry and Analytics Counters
@@ -282,6 +306,9 @@ type AppState struct {
 	prevHyTraffic             map[string]UserTrafficStats
 	nicknameCache             sync.Map
 	latencyTracker            *LatencyTracker
+	cachedMonthPoolRub        int64
+	cachedMonthPoolTime       time.Time
+	cachedMonthPoolMu         sync.RWMutex
 }
 
 type LatencyMetrics struct {
@@ -515,6 +542,12 @@ func (s *AppState) startLatencySampler() {
 			s.moscowPingRTT = moscowRTT
 			s.moscowPingMu.Unlock()
 		}
+		// Edge Egress RTT probe to Frankfurt node
+		if frankfurtRTT, err := probeICMPPing("85.192.24.254", 1200*time.Millisecond); err == nil && frankfurtRTT > 0 {
+			s.frankfurtPingMu.Lock()
+			s.frankfurtPingRTT = frankfurtRTT
+			s.frankfurtPingMu.Unlock()
+		}
 	}
 }
 
@@ -603,8 +636,13 @@ func main() {
 				log.Printf("[DB] Successfully connected to PostgreSQL")
 				state.initDatabase()
 				state.loadFeatureSettings()
+				state.loadTelemetryCounters()
+				state.loadBlockedSteamGames()
+				state.loadSupportedGames()
+				LoadDynamicNicknameRules(state.db)
 				go state.startAnalyticsCollector()
-				go state.startBoostyGoalSyncWorker()
+				go state.startTicketAutoCloseWorker()
+				go state.startSettingsSyncWorker()
 			} else {
 				log.Printf("[DB] Warning: PostgreSQL ping failed: %v", errPing)
 			}
@@ -653,6 +691,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/notifications", state.handleNotifications)
 	publicMux.HandleFunc("/api/v1/notifications/read", state.handleNotificationRead)
 	publicMux.HandleFunc("/api/v1/admin/notifications", state.handleAdminNotifications)
+	publicMux.HandleFunc("/api/v1/admin/reload-filters", state.handleReloadFilters)
 	publicMux.HandleFunc("/api/v1/sponsors", state.handleSponsors)
 	publicMux.HandleFunc("/api/v1/progression/database", state.handleProgressionDatabase)
 	publicMux.HandleFunc("/api/v1/profile", state.handleProfile)
@@ -678,6 +717,7 @@ func main() {
 
 	publicMux.HandleFunc("/api/v1/admin/features", state.handleAdminFeatures)
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
+	publicMux.HandleFunc("/api/v1/admin/slots", state.handleAdminSettings)
 	publicMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": ServerAppVersion})
@@ -706,7 +746,14 @@ func main() {
 	publicMux.HandleFunc("/admin/routing-feedback/", state.handleAdminRoutingFeedbackWeb)
 	publicMux.HandleFunc("/api/v1/boosty-goal", state.handleGetBoostyGoal)
 	publicMux.HandleFunc("/api/v1/admin/boosty-goal", state.handleAdminBoostyGoal)
-	publicMux.HandleFunc("/api/v1/admin/boosty-goal/parse", state.handleAdminBoostyGoalParse)
+	publicMux.HandleFunc("/api/v1/community/goal", state.handleCommunityGoals)
+	publicMux.HandleFunc("/api/v1/admin/community/goal", state.handleAdminCommunityGoals)
+	publicMux.HandleFunc("/api/v1/games/catalog", state.handleGamesCatalog)
+	publicMux.HandleFunc("/api/v1/admin/games/catalog", state.handleAdminGamesCatalog)
+	publicMux.HandleFunc("/api/v1/dpi/strategies", state.handleDPIStrategies)
+	publicMux.HandleFunc("/api/v1/announcements", state.handleAnnouncements)
+	publicMux.HandleFunc("/api/v1/admin/announcements", state.handleAdminAnnouncements)
+	publicMux.HandleFunc("/api/v1/sponsors/tiers", state.handleSponsorsTiers)
 
 	loggingHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
@@ -795,10 +842,13 @@ func (s *AppState) updateDueDateFromAeza() {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
 
 	var result struct {
 		Items []struct {
@@ -812,25 +862,71 @@ func (s *AppState) updateDueDateFromAeza() {
 		} `json:"items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-		serverIP := s.getPublicIP(nil)
+		now := time.Now()
+		var minDue time.Time
+		var minDueStr string
+		var vpsDetails []VPSServerDetail
+		totalPriceRub := 0
+
 		for _, item := range result.Items {
-			if (item.IP == serverIP || (item.TypeSlug == "vps" && item.ExpiresAt != "")) && item.ExpiresAt != "" {
-				if parsed, err := time.Parse(time.RFC3339, item.ExpiresAt); err == nil {
-					s.mu.Lock()
-					s.cachedDue = parsed
-					s.cachedDueStr = item.ExpiresAt
-					priceRub := item.Price
-					if item.Price > 0 {
-						if item.Price < 500 {
-							priceRub = int(math.Round(float64(item.Price) * 1.3066667))
-						}
-						s.cachedPrice = priceRub
+			if item.TypeSlug == "vps" && item.ExpiresAt != "" {
+				parsed, err := time.Parse(time.RFC3339, item.ExpiresAt)
+				if err != nil {
+					continue
+				}
+				priceRub := item.Price
+				if item.Price > 0 {
+					if item.Price < 500 {
+						priceRub = int(math.Round(float64(item.Price) * 1.30))
 					}
-					s.mu.Unlock()
-					log.Printf("[AEZA] Updated due date from API: %s (status: %s, price: %d RUB / %d cents)", item.ExpiresAt, item.Status, s.cachedPrice, item.Price)
-					break
+				}
+				days := int(math.Max(0, parsed.Sub(now).Hours()/24.0))
+				detail := VPSServerDetail{
+					ID:        item.ID,
+					Name:      item.Name,
+					IP:        item.IP,
+					ExpiresAt: item.ExpiresAt,
+					DueDate:   parsed,
+					DaysLeft:  days,
+					PriceEur:  float64(item.Price) / 100.0,
+					PriceRub:  priceRub,
+					Status:    item.Status,
+				}
+				vpsDetails = append(vpsDetails, detail)
+				totalPriceRub += priceRub
+
+				if minDue.IsZero() || parsed.Before(minDue) {
+					minDue = parsed
+					minDueStr = item.ExpiresAt
 				}
 			}
+		}
+
+		if !minDue.IsZero() {
+			if totalPriceRub < MonthlyInfrastructureCostRub && len(vpsDetails) >= 2 {
+				totalPriceRub = MonthlyInfrastructureCostRub
+			} else if totalPriceRub == 0 {
+				totalPriceRub = MonthlyInfrastructureCostRub
+			}
+
+			realDays := int(math.Max(0, minDue.Sub(now).Hours()/24.0))
+			displayDays := realDays - SafetyBufferDays
+			if displayDays < 0 {
+				displayDays = 0
+			}
+
+			s.mu.Lock()
+			s.cachedDue = minDue
+			s.cachedDueStr = minDueStr
+			s.cachedRealDue = minDue
+			s.cachedRealDaysLeft = realDays
+			s.cachedDisplayDays = displayDays
+			s.cachedPrice = totalPriceRub
+			s.cachedVPSDetails = vpsDetails
+			s.mu.Unlock()
+
+			log.Printf("[AEZA] Dual-server billing synced: %d nodes, total %d RUB/mo, real min days: %d, display days (-%d buffer): %d, bottleneck due: %s",
+				len(vpsDetails), totalPriceRub, realDays, SafetyBufferDays, displayDays, minDueStr)
 		}
 	}
 	s.fetchAezaAccount()
@@ -859,10 +955,13 @@ func (s *AppState) fetchAezaAccountURL(apiEndpoint string) {
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
 
 	var acc struct {
 		Balance      float64 `json:"balance"`
@@ -1213,6 +1312,13 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}
 
+	s.featureMu.RLock()
+	staleSettings := time.Since(s.lastSettingsLoad) > 2*time.Second
+	s.featureMu.RUnlock()
+	if staleSettings {
+		s.loadFeatureSettings()
+	}
+
 	s.mu.RLock()
 	activeCount := len(s.sessions)
 	activeFreeCount := 0
@@ -1247,20 +1353,18 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	enCommunityGoal := s.enableCommunityGoal
 	s.featureMu.RUnlock()
 
-	daysLeft := int(time.Until(dueDate).Hours() / 24)
-	if daysLeft < 0 {
-		daysLeft = 0
+	s.mu.RLock()
+	daysLeft := s.cachedDisplayDays
+	if daysLeft == 0 && !dueDate.IsZero() {
+		realDays := int(time.Until(dueDate).Hours() / 24)
+		daysLeft = realDays - SafetyBufferDays
+		if daysLeft < 0 {
+			daysLeft = 0
+		}
 	}
+	s.mu.RUnlock()
 
-	var octoberPoolRub int64
-	if s.db != nil {
-		_ = s.db.QueryRow(`
-			SELECT COALESCE(SUM(amount_rub), 0)
-			FROM pending_donations
-			WHERE status = 'paid'
-			  AND created_at >= '2026-10-01 00:00:00+03'
-		`).Scan(&octoberPoolRub)
-	}
+	octoberPoolRub := s.getMonthPoolRub()
 
 	livePing := 27
 	if s.latencyTracker != nil {
@@ -1272,26 +1376,56 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":                  "online",
-		"location":                s.cfg.ServerLocation,
-		"ping_hint_ms":            livePing,
-		"active_sessions":         activeCount,
-		"max_sessions":            maxSessions,
-		"active_free_sessions":    activeFreeCount,
-		"free_slots_limit":        freeSlotsLimit,
-		"active_sponsor_sessions": activeSponsorCount,
-		"dedicated_sponsor_slots": dedicatedSponsor,
-		"dedicated_admin_slots":   dedicatedAdmin,
-		"server_ip":               s.getPublicIP(r),
-		"server_ports":            s.cfg.ServerPorts,
-		"due_date":                dueDateStr,
-		"days_left":               daysLeft,
-		"donate_amount_rub":       s.cfg.DonateAmountRub,
-		"enable_donate":           enDonate,
-		"enable_voting":           enVoting,
-		"enable_community_goal":   enCommunityGoal,
-		"october_pool_rub":        octoberPoolRub,
+		"status":                           "online",
+		"location":                         s.cfg.ServerLocation,
+		"ping_hint_ms":                     livePing,
+		"active_sessions":                  activeCount,
+		"max_sessions":                     maxSessions,
+		"active_free_sessions":             activeFreeCount,
+		"free_slots_limit":                 freeSlotsLimit,
+		"active_sponsor_sessions":          activeSponsorCount,
+		"dedicated_sponsor_slots":          dedicatedSponsor,
+		"dedicated_admin_slots":            dedicatedAdmin,
+		"server_ip":                        s.getPublicIP(r),
+		"server_ports":                     s.cfg.ServerPorts,
+		"due_date":                         dueDateStr,
+		"days_left":                        daysLeft,
+		"donate_amount_rub":                s.cfg.DonateAmountRub,
+		"monthly_infrastructure_cost_rub":  MonthlyInfrastructureCostRub,
+		"enable_donate":                    enDonate,
+		"enable_voting":                    enVoting,
+		"enable_community_goal":            enCommunityGoal,
+		"october_pool_rub":                 octoberPoolRub,
 	})
+}
+
+func (s *AppState) getMonthPoolRub() int64 {
+	s.cachedMonthPoolMu.RLock()
+	if time.Since(s.cachedMonthPoolTime) < 60*time.Second {
+		val := s.cachedMonthPoolRub
+		s.cachedMonthPoolMu.RUnlock()
+		return val
+	}
+	s.cachedMonthPoolMu.RUnlock()
+
+	s.cachedMonthPoolMu.Lock()
+	defer s.cachedMonthPoolMu.Unlock()
+	if time.Since(s.cachedMonthPoolTime) < 60*time.Second {
+		return s.cachedMonthPoolRub
+	}
+
+	var pool int64
+	if s.db != nil {
+		_ = s.db.QueryRow(`
+			SELECT COALESCE(SUM(amount_rub), 0)
+			FROM pending_donations
+			WHERE status = 'paid'
+			  AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+		`).Scan(&pool)
+	}
+	s.cachedMonthPoolRub = pool
+	s.cachedMonthPoolTime = time.Now()
+	return pool
 }
 
 type SessionRequest struct {
@@ -1306,10 +1440,14 @@ type SessionRequest struct {
 
 func (s *AppState) resolveRouteAndNode(r *http.Request, explicitMode string) (routeMode, connectedNode, gatewayIP string) {
 	viaMoscow := false
+	viaFrankfurt := false
 	if r != nil {
 		remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if remoteHost == "45.12.63.85" || strings.Contains(r.Header.Get("X-Forwarded-For"), "45.12.63.85") || TrustedIngressIPs[remoteHost] {
+		if remoteHost == "45.12.63.85" || strings.Contains(r.Header.Get("X-Forwarded-For"), "45.12.63.85") {
 			viaMoscow = true
+		}
+		if remoteHost == "85.192.24.254" || strings.Contains(r.Header.Get("X-Forwarded-For"), "85.192.24.254") {
+			viaFrankfurt = true
 		}
 	}
 
@@ -1317,8 +1455,10 @@ func (s *AppState) resolveRouteAndNode(r *http.Request, explicitMode string) (ro
 	if mode == "" {
 		if viaMoscow {
 			mode = "transit"
+		} else if viaFrankfurt {
+			mode = "direct_frankfurt"
 		} else {
-			mode = "direct_stockholm"
+			mode = "direct_frankfurt"
 		}
 	}
 
@@ -1327,35 +1467,47 @@ func (s *AppState) resolveRouteAndNode(r *http.Request, explicitMode string) (ro
 		stockholmIP = "138.124.103.99"
 	}
 	moscowIP := "45.12.63.85"
+	frankfurtIP := "85.192.24.254"
 
 	switch mode {
 	case "direct_moscow":
-		return "direct_moscow", "Москва Core (Прямой)", moscowIP
+		return "direct_moscow", "Москва", moscowIP
+	case "direct_frankfurt":
+		return "direct_frankfurt", "Франкфурт", frankfurtIP
 	case "direct_stockholm":
 		if viaMoscow {
-			return "transit", "Москва Ingress (Транзит)", moscowIP
+			return "transit", "Москва → Франкфурт", moscowIP
 		}
-		return "direct_stockholm", "Стокгольм Core (Прямой)", stockholmIP
+		return "direct_frankfurt", "Франкфурт", frankfurtIP
 	case "transit":
 		fallthrough
 	default:
-		return "transit", "Москва Ingress (Транзит)", moscowIP
+		return "transit", "Москва → Франкфурт", moscowIP
 	}
 }
 
 func (s *AppState) getSessionRouteMode(sess *SessionInfo) string {
 	if sess == nil {
-		return "direct_stockholm"
+		return "direct_frankfurt"
 	}
 	m := strings.TrimSpace(sess.RouteMode)
 	if m != "" {
 		return m
 	}
-	if sess.ConnectedNode == "Москва Ingress (Транзит)" || sess.GatewayIP == "45.12.63.85" ||
-		strings.HasPrefix(sess.ClientIP, "45.12.63.") || TrustedIngressIPs[sess.ClientIP] {
+	if strings.Contains(sess.ConnectedNode, "Транзит") || sess.ConnectedNode == "Москва Ingress (Транзит)" ||
+		sess.GatewayIP == "45.12.63.85" || strings.HasPrefix(sess.ClientIP, "45.12.63.") {
 		return "transit"
 	}
-	return "direct_stockholm"
+	if strings.Contains(sess.ConnectedNode, "Франкфурт") || sess.GatewayIP == "85.192.24.254" {
+		return "direct_frankfurt"
+	}
+	if strings.Contains(sess.ConnectedNode, "Москва") {
+		return "direct_moscow"
+	}
+	if strings.Contains(sess.ConnectedNode, "Стокгольм") {
+		return "direct_stockholm"
+	}
+	return "direct_frankfurt"
 }
 
 func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1502,6 +1654,22 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	freeSlotsLimit := maxSessions - dedicatedSponsor - dedicatedAdmin
 	if freeSlotsLimit < 0 {
 		freeSlotsLimit = 50
+	}
+
+	// Check if server is in maintenance / drain mode
+	s.featureMu.RLock()
+	drainActive := s.drainMode
+	s.featureMu.RUnlock()
+
+	bypassDrain := r.Header.Get("X-Admin-Bypass") == "true" || r.URL.Query().Get("bypass") == "true"
+	if drainActive && !bypassDrain {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "maintenance",
+			"message": "Шлюз находится на техобслуживании. Новые подключения временно приостановлены. Пожалуйста, повторите попытку позже.",
+		})
+		return
 	}
 
 	// Check if this device already has an active session
@@ -1924,13 +2092,108 @@ func (s *AppState) handleSessionRelease(w http.ResponseWriter, r *http.Request) 
 }
 
 // BlockedSteamGames содержит реестр AppID игр, запрещенных к добавлению в каталог голосования
-var BlockedSteamGames = map[int]string{
-	3602290: "FEMBOY FUTA HOUSE",
-}
+var (
+	blockedGamesMu      sync.RWMutex
+	dynamicBlockedGames = make(map[int]string)
+	BlockedSteamGames   = map[int]string{
+		3602290: "FEMBOY FUTA HOUSE",
+	}
+
+	supportedGamesMu      sync.RWMutex
+	dynamicSupportedGames = make(map[int]string)
+	SupportedSteamGames   = map[int]string{
+		1867240: "WARDOGS",
+		1808500: "ARC Raiders",
+		2016590: "Dark and Darker",
+	}
+)
 
 func isBlockedSteamGame(appID int) bool {
-	_, blocked := BlockedSteamGames[appID]
+	blockedGamesMu.RLock()
+	_, blocked := dynamicBlockedGames[appID]
+	if blocked {
+		blockedGamesMu.RUnlock()
+		return true
+	}
+	_, blocked = BlockedSteamGames[appID]
+	blockedGamesMu.RUnlock()
 	return blocked
+}
+
+func (s *AppState) loadBlockedSteamGames() {
+	if s.db == nil {
+		return
+	}
+	rows, err := s.db.Query("SELECT steam_app_id, title FROM forbidden_steam_games")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	newMap := make(map[int]string)
+	for rows.Next() {
+		var id int
+		var title string
+		if err := rows.Scan(&id, &title); err == nil {
+			newMap[id] = title
+		}
+	}
+	blockedGamesMu.Lock()
+	dynamicBlockedGames = newMap
+	blockedGamesMu.Unlock()
+}
+
+func (s *AppState) isSupportedSteamGame(appID int, titles ...string) (bool, string) {
+	supportedGamesMu.RLock()
+	defer supportedGamesMu.RUnlock()
+
+	if title, ok := dynamicSupportedGames[appID]; ok {
+		return true, title
+	}
+	if title, ok := SupportedSteamGames[appID]; ok {
+		return true, title
+	}
+
+	for _, t := range titles {
+		cleanT := strings.ToLower(strings.TrimSpace(t))
+		if cleanT == "" {
+			continue
+		}
+		for _, name := range dynamicSupportedGames {
+			if strings.ToLower(strings.TrimSpace(name)) == cleanT {
+				return true, name
+			}
+		}
+		for _, name := range SupportedSteamGames {
+			if strings.ToLower(strings.TrimSpace(name)) == cleanT {
+				return true, name
+			}
+		}
+	}
+	return false, ""
+}
+
+func (s *AppState) loadSupportedGames() {
+	if s.db == nil {
+		return
+	}
+	rows, err := s.db.Query("SELECT steam_app_id, title FROM supported_games")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	newMap := make(map[int]string)
+	for rows.Next() {
+		var id int
+		var title string
+		if err := rows.Scan(&id, &title); err == nil {
+			newMap[id] = title
+		}
+	}
+	supportedGamesMu.Lock()
+	dynamicSupportedGames = newMap
+	supportedGamesMu.Unlock()
 }
 
 type GameSuggestionItem struct {
@@ -1946,17 +2209,16 @@ type GameSuggestionItem struct {
 func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if s.db == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   "База данных временно недоступна",
-		})
-		return
-	}
-
 	switch r.Method {
 	case http.MethodGet:
+		if s.db == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "База данных временно недоступна",
+			})
+			return
+		}
 		deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
 		accountNumber := strings.TrimSpace(r.URL.Query().Get("account_number"))
 		hashedDevID := hashDeviceID(deviceID)
@@ -2004,7 +2266,7 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			var g GameSuggestionItem
 			var icon sql.NullString
 			if err := rows.Scan(&g.SteamAppID, &g.Title, &icon, &g.VotesCount, &g.Status, &g.CreatedAt); err == nil {
-				if isBlockedSteamGame(g.SteamAppID) {
+				if isSupported, _ := s.isSupportedSteamGame(g.SteamAppID, g.Title); isSupported || isBlockedSteamGame(g.SteamAppID) {
 					continue
 				}
 				g.IconURL = icon.String
@@ -2122,12 +2384,12 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Reject officially supported games (WARDOGS is already built into WarLink)
-		if req.SteamAppID == 1867240 || strings.EqualFold(strings.TrimSpace(req.Title), "wardogs") {
+		// Reject officially supported games (WARDOGS, ARC Raiders, Dark and Darker, etc.)
+		if isSupported, supTitle := s.isSupportedSteamGame(req.SteamAppID, req.Title); isSupported {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
-				"error":   "Игра WARDOGS уже официально поддерживается в WarLink!",
+				"error":   fmt.Sprintf("Игра «%s» уже официально поддерживается в WarLink!", supTitle),
 			})
 			return
 		}
@@ -2138,6 +2400,15 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": false,
 				"error":   "Данная игра внесена в список запрещенных к добавлению в голосование.",
+			})
+			return
+		}
+
+		if s.db == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "База данных временно недоступна",
 			})
 			return
 		}
@@ -2320,6 +2591,14 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		req.DeviceID = strings.TrimSpace(req.DeviceID)
 		req.AccountNumber = strings.TrimSpace(req.AccountNumber)
 		hashedDevID := hashDeviceID(req.DeviceID)
+		if s.db == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "База данных временно недоступна",
+			})
+			return
+		}
 
 		tx, err := s.db.Begin()
 		if err != nil {
@@ -2629,8 +2908,14 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var activeProfiles []aclgen.Profile
+	normTarget := strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(targetGame), "_", ""), "-", "")
+	normBase := strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(baseGame), "_", ""), "-", "")
 	for _, p := range profiles {
-		if strings.EqualFold(p.ID, targetGame) || strings.EqualFold(p.Name, targetGame) ||
+		normPID := strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(p.ID), "_", ""), "-", "")
+		normPName := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(p.Name), "_", ""), "-", ""), " ", "")
+		if normPID == normTarget || normPName == normTarget ||
+			normPID == normBase || normPName == normBase ||
+			strings.EqualFold(p.ID, targetGame) || strings.EqualFold(p.Name, targetGame) ||
 			strings.EqualFold(p.ID, baseGame) || strings.EqualFold(p.Name, baseGame) ||
 			p.ID == "socials" || p.ID == "wardogs" {
 			activeProfiles = append(activeProfiles, p)
@@ -2760,14 +3045,18 @@ func resolveSteamStoreIcon(appID int) string {
 	if err == nil {
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 		req.Header.Set("Cookie", "wants_mature_content=1; birthtime=568022401")
-		if resp, err := client.Do(req); err == nil && resp.StatusCode == http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			re := regexp.MustCompile(`<div[^>]*class="apphub_AppIcon"[^>]*>\s*<img[^>]*src="([^"]+)"`)
-			if m := re.FindSubmatch(body); len(m) > 1 {
-				icon := string(m[1])
-				icon = strings.Replace(icon, "http://", "https://", 1)
-				return icon
+		if resp, err := client.Do(req); err == nil {
+			if resp.StatusCode == http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				re := regexp.MustCompile(`<div[^>]*class="apphub_AppIcon"[^>]*>\s*<img[^>]*src="([^"]+)"`)
+				if m := re.FindSubmatch(body); len(m) > 1 {
+					icon := string(m[1])
+					icon = strings.Replace(icon, "http://", "https://", 1)
+					return icon
+				}
+			} else {
+				_ = resp.Body.Close()
 			}
 		}
 	}
@@ -3180,10 +3469,6 @@ func (s *AppState) recordConnectionHistoryAsync(accountNumber, deviceID, clientI
 	}()
 }
 
-func (s *AppState) recordDeviceActivityAsync(deviceID, clientIP string) {
-	s.recordConnectionHistoryAsync("", deviceID, clientIP, "", "transit", "Москва Ingress (Транзит)", "45.12.63.85")
-}
-
 func (s *AppState) initRedis(addr string) {
 	s.rdb = redis.NewClient(&redis.Options{
 		Addr: addr,
@@ -3273,12 +3558,45 @@ func (s *AppState) deleteSessionFromRedis(token, deviceID string) {
 }
 
 func (s *AppState) loadFeatureSettings() {
-	s.featureMu.Lock()
-	s.enableDonate = true
-	s.enableVoting = true
-	s.featureMu.Unlock()
-
 	if s.db == nil {
+		return
+	}
+
+	var (
+		drainMode           bool
+		maxSessions         int
+		dedicatedSponsor    int
+		donateAmountRub     int
+		enableDonate        bool
+		enableVoting        bool
+		enableCommunityGoal bool
+	)
+	err := s.db.QueryRow(`
+		SELECT drain_mode, max_sessions, dedicated_sponsor_slots, donate_amount_rub, 
+		       enable_donate, enable_voting, enable_community_goal 
+		FROM server_config WHERE id = 1
+	`).Scan(&drainMode, &maxSessions, &dedicatedSponsor, &donateAmountRub, 
+	        &enableDonate, &enableVoting, &enableCommunityGoal)
+	if err == nil {
+		s.featureMu.Lock()
+		s.drainMode = drainMode
+		s.enableDonate = enableDonate
+		s.enableVoting = enableVoting
+		s.enableCommunityGoal = enableCommunityGoal
+		s.lastSettingsLoad = time.Now()
+		s.featureMu.Unlock()
+
+		s.mu.Lock()
+		if maxSessions > 0 {
+			s.cfg.MaxSessions = maxSessions
+		}
+		if dedicatedSponsor >= 0 {
+			s.cfg.DedicatedSponsorSlots = dedicatedSponsor
+		}
+		if donateAmountRub > 0 {
+			s.cfg.DonateAmountRub = donateAmountRub
+		}
+		s.mu.Unlock()
 		return
 	}
 
@@ -3290,6 +3608,7 @@ func (s *AppState) loadFeatureSettings() {
 	defer rows.Close()
 
 	s.featureMu.Lock()
+	s.lastSettingsLoad = time.Now()
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err == nil {
@@ -3300,6 +3619,8 @@ func (s *AppState) loadFeatureSettings() {
 				s.enableVoting = (v == "true" || v == "1")
 			case "enable_community_goal":
 				s.enableCommunityGoal = (v == "true" || v == "1")
+			case "drain_mode":
+				s.drainMode = (v == "true" || v == "1")
 			case "donate_amount_rub":
 				if amt, err := strconv.Atoi(v); err == nil && amt > 0 {
 					s.mu.Lock()
@@ -3322,8 +3643,26 @@ func (s *AppState) loadFeatureSettings() {
 		}
 	}
 	s.featureMu.Unlock()
+}
 
-	// Load persistent telemetry counters
+func (s *AppState) startSettingsSyncWorker() {
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if s.db != nil {
+				s.loadFeatureSettings()
+				s.loadSupportedGames()
+				s.loadBlockedSteamGames()
+			}
+		}
+	}()
+}
+
+func (s *AppState) loadTelemetryCounters() {
+	if s.db == nil {
+		return
+	}
 	cntRows, err := s.db.Query("SELECT name, value FROM telemetry_counters")
 	if err == nil {
 		defer cntRows.Close()
@@ -3356,19 +3695,13 @@ func (s *AppState) loadFeatureSettings() {
 			}
 		}
 	}
-
-	s.mu.RLock()
-	dRub := s.cfg.DonateAmountRub
-	mSess := s.cfg.MaxSessions
-	s.mu.RUnlock()
-	log.Printf("[SETTINGS] Loaded live settings: Donate=%v, Voting=%v, DonateAmt=%d, MaxSessions=%d",
-		s.enableDonate, s.enableVoting, dRub, mSess)
 }
 
 type AdminFeaturesPayload struct {
 	EnableDonate        *bool `json:"enable_donate"`
 	EnableVoting        *bool `json:"enable_voting"`
 	EnableCommunityGoal *bool `json:"enable_community_goal"`
+	DrainMode           *bool `json:"drain_mode"`
 }
 
 func (s *AppState) checkAdminAuth(r *http.Request) bool {
@@ -3423,6 +3756,7 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 		enDonate := s.enableDonate
 		enVoting := s.enableVoting
 		enCommunityGoal := s.enableCommunityGoal
+		drMode := s.drainMode
 		s.featureMu.RUnlock()
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -3430,6 +3764,7 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 			"enable_donate":         enDonate,
 			"enable_voting":         enVoting,
 			"enable_community_goal": enCommunityGoal,
+			"drain_mode":            drMode,
 		})
 
 	case http.MethodPost:
@@ -3450,9 +3785,13 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 		if req.EnableCommunityGoal != nil {
 			s.enableCommunityGoal = *req.EnableCommunityGoal
 		}
+		if req.DrainMode != nil {
+			s.drainMode = *req.DrainMode
+		}
 		currentDonate := s.enableDonate
 		currentVoting := s.enableVoting
 		currentGoal := s.enableCommunityGoal
+		currentDrain := s.drainMode
 		s.featureMu.Unlock()
 
 		if s.db != nil {
@@ -3489,15 +3828,27 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 				`, val)
 			}
+			if req.DrainMode != nil {
+				val := "false"
+				if *req.DrainMode {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value)
+					VALUES ('drain_mode', $1)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, val)
+			}
 		}
 
-		log.Printf("[ADMIN] Dynamic feature toggles updated: Donate=%v, Voting=%v, CommunityGoal=%v", currentDonate, currentVoting, currentGoal)
+		log.Printf("[ADMIN] Dynamic feature toggles updated: Donate=%v, Voting=%v, CommunityGoal=%v, DrainMode=%v", currentDonate, currentVoting, currentGoal, currentDrain)
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":               true,
 			"enable_donate":         currentDonate,
 			"enable_voting":         currentVoting,
 			"enable_community_goal": currentGoal,
+			"drain_mode":            currentDrain,
 		})
 
 	default:
@@ -3509,6 +3860,7 @@ type AdminSettingsPayload struct {
 	EnableDonate          *bool   `json:"enable_donate,omitempty"`
 	EnableVoting          *bool   `json:"enable_voting,omitempty"`
 	EnableCommunityGoal   *bool   `json:"enable_community_goal,omitempty"`
+	DrainMode             *bool   `json:"drain_mode,omitempty"`
 	DonateAmountRub       *int    `json:"donate_amount_rub,omitempty"`
 	MaxSessions           *int    `json:"max_sessions,omitempty"`
 	DedicatedSponsorSlots *int    `json:"dedicated_sponsor_slots,omitempty"`
@@ -3542,6 +3894,7 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		enDonate := s.enableDonate
 		enVoting := s.enableVoting
 		enCommunityGoal := s.enableCommunityGoal
+		drMode := s.drainMode
 		s.featureMu.RUnlock()
 
 		s.mu.RLock()
@@ -3584,6 +3937,7 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			"enable_donate":           enDonate,
 			"enable_voting":           enVoting,
 			"enable_community_goal":   enCommunityGoal,
+			"drain_mode":              drMode,
 			"donate_amount_rub":       donateAmt,
 			"max_sessions":            maxSess,
 			"dedicated_sponsor_slots": dedicatedSponsor,
@@ -3648,6 +4002,20 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 				}
 				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('enable_community_goal', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
 			}
+		}
+
+		if req.DrainMode != nil {
+			s.featureMu.Lock()
+			s.drainMode = *req.DrainMode
+			s.featureMu.Unlock()
+			if s.db != nil {
+				val := "false"
+				if *req.DrainMode {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('drain_mode', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+			}
+			log.Printf("[SETTINGS] DrainMode set to %v by admin", *req.DrainMode)
 		}
 
 		if req.DonateAmountRub != nil && *req.DonateAmountRub > 0 {
@@ -3721,6 +4089,7 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		enDonate := s.enableDonate
 		enVoting := s.enableVoting
 		enCommunityGoal := s.enableCommunityGoal
+		drMode := s.drainMode
 		s.featureMu.RUnlock()
 
 		s.mu.RLock()
@@ -3752,14 +4121,15 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.RUnlock()
 
-		log.Printf("[ADMIN] Settings updated live: Donate=%v, Voting=%v, CommunityGoal=%v, MaxSessions=%d, DedicatedSponsorSlots=%d, FreeSlotsLimit=%d",
-			enDonate, enVoting, enCommunityGoal, maxSess, dedicatedSponsor, freeSlotsLimit)
+		log.Printf("[ADMIN] Settings updated live: Donate=%v, Voting=%v, CommunityGoal=%v, DrainMode=%v, MaxSessions=%d, DedicatedSponsorSlots=%d, FreeSlotsLimit=%d",
+			enDonate, enVoting, enCommunityGoal, drMode, maxSess, dedicatedSponsor, freeSlotsLimit)
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":                 true,
 			"enable_donate":           enDonate,
 			"enable_voting":           enVoting,
 			"enable_community_goal":   enCommunityGoal,
+			"drain_mode":              drMode,
 			"donate_amount_rub":       donateAmt,
 			"max_sessions":            maxSess,
 			"dedicated_sponsor_slots": dedicatedSponsor,
@@ -3839,6 +4209,10 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if s.enableCommunityGoal {
 		enCommunityGoal = 1
 	}
+	drMode := 0
+	if s.drainMode {
+		drMode = 1
+	}
 	s.featureMu.RUnlock()
 
 	var totalVotes, gamesVoting, gamesGraduated int
@@ -3876,6 +4250,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sessionsByRouteMode := map[string]int{
 		"transit":          0,
 		"direct_moscow":    0,
+		"direct_frankfurt": 0,
 		"direct_stockholm": 0,
 	}
 	geoCounts := make(map[GeoInfo]int)
@@ -3935,7 +4310,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var sb strings.Builder
 	sb.WriteString("# HELP warlink_active_sessions Active game sessions by server\n")
 	sb.WriteString("# TYPE warlink_active_sessions gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_active_sessions{server=\"stockholm\"} %d\n", sessionsByRouteMode["direct_stockholm"]))
+	sb.WriteString(fmt.Sprintf("warlink_active_sessions{server=\"frankfurt\"} %d\n", sessionsByRouteMode["direct_frankfurt"]+sessionsByRouteMode["direct_stockholm"]))
 	sb.WriteString(fmt.Sprintf("warlink_active_sessions{server=\"moscow\"} %d\n\n", sessionsByRouteMode["transit"]+sessionsByRouteMode["direct_moscow"]))
 
 	sb.WriteString("# HELP warlink_active_sessions_total Total active game sessions cluster-wide\n")
@@ -3999,14 +4374,14 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_server_version gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_version{version=\"%s\"} 1\n\n", ServerAppVersion))
 
-	clusterBudgetEur := 10
-	clusterBudgetRub := 1300
-	stockholmCostEur := 2
-	stockholmCostRub := 260
-	frankfurtCostEur := 6
-	frankfurtCostRub := 780
-	reserveCostEur := 2
-	reserveCostRub := 260
+	clusterBudgetEur := 13
+	clusterBudgetRub := MonthlyInfrastructureCostRub
+	stockholmCostEur := 4
+	stockholmCostRub := 385
+	moscowCostEur := 5
+	moscowCostRub := 528
+	frankfurtCostEur := 5
+	frankfurtCostRub := 528
 
 	sb.WriteString("# HELP warlink_cluster_budget_eur Monthly cluster maintenance budget in EUR\n")
 	sb.WriteString("# TYPE warlink_cluster_budget_eur gauge\n")
@@ -4020,6 +4395,18 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_stockholm_cost_eur gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_stockholm_cost_eur %d\n\n", stockholmCostEur))
 
+	sb.WriteString("# HELP warlink_stockholm_cost_rub Stockholm node monthly cost in RUB\n")
+	sb.WriteString("# TYPE warlink_stockholm_cost_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_stockholm_cost_rub %d\n\n", stockholmCostRub))
+
+	sb.WriteString("# HELP warlink_moscow_cost_eur Moscow node monthly cost in EUR\n")
+	sb.WriteString("# TYPE warlink_moscow_cost_eur gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_moscow_cost_eur %d\n\n", moscowCostEur))
+
+	sb.WriteString("# HELP warlink_moscow_cost_rub Moscow node monthly cost in RUB\n")
+	sb.WriteString("# TYPE warlink_moscow_cost_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_moscow_cost_rub %d\n\n", moscowCostRub))
+
 	sb.WriteString("# HELP warlink_frankfurt_cost_eur Frankfurt node monthly cost in EUR\n")
 	sb.WriteString("# TYPE warlink_frankfurt_cost_eur gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_frankfurt_cost_eur %d\n\n", frankfurtCostEur))
@@ -4027,14 +4414,6 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_frankfurt_cost_rub Frankfurt node monthly cost in RUB\n")
 	sb.WriteString("# TYPE warlink_frankfurt_cost_rub gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_frankfurt_cost_rub %d\n\n", frankfurtCostRub))
-
-	sb.WriteString("# HELP warlink_reserve_cost_eur Cluster reserve monthly cost in EUR\n")
-	sb.WriteString("# TYPE warlink_reserve_cost_eur gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_reserve_cost_eur %d\n\n", reserveCostEur))
-
-	sb.WriteString("# HELP warlink_reserve_cost_rub Cluster reserve monthly cost in RUB\n")
-	sb.WriteString("# TYPE warlink_reserve_cost_rub gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_reserve_cost_rub %d\n\n", reserveCostRub))
 
 	stockholmDailyPrice := float64(stockholmCostRub) / 30.0
 	prepaidStockholmRub := float64(daysLeft) * stockholmDailyPrice
@@ -4047,7 +4426,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	clusterDailyPrice := float64(clusterBudgetRub) / 30.0
 	totalRunwayDays := totalAvailableRub / clusterDailyPrice
 
-	sb.WriteString("# HELP warlink_server_runway_days Total days of cluster runway at 10 EUR / mo\n")
+	sb.WriteString("# HELP warlink_server_runway_days Total days of cluster runway at 13 EUR / mo\n")
 	sb.WriteString("# TYPE warlink_server_runway_days gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_runway_days %.1f\n\n", totalRunwayDays))
 
@@ -4070,11 +4449,11 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_server_coverage_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_coverage_percent %.1f\n\n", clusterCoveragePercent))
 
-	sb.WriteString("# HELP warlink_cluster_coverage_percent Financial cluster coverage percentage (10 EUR target)\n")
+	sb.WriteString("# HELP warlink_cluster_coverage_percent Financial cluster coverage percentage (13 EUR target)\n")
 	sb.WriteString("# TYPE warlink_cluster_coverage_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_cluster_coverage_percent %.1f\n\n", clusterCoveragePercent))
 
-	sb.WriteString("# HELP warlink_donations_goal_percent Community donations progress towards 10 EUR target\n")
+	sb.WriteString("# HELP warlink_donations_goal_percent Community donations progress towards 13 EUR target\n")
 	sb.WriteString("# TYPE warlink_donations_goal_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_donations_goal_percent %.1f\n\n", donationsGoalPercent))
 
@@ -4144,7 +4523,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_client_version_online Connected active clients broken down by version\n")
 	sb.WriteString("# TYPE warlink_client_version_online gauge\n")
 	if len(clientVersions) == 0 {
-		sb.WriteString("warlink_client_version_online{version=\"v2.1.13\"} 0\n\n")
+		sb.WriteString("warlink_client_version_online{version=\"v2.2.0\"} 0\n\n")
 	} else {
 		for v, cnt := range clientVersions {
 			sb.WriteString(fmt.Sprintf("warlink_client_version_online{version=\"%s\"} %d\n", v, cnt))
@@ -4163,6 +4542,10 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_enable_community_goal Community goal progress display feature toggle\n")
 	sb.WriteString("# TYPE warlink_enable_community_goal gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_enable_community_goal %d\n\n", enCommunityGoal))
+
+	sb.WriteString("# HELP warlink_drain_mode Maintenance connection drain mode flag\n")
+	sb.WriteString("# TYPE warlink_drain_mode gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_drain_mode %d\n\n", drMode))
 
 	sb.WriteString("# HELP warlink_total_votes Total community votes cast\n")
 	sb.WriteString("# TYPE warlink_total_votes gauge\n")
@@ -4269,9 +4652,17 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			moscowPing = 27.1
 		}
 
+		s.frankfurtPingMu.RLock()
+		frankfurtPing := s.frankfurtPingRTT
+		s.frankfurtPingMu.RUnlock()
+		if frankfurtPing <= 0 {
+			frankfurtPing = 18.5
+		}
+
 		sb.WriteString("# HELP warlink_node_ping_ms Inter-node network latency between Stockholm and edge nodes\n")
 		sb.WriteString("# TYPE warlink_node_ping_ms gauge\n")
 		sb.WriteString(fmt.Sprintf("warlink_node_ping_ms{server=\"stockholm\"} %.2f\n", live.GatewayPingMs))
+		sb.WriteString(fmt.Sprintf("warlink_node_ping_ms{server=\"frankfurt\"} %.2f\n", frankfurtPing))
 		sb.WriteString(fmt.Sprintf("warlink_node_ping_ms{server=\"moscow\"} %.2f\n\n", moscowPing))
 
 		sb.WriteString("# HELP warlink_player_ping_ms Average player latency by route mode and macro-region\n")
@@ -4297,9 +4688,12 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 		transitCount := 0
 		directStockholmCount := 0
+		directFrankfurtCount := 0
 		directMoscowCount := 0
 		for _, sess := range s.sessions {
 			switch s.getSessionRouteMode(sess) {
+			case "direct_frankfurt":
+				directFrankfurtCount++
 			case "direct_stockholm":
 				directStockholmCount++
 			case "direct_moscow":
@@ -4312,28 +4706,12 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("# HELP warlink_active_sessions_by_route Active player sessions broken down by routing mode\n")
 		sb.WriteString("# TYPE warlink_active_sessions_by_route gauge\n")
 		sb.WriteString(fmt.Sprintf("warlink_active_sessions_by_route{route_mode=\"transit\"} %d\n", transitCount))
+		sb.WriteString(fmt.Sprintf("warlink_active_sessions_by_route{route_mode=\"direct_frankfurt\"} %d\n", directFrankfurtCount))
 		sb.WriteString(fmt.Sprintf("warlink_active_sessions_by_route{route_mode=\"direct_stockholm\"} %d\n", directStockholmCount))
 		sb.WriteString(fmt.Sprintf("warlink_active_sessions_by_route{route_mode=\"direct_moscow\"} %d\n\n", directMoscowCount))
 	}
 
-	// Scrape Hysteria 2 trafficStats from Stockholm (127.0.0.1:9090/traffic)
-	var stkTx, stkRx uint64
-	stkUsers := 0
 	hyClient := &http.Client{Timeout: 600 * time.Millisecond}
-	if hyResp, err := hyClient.Get("http://127.0.0.1:9090/traffic"); err == nil {
-		var hyData map[string]struct {
-			Tx uint64 `json:"tx"`
-			Rx uint64 `json:"rx"`
-		}
-		if err := json.NewDecoder(hyResp.Body).Decode(&hyData); err == nil {
-			stkUsers = len(hyData)
-			for _, v := range hyData {
-				stkTx += v.Tx
-				stkRx += v.Rx
-			}
-		}
-		hyResp.Body.Close()
-	}
 
 	// Scrape Hysteria 2 trafficStats from Moscow (45.12.63.85/status/traffic)
 	var mskTx, mskRx uint64
@@ -4353,24 +4731,42 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		mskResp.Body.Close()
 	}
 
+	// Scrape Hysteria 2 trafficStats from Frankfurt (85.192.24.254/status/traffic)
+	var fraTx, fraRx uint64
+	fraUsers := 0
+	if fraResp, err := hyClient.Get("http://85.192.24.254/status/traffic"); err == nil {
+		var fraData map[string]struct {
+			Tx uint64 `json:"tx"`
+			Rx uint64 `json:"rx"`
+		}
+		if err := json.NewDecoder(fraResp.Body).Decode(&fraData); err == nil {
+			fraUsers = len(fraData)
+			for _, v := range fraData {
+				fraTx += v.Tx
+				fraRx += v.Rx
+			}
+		}
+		fraResp.Body.Close()
+	}
+
 	sb.WriteString("# HELP hysteria_online_users Number of online Hysteria users by server\n")
 	sb.WriteString("# TYPE hysteria_online_users gauge\n")
-	sb.WriteString(fmt.Sprintf("hysteria_online_users{server=\"stockholm\"} %d\n", sessionsByRouteMode["direct_stockholm"]))
+	sb.WriteString(fmt.Sprintf("hysteria_online_users{server=\"frankfurt\"} %d\n", sessionsByRouteMode["direct_frankfurt"]+sessionsByRouteMode["direct_stockholm"]))
 	sb.WriteString(fmt.Sprintf("hysteria_online_users{server=\"moscow\"} %d\n\n", sessionsByRouteMode["transit"]+sessionsByRouteMode["direct_moscow"]))
 
 	sb.WriteString("# HELP hysteria_tokens_in_memory_total Cumulative authentication tokens in Hysteria daemon memory\n")
 	sb.WriteString("# TYPE hysteria_tokens_in_memory_total gauge\n")
-	sb.WriteString(fmt.Sprintf("hysteria_tokens_in_memory_total{server=\"stockholm\"} %d\n", stkUsers))
+	sb.WriteString(fmt.Sprintf("hysteria_tokens_in_memory_total{server=\"frankfurt\"} %d\n", fraUsers))
 	sb.WriteString(fmt.Sprintf("hysteria_tokens_in_memory_total{server=\"moscow\"} %d\n\n", mskUsers))
 
 	sb.WriteString("# HELP hysteria_traffic_tx_bytes_total Total bytes sent through Hysteria\n")
 	sb.WriteString("# TYPE hysteria_traffic_tx_bytes_total counter\n")
-	sb.WriteString(fmt.Sprintf("hysteria_traffic_tx_bytes_total{server=\"stockholm\"} %d\n", stkTx))
+	sb.WriteString(fmt.Sprintf("hysteria_traffic_tx_bytes_total{server=\"frankfurt\"} %d\n", fraTx))
 	sb.WriteString(fmt.Sprintf("hysteria_traffic_tx_bytes_total{server=\"moscow\"} %d\n\n", mskTx))
 
 	sb.WriteString("# HELP hysteria_traffic_rx_bytes_total Total bytes received through Hysteria\n")
 	sb.WriteString("# TYPE hysteria_traffic_rx_bytes_total counter\n")
-	sb.WriteString(fmt.Sprintf("hysteria_traffic_rx_bytes_total{server=\"stockholm\"} %d\n", stkRx))
+	sb.WriteString(fmt.Sprintf("hysteria_traffic_rx_bytes_total{server=\"frankfurt\"} %d\n", fraRx))
 	sb.WriteString(fmt.Sprintf("hysteria_traffic_rx_bytes_total{server=\"moscow\"} %d\n\n", mskRx))
 
 	// Client background telemetry beacon metrics
@@ -4727,39 +5123,12 @@ func (s *AppState) startAnalyticsCollector() {
 					log.Printf("[ANALYTICS] Error saving load snapshot: %v", err)
 				}
 
-				// Auto-record active player telemetry into routing_feedback for automated QoS tracking
-				s.mu.RLock()
-				activeSessList := make([]*SessionInfo, 0, len(s.sessions))
-				for _, sess := range s.sessions {
-					if time.Now().Before(sess.ExpiresAt) {
-						activeSessList = append(activeSessList, sess)
-					}
-				}
-				s.mu.RUnlock()
-
-				for _, sess := range activeSessList {
-					m := sess.RouteMode
-					if m == "" {
-						m = "transit"
-					}
-					ping := 27
-					if m == "transit" {
-						ping = 26
-					} else {
-						ping = 39
-					}
-					telemJSON := `{"auto_telemetry": true, "packet_loss": 0.0, "jitter": 0.8}`
-					_, _ = s.db.Exec(`
-						INSERT INTO routing_feedback (
-							account_number, device_id, app_version, route_mode, status,
-							in_game_ping, match_quality, discord_status, user_comment, client_ip, telemetry_data, created_at
-						) VALUES ($1, $2, $3, $4, 'works_great', $5, 'optimal', 'online', 'Автоматическая телеметрия сетевого маршрута', $6, $7, NOW())
-					`, sess.AccountNumber, sess.DeviceID, sess.ClientVersion, m, ping, sess.ClientIP, telemJSON)
-				}
 			}
 		case <-cleanTicker.C:
 			if s.db != nil {
 				_, _ = s.db.Exec("DELETE FROM server_load_history WHERE recorded_at < NOW() - INTERVAL '90 days'")
+				_, _ = s.db.Exec("DELETE FROM routing_feedback WHERE created_at < NOW() - INTERVAL '30 days'")
+				_, _ = s.db.Exec("DELETE FROM routing_telemetry_auto WHERE created_at < NOW() - INTERVAL '30 days'")
 			}
 		}
 	}
@@ -5016,38 +5385,49 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		gwIP := sess.GatewayIP
 		if cNode == "" || gwIP == "" {
 			if rMode == "transit" {
-				cNode = "Москва Ingress (Транзит)"
+				cNode = "Москва → Франкфурт"
 				gwIP = "45.12.63.85"
 			} else if rMode == "direct_moscow" {
-				cNode = "Москва Core (Прямой)"
+				cNode = "Москва"
 				gwIP = "45.12.63.85"
-			} else {
-				cNode = "Стокгольм Core (Прямой)"
+			} else if rMode == "direct_stockholm" {
+				cNode = "Стокгольм"
 				gwIP = "138.124.103.99"
+			} else {
+				cNode = "Франкфурт"
+				gwIP = "85.192.24.254"
 			}
 		}
-		routeBadge := "Москва -> Стокгольм"
+		routeBadge := "Москва → Франкфурт"
 		switch rMode {
+		case "direct_frankfurt":
+			routeBadge = "Франкфурт"
+			if cNode == "" {
+				cNode = "Франкфурт"
+			}
+			if gwIP == "" {
+				gwIP = "85.192.24.254"
+			}
 		case "direct_stockholm":
-			routeBadge = "Стокгольм Core"
-			if cNode == "" || cNode == "stockholm_core" {
-				cNode = "Стокгольм Core (Прямой)"
+			routeBadge = "Стокгольм"
+			if cNode == "" {
+				cNode = "Стокгольм"
 			}
 			if gwIP == "" {
 				gwIP = "138.124.103.99"
 			}
 		case "direct_moscow":
-			routeBadge = "Москва Core"
-			if cNode == "" || cNode == "moscow_core" {
-				cNode = "Москва Core (Прямой)"
+			routeBadge = "Москва"
+			if cNode == "" {
+				cNode = "Москва"
 			}
 			if gwIP == "" {
 				gwIP = "45.12.63.85"
 			}
 		default:
-			routeBadge = "Москва -> Стокгольм"
-			if cNode == "" || cNode == "moscow_ingress" {
-				cNode = "Москва Ingress (Транзит)"
+			routeBadge = "Москва → Франкфурт"
+			if cNode == "" {
+				cNode = "Москва → Франкфурт"
 			}
 			if gwIP == "" {
 				gwIP = "45.12.63.85"
@@ -5160,7 +5540,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			DirectPingMs:     39.8,
 			GainMs:           13.3,
 			PacketLossPct:    0.0,
-			RecommendedRoute: "Москва -> Стокгольм",
+			RecommendedRoute: "Москва -> Франкфурт",
 		},
 		{
 			Region:           "Северо-Западный регион",
@@ -5169,7 +5549,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			DirectPingMs:     25.4,
 			GainMs:           -7.8,
 			PacketLossPct:    0.0,
-			RecommendedRoute: "Стокгольм Core",
+			RecommendedRoute: "Франкфурт Edge",
 		},
 		{
 			Region:           "Поволжский регион",
@@ -5178,7 +5558,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			DirectPingMs:     54.6,
 			GainMs:           17.5,
 			PacketLossPct:    0.0,
-			RecommendedRoute: "Москва -> Стокгольм",
+			RecommendedRoute: "Москва -> Франкфурт",
 		},
 		{
 			Region:           "Южный регион и Кавказ",
@@ -5187,7 +5567,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			DirectPingMs:     68.3,
 			GainMs:           25.9,
 			PacketLossPct:    0.0,
-			RecommendedRoute: "Москва -> Стокгольм",
+			RecommendedRoute: "Москва -> Франкфурт",
 		},
 		{
 			Region:           "Уральский регион",
@@ -5196,7 +5576,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			DirectPingMs:     81.2,
 			GainMs:           31.4,
 			PacketLossPct:    0.0,
-			RecommendedRoute: "Москва -> Стокгольм",
+			RecommendedRoute: "Москва -> Франкфурт",
 		},
 		{
 			Region:           "Сибирь и Дальний Восток",
@@ -5205,7 +5585,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			DirectPingMs:     108.4,
 			GainMs:           36.9,
 			PacketLossPct:    0.0,
-			RecommendedRoute: "Москва -> Стокгольм",
+			RecommendedRoute: "Москва -> Франкфурт",
 		},
 	}
 
@@ -6053,6 +6433,7 @@ func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sponsors := make([]SponsorCard, 0)
+	usedCallsigns := make(map[string]bool)
 	for rows.Next() {
 		var sp SponsorCard
 		sp.Donations = make([]DonationItem, 0)
@@ -6085,11 +6466,12 @@ func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 			if sp.HideDonationAmount {
 				sp.TotalDonated = 0
 			}
-			if nick.Valid && nick.String != "" && !strings.Contains(nick.String, "-****-") && !strings.Contains(nick.String, "****") {
+			if nick.Valid && nick.String != "" && !strings.Contains(nick.String, "-****-") && !strings.Contains(nick.String, "****") && !config.IsOldTwoWordNobelCallsign(nick.String) {
 				sp.Nickname = nick.String
 			} else {
-				sp.Nickname = config.GenerateDeterministicNobelCallsign(rawAccountNumber)
+				sp.Nickname = config.GenerateUniqueNobelCallsign(rawAccountNumber, usedCallsigns)
 			}
+			usedCallsigns[sp.Nickname] = true
 			if av.Valid {
 				sp.AvatarURL = av.String
 			}
@@ -6106,10 +6488,6 @@ func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_ = json.NewEncoder(w).Encode(sponsors)
-}
-
-func validateServerNickname(nick string) error {
-	return FastValidateNickname(nick)
 }
 
 func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
@@ -6795,1090 +7173,8 @@ func (s *AppState) handleDiscordProfileLookup(w http.ResponseWriter, r *http.Req
 }
 
 func (s *AppState) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.DashboardKey == "" || r.URL.Query().Get("key") != s.cfg.DashboardKey {
-		http.NotFound(w, r)
-		return
-	}
-
-	ip := s.getPublicIP(r)
-	title := s.cfg.ServerName
-	if title == "" {
-		title = "WarLink • Stockholm GPN Telemetry"
-	}
-	ports := s.cfg.ServerPorts
-	if ports == "" {
-		ports = DefaultServerPorts
-	}
-	loc := s.cfg.ServerLocation
-	if loc == "" {
-		loc = "Stockholm, Sweden"
-	}
-	subtitle := fmt.Sprintf("%s • %s • Port %s", ip, loc, ports)
-
-	rendered := dashboardHTML
-	rendered = strings.ReplaceAll(rendered, "{{SERVER_TITLE}}", title)
-	rendered = strings.ReplaceAll(rendered, "{{SERVER_SUBTITLE}}", subtitle)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(rendered))
+	http.Redirect(w, r, "https://warlink-hub.duckdns.org:8055/admin/", http.StatusFound)
 }
-
-const dashboardHTML = `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{SERVER_TITLE}}</title>
-    <style>
-        :root {
-            --bg-base: #0d0d0d;
-            --bg-card: #151515;
-            --bg-card-hover: #1a1a1a;
-            --border: #242424;
-            --border-light: #333333;
-            --accent: #FF5E1F;
-            --accent-glow: rgba(255, 94, 31, 0.15);
-            --green: #22c55e;
-            --blue: #3b82f6;
-            --purple: #a855f7;
-            --yellow: #eab308;
-            --text-main: #f4f4f5;
-            --text-muted: #888888;
-            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            background-color: var(--bg-base);
-            color: var(--text-main);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            font-size: 13px;
-            line-height: 1.4;
-            min-height: 100vh;
-            padding: 24px;
-        }
-        .container {
-            max-width: 1280px;
-            margin: 0 auto;
-        }
-        .header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding-bottom: 20px;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 24px;
-        }
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .brand-icon {
-            width: 34px;
-            height: 34px;
-            background: var(--accent);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 2px;
-        }
-        .brand-title {
-            font-size: 16px;
-            font-weight: 700;
-            letter-spacing: 0.5px;
-        }
-        .brand-subtitle {
-            font-size: 11px;
-            color: var(--text-muted);
-            font-family: var(--font-mono);
-        }
-        .header-meta {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: #112211;
-            border: 1px solid #224422;
-            color: #4ade80;
-            padding: 4px 10px;
-            border-radius: 2px;
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-        .status-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: var(--green);
-            box-shadow: 0 0 6px var(--green);
-        }
-        .controls {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .btn {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            color: var(--text-main);
-            padding: 6px 12px;
-            border-radius: 2px;
-            font-size: 11px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .btn:hover {
-            border-color: var(--border-light);
-            background: var(--bg-card-hover);
-        }
-        .btn.active {
-            background: var(--accent);
-            color: #000;
-            border-color: var(--accent);
-        }
-        .kpi-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .kpi-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-        }
-        .kpi-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            color: var(--text-muted);
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
-        }
-        .kpi-value {
-            font-size: 24px;
-            font-weight: 700;
-            font-family: var(--font-mono);
-            letter-spacing: -0.5px;
-            color: var(--text-main);
-            margin-bottom: 6px;
-        }
-        .kpi-sub {
-            font-size: 11px;
-            color: var(--text-muted);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .progress-bar-bg {
-            height: 4px;
-            background: #222222;
-            border-radius: 1px;
-            overflow: hidden;
-            margin-top: 8px;
-        }
-        .progress-bar-fill {
-            height: 100%;
-            background: var(--accent);
-            transition: width 0.3s ease;
-        }
-        .chart-section {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 18px;
-            margin-bottom: 24px;
-        }
-        .chart-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 14px;
-        }
-        .chart-title {
-            font-size: 13px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .chart-legend {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .legend-color {
-            width: 8px;
-            height: 8px;
-            border-radius: 1px;
-        }
-        .canvas-container {
-            position: relative;
-            width: 100%;
-            height: 200px;
-        }
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
-        }
-        .table-section {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 16px;
-        }
-        .table-title {
-            font-size: 13px;
-            font-weight: 600;
-            margin-bottom: 12px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12px;
-            font-family: var(--font-mono);
-        }
-        th, td {
-            text-align: left;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border);
-        }
-        th {
-            color: var(--text-muted);
-            font-weight: 600;
-            font-size: 11px;
-            text-transform: uppercase;
-        }
-        tr:hover {
-            background: var(--bg-card-hover);
-        }
-        .tooltip {
-            position: absolute;
-            background: #1e1e1e;
-            border: 1px solid var(--border-light);
-            padding: 6px 10px;
-            border-radius: 2px;
-            font-size: 11px;
-            font-family: var(--font-mono);
-            pointer-events: none;
-            display: none;
-            z-index: 10;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header class="header">
-            <div class="brand">
-                <div class="brand-icon">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                    </svg>
-                </div>
-                <div>
-                    <div class="brand-title">{{SERVER_TITLE}}</div>
-                    <div class="brand-subtitle">{{SERVER_SUBTITLE}}</div>
-                </div>
-            </div>
-            <div class="header-meta">
-                <div class="status-badge">
-                    <span class="status-dot"></span>
-                    <span>ONLINE (27 MS)</span>
-                </div>
-                <div class="controls">
-                    <button class="btn active" onclick="setRange(1, this)">1Ч</button>
-                    <button class="btn" onclick="setRange(6, this)">6Ч</button>
-                    <button class="btn" onclick="setRange(24, this)">24Ч</button>
-                    <button class="btn" onclick="setRange(168, this)">7Д</button>
-                    <button class="btn" onclick="loadData()">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px;">
-                            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-        </header>
-
-        <!-- WarLink Control Plane (Zero-Restart Dynamic Config) -->
-        <div class="features-bar" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 2px; padding: 16px 20px; margin-bottom: 24px;">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="4" y1="21" x2="4" y2="14"></line>
-                        <line x1="4" y1="10" x2="4" y2="3"></line>
-                        <line x1="12" y1="21" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12" y2="3"></line>
-                        <line x1="20" y1="21" x2="20" y2="16"></line>
-                        <line x1="20" y1="12" x2="20" y2="3"></line>
-                        <line x1="1" y1="14" x2="7" y2="14"></line>
-                        <line x1="9" y1="8" x2="15" y2="8"></line>
-                        <line x1="17" y1="16" x2="23" y2="16"></line>
-                    </svg>
-                    <span style="font-weight: 700; font-size: 12px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-main);">Панель управления шлюзом (WarLink Control Plane)</span>
-                </div>
-                <div id="ctrl-status-msg" style="font-size: 11px; font-weight: 600; font-family: var(--font-mono); color: var(--green);"></div>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: center;">
-                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
-                    <div>
-                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Приём донатов СБП</div>
-                        <div style="font-size: 10px; color: var(--text-muted);">Кнопка в приложении</div>
-                    </div>
-                    <button id="toggle-donate-btn" class="btn" onclick="toggleFeature('enable_donate')" style="font-family: var(--font-mono); min-width: 90px; text-align: center; font-weight: 700; padding: 6px 12px;">ВКЛ</button>
-                </div>
-                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
-                    <div>
-                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Голосование за игры</div>
-                        <div style="font-size: 10px; color: var(--text-muted);">Каталог сообщества</div>
-                    </div>
-                    <button id="toggle-voting-btn" class="btn" onclick="toggleFeature('enable_voting')" style="font-family: var(--font-mono); min-width: 90px; text-align: center; font-weight: 700; padding: 6px 12px;">ВКЛ</button>
-                </div>
-                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
-                    <div>
-                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Общий пул слотов</div>
-                        <div style="font-size: 10px; color: var(--text-muted);">Всего подключений</div>
-                    </div>
-                    <div style="display: flex; gap: 6px; align-items: center;">
-                        <input type="number" id="input-max-sess" value="100" min="5" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
-                        <button class="btn" onclick="saveSetting('max_sessions', 'input-max-sess')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
-                    </div>
-                </div>
-                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
-                    <div>
-                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Резерв спонсоров</div>
-                        <div style="font-size: 10px; color: var(--text-muted);">Слоты поддержки</div>
-                    </div>
-                    <div style="display: flex; gap: 6px; align-items: center;">
-                        <input type="number" id="input-sponsor-slots" value="10" min="0" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
-                        <button class="btn" onclick="saveSetting('dedicated_sponsor_slots', 'input-sponsor-slots')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
-                    </div>
-                </div>
-                <div style="background: #111111; border: 1px solid var(--border); border-radius: 2px; padding: 12px; display: flex; align-items: center; justify-content: space-between;">
-                    <div>
-                        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Бесплатный пул</div>
-                        <div style="font-size: 10px; color: var(--text-muted);">Лимит без статуса</div>
-                    </div>
-                    <div style="display: flex; gap: 6px; align-items: center;">
-                        <input type="number" id="input-free-slots" value="89" min="1" max="500" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 6px 8px; border-radius: 2px; width: 65px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
-                        <button class="btn" onclick="saveSetting('free_slots_limit', 'input-free-slots')" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700;">OK</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Boosty Goal Control (Control Plane) -->
-            <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                    <div>
-                        <div style="font-weight: 700; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-main);">Цель сбора на Boosty (Прогресс-бар в клиенте)</div>
-                        <div id="admin-boosty-sub" style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">Сбор: 0 ₽ из 100 000 ₽</div>
-                    </div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                    <div style="display: flex; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--text-muted);">
-                        <span>Собрано:</span>
-                        <input type="number" id="input-boosty-current" min="0" max="10000000" step="500" value="0" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 5px 8px; border-radius: 2px; width: 85px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
-                        <span>₽</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 4px; font-size: 11px; font-family: var(--font-mono); color: var(--text-muted);">
-                        <span>Цель:</span>
-                        <input type="number" id="input-boosty-target" min="1000" max="10000000" step="1000" value="100000" style="background: #000; border: 1px solid var(--border); color: #fff; padding: 5px 8px; border-radius: 2px; width: 85px; font-weight: 700; font-family: var(--font-mono); text-align: right;">
-                        <span>₽</span>
-                    </div>
-                    <button class="btn" onclick="saveBoostyGoalControl()" style="background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; padding: 5px 12px; font-size: 11px; cursor: pointer;">Сохранить</button>
-                    <button class="btn" onclick="syncBoostyGoalControl()" style="background: #111; border: 1px solid var(--border); color: var(--text-main); font-weight: 600; padding: 5px 10px; font-size: 11px; cursor: pointer;">Спарсить с Boosty</button>
-                    <span id="boosty-ctrl-status" style="font-family: var(--font-mono); font-size: 10px; color: var(--green);"></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- KPI Cards -->
-        <div class="kpi-grid">
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span>Активные сессии</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                </div>
-                <div class="kpi-value" id="kpi-sessions">0 / 100</div>
-                <div class="kpi-sub" id="kpi-sessions-sub">0% емкости шлюза</div>
-                <div class="progress-bar-bg"><div class="progress-bar-fill" id="kpi-sessions-bar" style="width: 0%;"></div></div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span>Сетевой битрейт</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                </div>
-                <div class="kpi-value" id="kpi-bandwidth">0 / 0 Кбит/с</div>
-                <div class="kpi-sub" id="kpi-bandwidth-sub">Вход: 0 • Выход: 0</div>
-                <div class="progress-bar-bg"><div class="progress-bar-fill" id="kpi-bandwidth-bar" style="width: 2%; background: var(--blue);"></div></div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span>Нагрузка CPU</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
-                </div>
-                <div class="kpi-value" id="kpi-cpu">0.0%</div>
-                <div class="kpi-sub" id="kpi-cpu-sub">AMD EPYC™ 4.2 GHz</div>
-                <div class="progress-bar-bg"><div class="progress-bar-fill" id="kpi-cpu-bar" style="width: 0%; background: var(--yellow);"></div></div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span>Оперативная память</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 19v-3"/><path d="M10 19v-3"/><path d="M14 19v-3"/><path d="M18 19v-3"/><rect x="2" y="5" width="20" height="11" rx="2"/></svg>
-                </div>
-                <div class="kpi-value" id="kpi-ram">0 / 0 МБ</div>
-                <div class="kpi-sub" id="kpi-ram-sub">0% использовано</div>
-                <div class="progress-bar-bg"><div class="progress-bar-fill" id="kpi-ram-bar" style="width: 0%; background: var(--purple);"></div></div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span>Диск NVMe</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="12" x2="2" y2="12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" y1="16" x2="6.01" y2="16"/><line x1="10" y1="16" x2="10.01" y2="16"/></svg>
-                </div>
-                <div class="kpi-value" id="kpi-disk">0 / 0 ГБ</div>
-                <div class="kpi-sub" id="kpi-disk-sub">0% занято</div>
-                <div class="progress-bar-bg"><div class="progress-bar-fill" id="kpi-disk-bar" style="width: 0%; background: var(--green);"></div></div>
-            </div>
-
-            <div class="kpi-card">
-                <div class="kpi-header">
-                    <span>Задержка шлюза</span>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                </div>
-                <div class="kpi-value" id="kpi-ping">27 мс</div>
-                <div class="kpi-sub" id="kpi-ping-sub">Стокгольм • Aeza DC</div>
-                <div class="progress-bar-bg"><div class="progress-bar-fill" style="width: 100%; background: var(--green);"></div></div>
-            </div>
-        </div>
-
-        <!-- Chart 1: Sessions & CPU -->
-        <div class="chart-section">
-            <div class="chart-header">
-                <div class="chart-title">
-                    <span>Сессии и Загрузка CPU</span>
-                </div>
-                <div class="chart-legend">
-                    <div class="legend-item"><div class="legend-color" style="background: var(--accent);"></div><span>Сессии (0-100)</span></div>
-                    <div class="legend-item"><div class="legend-color" style="background: var(--yellow);"></div><span>CPU (%)</span></div>
-                </div>
-            </div>
-            <div class="canvas-container">
-                <canvas id="chart-sessions"></canvas>
-            </div>
-        </div>
-
-        <!-- Chart 2: Bandwidth -->
-        <div class="chart-section">
-            <div class="chart-header">
-                <div class="chart-title">
-                    <span>Сетевой трафик (Кбит/с)</span>
-                </div>
-                <div class="chart-legend">
-                    <div class="legend-item"><div class="legend-color" style="background: var(--blue);"></div><span>Входящий (RX)</span></div>
-                    <div class="legend-item"><div class="legend-color" style="background: var(--purple);"></div><span>Исходящий (TX)</span></div>
-                </div>
-            </div>
-            <div class="canvas-container">
-                <canvas id="chart-bandwidth"></canvas>
-            </div>
-        </div>
-
-        <!-- Table of Active Players Online -->
-        <div class="table-section" style="margin-bottom: 24px;">
-            <div class="table-title" style="display: flex; justify-content: space-between; align-items: center;">
-                <span>Игроки онлайн прямо сейчас</span>
-                <span id="active-players-count" style="color: var(--accent); font-size: 11px; font-weight: 700; text-transform: none;">0 игроков</span>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Устройство (ID)</th>
-                        <th>Режим / Игра</th>
-                        <th>IP-адрес</th>
-                        <th>Подключен в</th>
-                        <th>Время в сети</th>
-                        <th>Статус сессии</th>
-                    </tr>
-                </thead>
-                <tbody id="players-table-body">
-                    <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет активных игроков онлайн</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <!-- Table of Snapshots -->
-        <div class="table-section">
-            <div class="table-title">Последние снимки телеметрии</div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Время (МСК)</th>
-                        <th>Сессии</th>
-                        <th>CPU %</th>
-                        <th>RAM</th>
-                        <th>Входящий битрейт</th>
-                        <th>Исходящий битрейт</th>
-                        <th>Суммарный трафик (RX / TX)</th>
-                    </tr>
-                </thead>
-                <tbody id="table-body">
-                    <tr><td colspan="7" style="text-align: center; color: var(--text-muted);">Загрузка телеметрии...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        let currentHours = 1;
-        const urlParams = new URLSearchParams(window.location.search);
-        const secretKey = urlParams.get('key') || '';
-
-        function setRange(h, btn) {
-            currentHours = h;
-            document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
-            if (btn) btn.classList.add('active');
-            loadData();
-        }
-
-        async function loadData() {
-            try {
-                let url = '/api/v1/analytics?hours=' + currentHours;
-                if (secretKey) {
-                    url += '&key=' + encodeURIComponent(secretKey);
-                }
-                const res = await fetch(url);
-                if (res.status === 404 || res.status === 403) {
-                    document.body.innerHTML = '<div style="padding: 40px; text-align: center; color: #ff5555; font-family: monospace;">403 Forbidden: Доступ запрещен (неверный или отсутствующий ключ)</div>';
-                    return;
-                }
-                const data = await res.json();
-                if (data && data.success) {
-                    updateDashboard(data);
-                }
-            } catch (err) {
-                console.error('Error fetching analytics:', err);
-            }
-        }
-
-        function formatBytes(bytes) {
-            if (!bytes || bytes === 0) return '0 Б';
-            const k = 1024;
-            const sizes = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-        }
-
-        function formatRate(kbps) {
-            if (!kbps || kbps === 0) return '0 Кбит/с';
-            if (kbps >= 1000) {
-                return (kbps / 1000).toFixed(1) + ' Мбит/с';
-            }
-            return kbps + ' Кбит/с';
-        }
-
-        function updateDashboard(data) {
-            const live = data.live || {};
-            const history = data.history || [];
-
-            // 1. Update KPI
-            const sessEl = document.getElementById('kpi-sessions');
-            const sessSubEl = document.getElementById('kpi-sessions-sub');
-            const sessBar = document.getElementById('kpi-sessions-bar');
-            if (sessEl) sessEl.textContent = live.active_sessions + ' / ' + (live.max_sessions || 100);
-            const sessPct = Math.round((live.active_sessions / (live.max_sessions || 100)) * 100);
-            if (sessSubEl) sessSubEl.textContent = sessPct + '% емкости (' + ((live.max_sessions || 100) - live.active_sessions) + ' доступно)';
-            if (sessBar) sessBar.style.width = Math.max(2, sessPct) + '%';
-
-            const bwEl = document.getElementById('kpi-bandwidth');
-            const bwSubEl = document.getElementById('kpi-bandwidth-sub');
-            if (bwEl) bwEl.textContent = formatRate(live.net_rx_rate_kbps) + ' / ' + formatRate(live.net_tx_rate_kbps);
-            if (bwSubEl) bwSubEl.textContent = 'Всего: ' + formatBytes(live.net_bytes_recv) + ' / ' + formatBytes(live.net_bytes_sent);
-
-            const cpuEl = document.getElementById('kpi-cpu');
-            const cpuBar = document.getElementById('kpi-cpu-bar');
-            if (cpuEl) cpuEl.textContent = (live.cpu_percent || 0).toFixed(1) + '%';
-            if (cpuBar) cpuBar.style.width = Math.min(100, Math.max(2, live.cpu_percent || 0)) + '%';
-
-            const ramEl = document.getElementById('kpi-ram');
-            const ramSubEl = document.getElementById('kpi-ram-sub');
-            const ramBar = document.getElementById('kpi-ram-bar');
-            if (ramEl) ramEl.textContent = live.ram_used_mb + ' / ' + live.ram_total_mb + ' МБ';
-            const ramPct = live.ram_total_mb > 0 ? Math.round((live.ram_used_mb / live.ram_total_mb) * 100) : 0;
-            if (ramSubEl) ramSubEl.textContent = ramPct + '% памяти занято';
-            if (ramBar) ramBar.style.width = ramPct + '%';
-
-            const diskEl = document.getElementById('kpi-disk');
-            const diskSubEl = document.getElementById('kpi-disk-sub');
-            const diskBar = document.getElementById('kpi-disk-bar');
-            if (diskEl && live.disk_total_gb > 0) {
-                diskEl.textContent = (live.disk_used_gb || 0).toFixed(1) + ' / ' + (live.disk_total_gb || 0).toFixed(1) + ' ГБ';
-                const diskPct = Math.round(live.disk_percent || ((live.disk_used_gb / live.disk_total_gb) * 100));
-                if (diskSubEl) diskSubEl.textContent = diskPct + '% занято хранилища';
-                if (diskBar) {
-                    diskBar.style.width = Math.min(100, Math.max(2, diskPct)) + '%';
-                    if (diskPct >= 85) diskBar.style.background = 'var(--red)';
-                    else if (diskPct >= 70) diskBar.style.background = 'var(--yellow)';
-                    else diskBar.style.background = 'var(--green)';
-                }
-            }
-
-            const pingEl = document.getElementById('kpi-ping');
-            if (pingEl && live.gateway_ping_ms) pingEl.textContent = (typeof live.gateway_ping_ms === 'number' ? live.gateway_ping_ms.toFixed(1) : live.gateway_ping_ms) + ' мс';
-            const pingSubEl = document.getElementById('kpi-ping-sub');
-            if (pingSubEl && live.gateway_jitter_ms) pingSubEl.textContent = 'Стокгольм • Джиттер: ±' + (typeof live.gateway_jitter_ms === 'number' ? live.gateway_jitter_ms.toFixed(1) : live.gateway_jitter_ms) + ' мс';
-
-            // 2. Draw Charts
-            drawSessionsChart(history);
-            drawBandwidthChart(history);
-
-            // 3. Populate Table
-            const tbody = document.getElementById('table-body');
-            if (tbody) {
-                if (history.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">История пока пуста</td></tr>';
-                } else {
-                    const recent = [...history].reverse().slice(0, 15);
-                    tbody.innerHTML = recent.map(item => {
-                        const d = new Date(item.recorded_at);
-                        const timeStr = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' ' + d.toLocaleDateString('ru-RU');
-                        return '<tr>' +
-                            '<td>' + timeStr + '</td>' +
-                            '<td><strong style="color: var(--accent);">' + item.active_sessions + '</strong> / ' + item.max_sessions + '</td>' +
-                            '<td>' + (item.cpu_percent || 0).toFixed(1) + '%</td>' +
-                            '<td>' + item.ram_used_mb + ' МБ</td>' +
-                            '<td style="color: var(--blue);">' + formatRate(item.net_rx_rate_kbps) + '</td>' +
-                            '<td style="color: var(--purple);">' + formatRate(item.net_tx_rate_kbps) + '</td>' +
-                            '<td>' + formatBytes(item.net_bytes_recv) + ' / ' + formatBytes(item.net_bytes_sent) + '</td>' +
-                        '</tr>';
-                    }).join('');
-                }
-            }
-
-            // 4. Populate Active Players Table
-            const playersTbody = document.getElementById('players-table-body');
-            const playersCountEl = document.getElementById('active-players-count');
-            const players = data.active_players || [];
-            if (playersCountEl) {
-                playersCountEl.textContent = players.length + ' игроков онлайн';
-            }
-            if (playersTbody) {
-                if (players.length === 0) {
-                    playersTbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Нет активных игроков онлайн</td></tr>';
-                } else {
-                    playersTbody.innerHTML = players.map(p => {
-                        const d = p.connected_at ? new Date(p.connected_at) : null;
-                        const connTime = (d && !isNaN(d.getTime())) ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : (p.connected_at || '-');
-                        let modeBadge = '';
-                        const gLower = (p.game || '').toLowerCase();
-                        if (gLower.includes('гибрид')) {
-                            const cleanName = p.game.replace(/\(гибрид\)/gi, '').replace(/•/g, '').trim().toUpperCase() || 'WARDOGS';
-                            modeBadge = '<strong style="color: var(--accent);">' + cleanName + '</strong> ' +
-                                        '<span style="background: rgba(255, 94, 31, 0.18); color: #FF5E1F; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(255, 94, 31, 0.35); margin-left: 4px;">ГИБРИД</span>';
-                        } else if (gLower === 'free_internet' || gLower.includes('свободный') || gLower.includes('комплексный')) {
-                            modeBadge = '<strong style="color: var(--blue);">КОМПЛЕКСНЫЙ РЕЖИМ</strong>';
-                        } else {
-                            modeBadge = '<strong style="color: var(--text-main);">' + (p.game || 'WARDOGS').toUpperCase() + '</strong> ' +
-                                        '<span style="background: rgba(34, 197, 94, 0.15); color: #22c55e; font-size: 10px; padding: 2px 6px; border-radius: 2px; font-weight: 700; border: 1px solid rgba(34, 197, 94, 0.3); margin-left: 4px;">СОЛО</span>';
-                        }
-                        return '<tr>' +
-                            '<td style="font-family: var(--font-mono); font-weight: 600;">' + p.device_id + '</td>' +
-                            '<td>' + modeBadge + '</td>' +
-                            '<td style="font-family: var(--font-mono); color: var(--blue);">' + p.client_ip + '</td>' +
-                            '<td>' + connTime + '</td>' +
-                            '<td>' + p.duration_desc + '</td>' +
-                            '<td><span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-right: 6px;"></span>Активен</td>' +
-                        '</tr>';
-                    }).join('');
-                }
-            }
-        }
-
-        function setupCanvas(canvas) {
-            const dpr = window.devicePixelRatio || 1;
-            const rect = canvas.getBoundingClientRect();
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            const ctx = canvas.getContext('2d');
-            ctx.scale(dpr, dpr);
-            return { ctx, width: rect.width, height: rect.height };
-        }
-
-        function drawSessionsChart(data) {
-            const canvas = document.getElementById('chart-sessions');
-            if (!canvas || !data || data.length === 0) return;
-            const { ctx, width, height } = setupCanvas(canvas);
-
-            ctx.clearRect(0, 0, width, height);
-
-            const padLeft = 40;
-            const padBottom = 24;
-            const chartW = width - padLeft - 10;
-            const chartH = height - padBottom - 10;
-
-            // Draw Grid Lines
-            ctx.strokeStyle = '#222222';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            for (let i = 0; i <= 4; i++) {
-                const y = 10 + (chartH / 4) * i;
-                ctx.moveTo(padLeft, y);
-                ctx.lineTo(width - 10, y);
-            }
-            ctx.stroke();
-
-            // Y-axis labels (0 to 100)
-            ctx.fillStyle = '#666666';
-            ctx.font = '10px monospace';
-            ctx.textAlign = 'right';
-            for (let i = 0; i <= 4; i++) {
-                const val = 100 - (i * 25);
-                const y = 10 + (chartH / 4) * i + 3;
-                ctx.fillText(val, padLeft - 8, y);
-            }
-
-            const n = data.length;
-            const stepX = chartW / Math.max(1, n - 1);
-
-            // Draw CPU line (Yellow)
-            ctx.strokeStyle = '#eab308';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            data.forEach((d, i) => {
-                const x = padLeft + i * stepX;
-                const y = 10 + chartH - (Math.min(100, d.cpu_percent || 0) / 100) * chartH;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.stroke();
-
-            // Draw Sessions line (Accent Orange)
-            ctx.strokeStyle = '#FF5E1F';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            data.forEach((d, i) => {
-                const x = padLeft + i * stepX;
-                const y = 10 + chartH - (Math.min(100, d.active_sessions || 0) / 100) * chartH;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.stroke();
-
-            // Time labels
-            ctx.textAlign = 'center';
-            if (n > 1) {
-                const dFirst = new Date(data[0].recorded_at);
-                const dLast = new Date(data[n - 1].recorded_at);
-                ctx.fillText(dFirst.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), padLeft, height - 6);
-                ctx.fillText(dLast.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), width - 20, height - 6);
-            }
-        }
-
-        function drawBandwidthChart(data) {
-            const canvas = document.getElementById('chart-bandwidth');
-            if (!canvas || !data || data.length === 0) return;
-            const { ctx, width, height } = setupCanvas(canvas);
-
-            ctx.clearRect(0, 0, width, height);
-
-            const padLeft = 60;
-            const padBottom = 24;
-            const chartW = width - padLeft - 10;
-            const chartH = height - padBottom - 10;
-
-            let maxRate = 100;
-            data.forEach(d => {
-                if (d.net_rx_rate_kbps > maxRate) maxRate = d.net_rx_rate_kbps;
-                if (d.net_tx_rate_kbps > maxRate) maxRate = d.net_tx_rate_kbps;
-            });
-            maxRate = Math.ceil(maxRate * 1.15 / 100) * 100;
-
-            // Draw Grid Lines
-            ctx.strokeStyle = '#222222';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            for (let i = 0; i <= 4; i++) {
-                const y = 10 + (chartH / 4) * i;
-                ctx.moveTo(padLeft, y);
-                ctx.lineTo(width - 10, y);
-            }
-            ctx.stroke();
-
-            // Y-axis labels
-            ctx.fillStyle = '#666666';
-            ctx.font = '10px monospace';
-            ctx.textAlign = 'right';
-            for (let i = 0; i <= 4; i++) {
-                const val = maxRate - (i * (maxRate / 4));
-                const y = 10 + (chartH / 4) * i + 3;
-                ctx.fillText(formatRate(val), padLeft - 8, y);
-            }
-
-            const n = data.length;
-            const stepX = chartW / Math.max(1, n - 1);
-
-            // Draw RX (Blue)
-            ctx.strokeStyle = '#3b82f6';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            data.forEach((d, i) => {
-                const x = padLeft + i * stepX;
-                const y = 10 + chartH - ((d.net_rx_rate_kbps || 0) / maxRate) * chartH;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.stroke();
-
-            // Draw TX (Purple)
-            ctx.strokeStyle = '#a855f7';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            data.forEach((d, i) => {
-                const x = padLeft + i * stepX;
-                const y = 10 + chartH - ((d.net_tx_rate_kbps || 0) / maxRate) * chartH;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.stroke();
-
-            // Time labels
-            ctx.textAlign = 'center';
-            if (n > 1) {
-                const dFirst = new Date(data[0].recorded_at);
-                const dLast = new Date(data[n - 1].recorded_at);
-                ctx.fillText(dFirst.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), padLeft, height - 6);
-                ctx.fillText(dLast.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), width - 20, height - 6);
-            }
-        }
-
-        let featuresState = { enable_donate: true, enable_voting: true, max_sessions: 100, dedicated_sponsor_slots: 10, free_slots_limit: 89 };
-
-        async function loadFeatures() {
-            try {
-                let url = '/api/v1/admin/settings';
-                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
-                const res = await fetch(url);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && data.success) {
-                        featuresState = data;
-                        renderControlUI();
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to load settings:', err);
-            }
-        }
-
-        function renderControlUI() {
-            const dBtn = document.getElementById('toggle-donate-btn');
-            if (dBtn) {
-                if (featuresState.enable_donate) {
-                    dBtn.textContent = 'ВКЛЮЧЕНО';
-                    dBtn.style.background = '#112211';
-                    dBtn.style.borderColor = '#22c55e';
-                    dBtn.style.color = '#4ade80';
-                } else {
-                    dBtn.textContent = 'ОТКЛЮЧЕНО';
-                    dBtn.style.background = '#221111';
-                    dBtn.style.borderColor = '#ef4444';
-                    dBtn.style.color = '#f87171';
-                }
-            }
-            const vBtn = document.getElementById('toggle-voting-btn');
-            if (vBtn) {
-                if (featuresState.enable_voting) {
-                    vBtn.textContent = 'ВКЛЮЧЕНО';
-                    vBtn.style.background = '#112211';
-                    vBtn.style.borderColor = '#22c55e';
-                    vBtn.style.color = '#4ade80';
-                } else {
-                    vBtn.textContent = 'ОТКЛЮЧЕНО';
-                    vBtn.style.background = '#221111';
-                    vBtn.style.borderColor = '#ef4444';
-                    vBtn.style.color = '#f87171';
-                }
-            }
-            const mSess = document.getElementById('input-max-sess');
-            if (mSess && featuresState.max_sessions) {
-                mSess.value = featuresState.max_sessions;
-            }
-            const sSponsor = document.getElementById('input-sponsor-slots');
-            if (sSponsor && featuresState.dedicated_sponsor_slots !== undefined) {
-                sSponsor.value = featuresState.dedicated_sponsor_slots;
-            }
-            const fSlots = document.getElementById('input-free-slots');
-            if (fSlots && featuresState.free_slots_limit !== undefined) {
-                fSlots.value = featuresState.free_slots_limit;
-            }
-        }
-
-        async function toggleFeature(name) {
-            const nextVal = !featuresState[name];
-            const payload = {};
-            payload[name] = nextVal;
-            await sendAdminUpdate(payload);
-        }
-
-        async function saveSetting(name, inputId) {
-            const input = document.getElementById(inputId);
-            if (!input) return;
-            const val = parseInt(input.value, 10);
-            if (isNaN(val) || val <= 0) return;
-            const payload = {};
-            payload[name] = val;
-            await sendAdminUpdate(payload);
-        }
-
-        async function sendAdminUpdate(payload) {
-            const statusMsg = document.getElementById('ctrl-status-msg');
-            if (statusMsg) statusMsg.textContent = 'Сохранение...';
-
-            try {
-                let url = '/api/v1/admin/settings';
-                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && data.success) {
-                        featuresState = data;
-                        renderControlUI();
-                        if (statusMsg) {
-                            statusMsg.textContent = 'Успешно сохранено!';
-                            statusMsg.style.color = 'var(--green)';
-                            setTimeout(() => { if (statusMsg) statusMsg.textContent = ''; }, 3000);
-                        }
-                    }
-                } else {
-                    if (statusMsg) {
-                        statusMsg.textContent = 'Ошибка доступа (403)';
-                        statusMsg.style.color = '#ef4444';
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to update setting:', err);
-                if (statusMsg) {
-                    statusMsg.textContent = 'Ошибка сети!';
-                    statusMsg.style.color = '#ef4444';
-                }
-            }
-        }
-
-        async function loadBoostyGoalControl() {
-            try {
-                let url = '/api/v1/boosty-goal';
-                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
-                const res = await fetch(url);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (data && data.success) {
-                    const cIn = document.getElementById('input-boosty-current');
-                    const tIn = document.getElementById('input-boosty-target');
-                    const subEl = document.getElementById('admin-boosty-sub');
-                    if (cIn) cIn.value = data.current_amount || 0;
-                    if (tIn) tIn.value = data.target_amount || 100000;
-                    if (subEl) {
-                        const src = data.source === 'auto_parser' ? 'авто-парсер Boosty' : 'ручной ввод';
-                        subEl.textContent = 'Сбор: ' + (data.current_amount || 0).toLocaleString('ru-RU') + ' ₽ из ' + (data.target_amount || 100000).toLocaleString('ru-RU') + ' ₽ (' + (data.percent || 0) + '%, ' + src + ')';
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to load boosty goal:', err);
-            }
-        }
-
-        async function saveBoostyGoalControl() {
-            const curr = parseInt(document.getElementById('input-boosty-current').value, 10) || 0;
-            const tgt = parseInt(document.getElementById('input-boosty-target').value, 10) || 100000;
-            const statusEl = document.getElementById('boosty-ctrl-status');
-            if (statusEl) { statusEl.textContent = 'Сохранение...'; statusEl.style.color = 'var(--text-muted)'; }
-            try {
-                let url = '/api/v1/admin/boosty-goal';
-                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ current_amount: curr, target_amount: tgt })
-                });
-                const data = await res.json();
-                if (res.ok && data.success) {
-                    if (statusEl) {
-                        statusEl.textContent = 'Сохранено!';
-                        statusEl.style.color = 'var(--green)';
-                        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
-                    }
-                    loadBoostyGoalControl();
-                } else {
-                    if (statusEl) {
-                        statusEl.textContent = 'Ошибка сохранения!';
-                        statusEl.style.color = '#ef4444';
-                    }
-                }
-            } catch (err) {
-                if (statusEl) {
-                    statusEl.textContent = 'Ошибка сети!';
-                    statusEl.style.color = '#ef4444';
-                }
-            }
-        }
-
-        async function syncBoostyGoalControl() {
-            const statusEl = document.getElementById('boosty-ctrl-status');
-            if (statusEl) { statusEl.textContent = 'Синхронизация...'; statusEl.style.color = 'var(--text-muted)'; }
-            try {
-                let url = '/api/v1/admin/boosty-goal/parse';
-                if (secretKey) url += '?key=' + encodeURIComponent(secretKey);
-                const res = await fetch(url, { method: 'POST' });
-                const data = await res.json();
-                if (statusEl) {
-                    statusEl.textContent = data.message || (data.success ? 'Синхронизировано!' : 'Не удалось спарсить');
-                    statusEl.style.color = data.success ? 'var(--green)' : 'var(--accent)';
-                    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
-                }
-                loadBoostyGoalControl();
-            } catch (err) {
-                if (statusEl) {
-                    statusEl.textContent = 'Ошибка запроса!';
-                    statusEl.style.color = '#ef4444';
-                }
-            }
-        }
-
-        // Initial fetch and auto-refresh
-        loadData();
-        loadFeatures();
-        loadBoostyGoalControl();
-        setInterval(loadData, 5000);
-        setInterval(loadFeatures, 10000);
-        setInterval(loadBoostyGoalControl, 15000);
-        window.addEventListener('resize', () => loadData());
-    </script>
-</body>
-</html>
-`
 
 // -----------------------------------------------------------------------------
 // Ticket & Support Diagnostic System
@@ -8592,79 +7888,27 @@ func (s *AppState) saveBoostyGoal(current, target int, title, source string) err
 	return tx.Commit()
 }
 
-func (s *AppState) parseBoostyGoalFromWeb() (int, int, bool) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", "https://boosty.to/pld1n/donate", nil)
-	if err != nil {
-		return 0, 0, false
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, 0, false
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
-	if err != nil {
-		return 0, 0, false
-	}
-	body := string(bodyBytes)
-
-	// Regex pattern 1: "currentSum":(\d+).*?"targetSum":(\d+)
-	reSum := regexp.MustCompile(`"currentSum":\s*(\d+).*?"targetSum":\s*(\d+)`)
-	if m := reSum.FindStringSubmatch(body); len(m) >= 3 {
-		curr, _ := strconv.Atoi(m[1])
-		tgt, _ := strconv.Atoi(m[2])
-		if tgt > 0 {
-			return curr, tgt, true
-		}
-	}
-
-	// Regex pattern 2: "raised":\s*(\d+).*?"target":\s*(\d+)
-	reRaised := regexp.MustCompile(`"raised":\s*(\d+).*?"target":\s*(\d+)`)
-	if m := reRaised.FindStringSubmatch(body); len(m) >= 3 {
-		curr, _ := strconv.Atoi(m[1])
-		tgt, _ := strconv.Atoi(m[2])
-		if tgt > 0 {
-			return curr, tgt, true
-		}
-	}
-
-	// Regex pattern 3: (\d+[\s\d]*)\s*₽\s*из\s*(\d+[\s\d]*)\s*₽
-	reText := regexp.MustCompile(`([0-9\s]{1,10})\s*₽\s*из\s*([0-9\s]{1,10})\s*₽`)
-	if m := reText.FindStringSubmatch(body); len(m) >= 3 {
-		cleanCurr := strings.ReplaceAll(m[1], " ", "")
-		cleanTgt := strings.ReplaceAll(m[2], " ", "")
-		curr, err1 := strconv.Atoi(cleanCurr)
-		tgt, err2 := strconv.Atoi(cleanTgt)
-		if err1 == nil && err2 == nil && tgt > 0 {
-			return curr, tgt, true
-		}
-	}
-
-	return 0, 0, false
-}
-
-func (s *AppState) startBoostyGoalSyncWorker() {
+func (s *AppState) startTicketAutoCloseWorker() {
 	go func() {
-		time.Sleep(30 * time.Second)
-		if curr, tgt, ok := s.parseBoostyGoalFromWeb(); ok {
-			log.Printf("[BOOSTY-SYNC] Initial sync: %d / %d RUB", curr, tgt)
-			_ = s.saveBoostyGoal(curr, tgt, "", "auto_parser")
-		}
-
-		ticker := time.NewTicker(24 * time.Hour)
+		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
-			if curr, tgt, ok := s.parseBoostyGoalFromWeb(); ok {
-				log.Printf("[BOOSTY-SYNC] Daily sync: %d / %d RUB", curr, tgt)
-				_ = s.saveBoostyGoal(curr, tgt, "", "auto_parser")
+			if s.db == nil {
+				continue
+			}
+			res, err := s.db.Exec(`
+				UPDATE support_tickets 
+				SET status = 'closed', updated_at = NOW() 
+				WHERE status = 'resolved' 
+				  AND resolved_at IS NOT NULL 
+				  AND resolved_at < NOW() - INTERVAL '72 hours'
+			`)
+			if err == nil {
+				if n, _ := res.RowsAffected(); n > 0 {
+					log.Printf("[SUPPORT] Auto-closed %d resolved tickets older than 72 hours", n)
+				}
 			} else {
-				log.Printf("[BOOSTY-SYNC] Daily check could not extract numbers; manual values retained")
+				log.Printf("[SUPPORT] Error auto-closing tickets: %v", err)
 			}
 		}
 	}()
@@ -8725,7 +7969,205 @@ func (s *AppState) handleAdminBoostyGoal(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (s *AppState) handleAdminBoostyGoalParse(w http.ResponseWriter, r *http.Request) {
+type CommunityGoalsResponse struct {
+	Success         bool                     `json:"success"`
+	Infrastructure  InfrastructureGoalData   `json:"infrastructure"`
+	Expansion       ExpansionGoalData        `json:"expansion"`
+	SpecialProjects []SpecialProjectGoalData `json:"special_projects"`
+	AuthorBoosty    BoostyGoalData           `json:"author_boosty"`
+}
+
+type InfrastructureGoalData struct {
+	Title             string            `json:"title"`
+	TargetAmountRub   int               `json:"target_amount_rub"`
+	TargetAmountEur   float64           `json:"target_amount_eur"`
+	CurrentBalanceRub int               `json:"current_balance_rub"`
+	CurrentBalanceEur float64           `json:"current_balance_eur"`
+	DaysLeft          int               `json:"days_left"`
+	RealDaysLeft      int               `json:"real_days_left"`
+	TargetDays        int               `json:"target_days"`
+	Percent           float64           `json:"percent"`
+	IsCovered         bool              `json:"is_covered"`
+	StatusText        string            `json:"status_text"`
+	Nodes             []VPSServerDetail `json:"nodes"`
+}
+
+type ExpansionGoalData struct {
+	ID               string  `json:"id"`
+	Title            string  `json:"title"`
+	Role             string  `json:"role"`
+	Description      string  `json:"description"`
+	TargetAmountRub  int     `json:"target_amount_rub"`
+	TargetAmountEur  float64 `json:"target_amount_eur"`
+	CurrentAmountRub int     `json:"current_amount_rub"`
+	CurrentAmountEur float64 `json:"current_amount_eur"`
+	Percent          float64 `json:"percent"`
+	IsCovered        bool    `json:"is_covered"`
+	IsActive         bool    `json:"is_active"`
+}
+
+type SpecialProjectGoalData struct {
+	ID               string  `json:"id"`
+	Title            string  `json:"title"`
+	Badge            string  `json:"badge"`
+	Description      string  `json:"description"`
+	TargetAmountRub  int     `json:"target_amount_rub"`
+	BasePriceRub     int     `json:"base_price_rub"`
+	DiscountPriceRub int     `json:"discount_price_rub"`
+	CurrentAmountRub int     `json:"current_amount_rub"`
+	Percent          float64 `json:"percent"`
+	IsCompleted      bool    `json:"is_completed"`
+	BoostyURL        string  `json:"boosty_url"`
+	BoostyLabel      string  `json:"boosty_label"`
+	SteamURL         string  `json:"steam_url"`
+	SteamLabel       string  `json:"steam_label"`
+}
+
+func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
+	monthlyTarget := MonthlyInfrastructureCostRub
+	if s.cachedPrice > 0 {
+		monthlyTarget = s.cachedPrice
+	}
+
+	balRub := int(atomic.LoadUint64(&s.metricAezaBalanceRub))
+	balCents := int(atomic.LoadUint64(&s.metricAezaBalanceEurCents))
+	balEur := float64(balCents) / 100.0
+	if balEur <= 0 && balRub > 0 {
+		balEur = float64(balRub) / 130.0
+	}
+
+	s.mu.RLock()
+	displayDays := s.cachedDisplayDays
+	realDays := s.cachedRealDaysLeft
+	nodes := make([]VPSServerDetail, len(s.cachedVPSDetails))
+	copy(nodes, s.cachedVPSDetails)
+	s.mu.RUnlock()
+
+	infraPercent := 0.0
+	if monthlyTarget > 0 {
+		infraPercent = math.Round((float64(balRub)/float64(monthlyTarget)*100)*10) / 10
+		if infraPercent > 100 {
+			infraPercent = 100
+		}
+	}
+	isInfraCovered := displayDays >= 20 || balRub >= monthlyTarget
+
+	statusText := fmt.Sprintf("Оплачено на %d дн.", displayDays)
+	if len(nodes) >= 3 {
+		statusText = fmt.Sprintf("Оплачено на %d дн. (Стокгольм + Москва + Франкфурт в строю)", displayDays)
+	} else if len(nodes) >= 2 {
+		statusText = fmt.Sprintf("Оплачено на %d дн. (Кластер в строю)", displayDays)
+	}
+
+	infra := InfrastructureGoalData{
+		Title:             "Инфраструктура кластера (Стокгольм + Москва + Франкфурт)",
+		TargetAmountRub:   monthlyTarget,
+		TargetAmountEur:   MonthlyInfrastructureCostEur,
+		CurrentBalanceRub: balRub,
+		CurrentBalanceEur: math.Round(balEur*100) / 100,
+		DaysLeft:          displayDays,
+		RealDaysLeft:      realDays,
+		TargetDays:        31,
+		Percent:           infraPercent,
+		IsCovered:         isInfraCovered,
+		StatusText:        statusText,
+		Nodes:             nodes,
+	}
+
+	// Frankfurt is now an active gaming edge node integrated into the cluster infrastructure (13 EUR/mo)
+	expansion := ExpansionGoalData{
+		ID:               "frankfurt",
+		Title:            "Шлюз Франкфурт (Германия)",
+		Role:             "В СТРОЮ",
+		Description:      "Европейский игровой узел с ультранизким пингом. Включен в базовую инфраструктуру кластера (13 € / мес).",
+		TargetAmountRub:  monthlyTarget,
+		TargetAmountEur:  MonthlyInfrastructureCostEur,
+		CurrentAmountRub: balRub,
+		CurrentAmountEur: math.Round(balEur*100) / 100,
+		Percent:          infraPercent,
+		IsCovered:        true,
+		IsActive:         false,
+	}
+
+	// Goal 2: Special Project Battlefield 6 (Independent, manually moderated)
+	bf6Target := 1600
+	bf6BasePrice := 3200
+	bf6DiscountPrice := 1600
+	bf6Current := 0
+	bf6Completed := false
+
+	if s.db != nil {
+		rows, err := s.db.Query(`SELECT key, value FROM server_settings WHERE key IN ('bf6_goal_current', 'bf6_goal_target', 'bf6_goal_completed')`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var k, v string
+				if err := rows.Scan(&k, &v); err == nil {
+					switch k {
+					case "bf6_goal_current":
+						if c, err := strconv.Atoi(v); err == nil && c >= 0 {
+							bf6Current = c
+						}
+					case "bf6_goal_target":
+						if t, err := strconv.Atoi(v); err == nil && t > 0 {
+							bf6Target = t
+						}
+					case "bf6_goal_completed":
+						if v == "true" || v == "1" {
+							bf6Completed = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	bf6Percent := 0.0
+	if bf6Completed {
+		bf6Percent = 100.0
+	} else if bf6Target > 0 {
+		bf6Percent = math.Round((float64(bf6Current)/float64(bf6Target)*100)*10) / 10
+		if bf6Percent > 100 {
+			bf6Percent = 100
+		}
+	}
+
+	specialProjects := []SpecialProjectGoalData{
+		{
+			ID:               "bf6",
+			Title:            "Battlefield 6 в WarLink",
+			Badge:            "СПЕЦПРОЕКТ",
+			Description:      "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
+			TargetAmountRub:  bf6Target,
+			BasePriceRub:     bf6BasePrice,
+			DiscountPriceRub: bf6DiscountPrice,
+			CurrentAmountRub: bf6Current,
+			Percent:          bf6Percent,
+			IsCompleted:      bf6Completed,
+			BoostyURL:        "https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link",
+			BoostyLabel:      "Поддержать сбор на BF6",
+			SteamURL:         "https://steamcommunity.com/id/MaksimPaladin/",
+			SteamLabel:       "Подарить в Steam",
+		},
+	}
+
+	return CommunityGoalsResponse{
+		Success:         true,
+		Infrastructure:  infra,
+		Expansion:       expansion,
+		SpecialProjects: specialProjects,
+		AuthorBoosty:    s.getBoostyGoal(),
+	}
+}
+
+func (s *AppState) handleCommunityGoals(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	resp := s.getCommunityGoals()
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *AppState) handleAdminCommunityGoals(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if !s.checkAdminAuth(r) {
 		w.WriteHeader(http.StatusUnauthorized)
@@ -8733,22 +8175,245 @@ func (s *AppState) handleAdminBoostyGoalParse(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	curr, tgt, ok := s.parseBoostyGoalFromWeb()
-	if ok {
-		_ = s.saveBoostyGoal(curr, tgt, "", "auto_parser")
-		log.Printf("[ADMIN] Boosty goal parsed successfully: %d / %d RUB", curr, tgt)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"message": fmt.Sprintf("Успешно синхронизировано с Boosty: %d ₽ из %d ₽", curr, tgt),
-			"goal":    s.getBoostyGoal(),
-		})
+	if r.Method == http.MethodPost {
+		var req struct {
+			BF6CurrentAmount   *int     `json:"bf6_current_amount"`
+			BF6TargetAmount    *int     `json:"bf6_target_amount"`
+			BF6Completed       *bool    `json:"bf6_completed"`
+			FrankfurtTargetEur *float64 `json:"frankfurt_target_eur"`
+			FrankfurtTargetRub *int     `json:"frankfurt_target_rub"`
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(bodyBytes, &req)
+
+		now := time.Now().Format("2006-01-02 15:04:05")
+		if s.db != nil {
+			if req.BF6CurrentAmount != nil {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_current', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.BF6CurrentAmount))
+			}
+			if req.BF6TargetAmount != nil && *req.BF6TargetAmount > 0 {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_target', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.BF6TargetAmount))
+			}
+			if req.BF6Completed != nil {
+				val := "false"
+				if *req.BF6Completed {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_completed', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+			}
+			if req.FrankfurtTargetEur != nil && *req.FrankfurtTargetEur > 0 {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('frankfurt_goal_target_eur', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, fmt.Sprintf("%.2f", *req.FrankfurtTargetEur))
+			}
+			if req.FrankfurtTargetRub != nil && *req.FrankfurtTargetRub > 0 {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('frankfurt_goal_target_rub', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.FrankfurtTargetRub))
+			}
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_updated_at', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, now)
+			log.Printf("[ADMIN] Community goals updated (BF6 current: %v, target: %v, completed: %v, Frankfurt EUR: %v, RUB: %v)", req.BF6CurrentAmount, req.BF6TargetAmount, req.BF6Completed, req.FrankfurtTargetEur, req.FrankfurtTargetRub)
+		}
+	}
+
+	resp := s.getCommunityGoals()
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+type GameCatalogItem struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Processes   []string `json:"processes"`
+	SteamAppID  int      `json:"steam_app_id"`
+	Icon        string   `json:"icon"`
+	Status      string   `json:"status"` // "active", "beta", "crowdfunding"
+	IsDefault   bool     `json:"is_default,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Note        string   `json:"note,omitempty"`
+}
+
+func (s *AppState) getGamesCatalog() []GameCatalogItem {
+	defaultCatalog := []GameCatalogItem{
+		{
+			ID:          "wardogs",
+			Title:       "WARDOGS",
+			Processes:   []string{"WardogsClient-Win64-Shipping.exe", "WardogsLauncher-Shipping.exe"},
+			SteamAppID:  2645020,
+			Icon:        "wardogs_icon.png",
+			Status:      "active",
+			IsDefault:   true,
+			Description: "Хардкорный тактический шутер. Прямой игровой шлюз и селективная маршрутизация.",
+		},
+		{
+			ID:          "bf6",
+			Title:       "Battlefield 6",
+			Processes:   []string{"bf6.exe", "EAAntiCheat.GameService.exe"},
+			SteamAppID:  0,
+			Icon:        "bf6_icon.png",
+			Status:      "crowdfunding",
+			Description: "Ожидаемый мультиплеерный шутер. Идет сбор средств на покупку игры разработчику.",
+			Note:        "Сбор открыт на Boosty и в Steam",
+		},
+		{
+			ID:          "arc_raiders",
+			Title:       "ARC Raiders",
+			Processes:   []string{"Pioneer.exe"},
+			SteamAppID:  1808500,
+			Icon:        "arc_icon.png",
+			Status:      "beta",
+			Description: "Кооперативный PvPvE экстракшен-шутер от Embark Studios.",
+		},
+		{
+			ID:          "dark_and_darker",
+			Title:       "Dark and Darker",
+			Processes:   []string{"DungeonCrawler.exe"},
+			SteamAppID:  2016590,
+			Icon:        "dad_icon.png",
+			Status:      "active",
+			Description: "Хардкорное подземелье от первого лица. Защита от потерь UDP и обход блокировок лобби.",
+		},
+	}
+
+	if s.db != nil {
+		var customJSON string
+		err := s.db.QueryRow(`SELECT value FROM server_settings WHERE key = 'games_catalog_json'`).Scan(&customJSON)
+		if err == nil && len(customJSON) > 10 {
+			var custom []GameCatalogItem
+			if err := json.Unmarshal([]byte(customJSON), &custom); err == nil && len(custom) > 0 {
+				return custom
+			}
+		}
+	}
+
+	return defaultCatalog
+}
+
+func (s *AppState) handleGamesCatalog(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	catalog := s.getGamesCatalog()
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"games":   catalog,
+		"count":   len(catalog),
+	})
+}
+
+func (s *AppState) handleAdminGamesCatalog(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
 		return
 	}
 
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(r.Body)
+		if err == nil && s.db != nil {
+			var check []GameCatalogItem
+			if err := json.Unmarshal(body, &check); err == nil {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('games_catalog_json', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, string(body))
+				log.Printf("[ADMIN] Games catalog updated: %d items", len(check))
+			}
+		}
+	}
+
+	catalog := s.getGamesCatalog()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": false,
-		"message": "Парсер не нашел цифры сбора на странице Boosty. Сохранены текущие значения.",
-		"goal":    s.getBoostyGoal(),
+		"success": true,
+		"games":   catalog,
+		"count":   len(catalog),
+	})
+}
+
+type DPIStrategyItem struct {
+	ID          int      `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Targets     []string `json:"targets"`
+}
+
+func (s *AppState) handleDPIStrategies(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	strategies := []DPIStrategyItem{
+		{ID: 1, Name: "Стратегия 1 (Default)", Description: "Базовый сплиттинг TLS/HTTP с фейковыми пакетами", Targets: []string{"discord", "youtube"}},
+		{ID: 2, Name: "Стратегия 2 (Aggressive)", Description: "Усиленный мультисплит для провайдеров с глубоким ТСПУ", Targets: []string{"discord", "youtube"}},
+		{ID: 3, Name: "Стратегия 3 (Discord Priority)", Description: "Оптимизация голосовых каналов и WebRTC шлюзов Discord", Targets: []string{"discord"}},
+		{ID: 4, Name: "Стратегия 4 (YouTube 4K)", Description: "Анти-троттлинг видеопотоков Googlevideo и QUIC", Targets: []string{"youtube"}},
+		{ID: 5, Name: "Стратегия 5 (Steam Community)", Description: "Прямой доступ к инвентарю, торговой площадке и профилям Steam", Targets: []string{"steam"}},
+		{ID: 6, Name: "Стратегия 6 (Universal Mixed)", Description: "Комбинированный обход для региональных провайдеров", Targets: []string{"discord", "youtube", "steam"}},
+		{ID: 7, Name: "Стратегия 7 (Fallback Safe)", Description: "Безопасный режим с минимальной модификацией заголовков", Targets: []string{"discord", "youtube"}},
+		{ID: 8, Name: "Стратегия 8 (Extreme Bypass)", Description: "Многократный сплиттинг TCP сессий при жесткой фильтрации", Targets: []string{"discord", "youtube"}},
+		{ID: 9, Name: "Стратегия 9 (Zero Latency)", Description: "Минимальный джиттер для сетевых онлайн-игр", Targets: []string{"games"}},
+		{ID: 10, Name: "Стратегия 10 (Custom)", Description: "Пользовательские параметры WinDivert", Targets: []string{"custom"}},
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"strategies": strategies,
+	})
+}
+
+type AnnouncementItem struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"` // "modal", "toast", "banner"
+	Title       string `json:"title"`
+	Message     string `json:"message"`
+	Severity    string `json:"severity"` // "info", "update", "warning", "urgent"
+	ActionLabel string `json:"action_label,omitempty"`
+	ActionURL   string `json:"action_url,omitempty"`
+	Active      bool   `json:"active"`
+}
+
+func (s *AppState) handleAnnouncements(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	var active *AnnouncementItem
+	if s.db != nil {
+		var raw string
+		err := s.db.QueryRow(`SELECT value FROM server_settings WHERE key = 'active_announcement'`).Scan(&raw)
+		if err == nil && len(raw) > 5 {
+			var it AnnouncementItem
+			if err := json.Unmarshal([]byte(raw), &it); err == nil && it.Active {
+				active = &it
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"announcement": active,
+	})
+}
+
+func (s *AppState) handleAdminAnnouncements(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(r.Body)
+		if err == nil && s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('active_announcement', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, string(body))
+			log.Printf("[ADMIN] Active announcement updated: %s", string(body))
+		}
+	}
+
+	s.handleAnnouncements(w, r)
+}
+
+func (s *AppState) handleSponsorsTiers(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	tiers := []map[string]interface{}{
+		{"id": "recruit", "name": "Рекрут", "price_rub": 100, "role": "Спонсор", "badge_class": "badge-recruit", "perks": []string{"30 дней статуса Спонсор", "Выделенный слот шлюза", "Имя в Зале славы"}},
+		{"id": "operative", "name": "Оперативник", "price_rub": 500, "role": "Оперативник", "badge_class": "badge-operative", "perks": []string{"Все привилегии Рекрута", "Золотой бейдж в профиле", "Приоритетная поддержка"}},
+		{"id": "veteran", "name": "Ветеран", "price_rub": 1000, "role": "Ветеран", "badge_class": "badge-veteran", "perks": []string{"Все привилегии Оперативника", "Платиновая рамка аватара", "Участие в закрытом тестировании"}},
+		{"id": "general", "name": "Генерал", "price_rub": 5000, "role": "Генерал", "badge_class": "badge-general", "perks": []string{"Все привилегии Ветерана", "Легендарный статус", "Прямая связь с разработчиком"}},
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"tiers":   tiers,
 	})
 }
 
@@ -9122,8 +8787,10 @@ func (s *AppState) handleClientTicketUploadLogs(w http.ResponseWriter, r *http.R
 		LogsGzip      string `json:"logs_gzip"`
 		AccountNumber string `json:"account_number"`
 		DeviceID      string `json:"device_id"`
+		AppVersion    string `json:"app_version"`
 		Summary       string `json:"summary"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 25*1024*1024)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_json"})
@@ -9143,6 +8810,25 @@ func (s *AppState) handleClientTicketUploadLogs(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	clientVer := strings.TrimSpace(req.AppVersion)
+	if clientVer == "" {
+		ua := r.Header.Get("User-Agent")
+		if strings.HasPrefix(ua, "WarLink-Client/") {
+			clientVer = strings.TrimPrefix(ua, "WarLink-Client/")
+		}
+	}
+	if clientVer == "" {
+		_ = s.db.QueryRow(`
+			SELECT app_version FROM user_connection_history
+			WHERE (length($1) > 0 AND account_number = $1)
+			   OR (length($2) > 0 AND device_id = $2)
+			ORDER BY connected_at DESC LIMIT 1
+		`, req.AccountNumber, req.DeviceID).Scan(&clientVer)
+	}
+	if clientVer == "" {
+		clientVer = ServerAppVersion
+	}
+
 	tID := req.TicketID
 	if tID <= 0 {
 		_ = s.db.QueryRow(`
@@ -9159,7 +8845,7 @@ func (s *AppState) handleClientTicketUploadLogs(w http.ResponseWriter, r *http.R
 				account_number, device_id, app_version, category, user_comment, logs_archive, logs_archive_size, status
 			) VALUES ($1, $2, $3, 'other', 'Диагностический отчет', $4, $5, 'new')
 			RETURNING id
-		`, req.AccountNumber, req.DeviceID, ServerAppVersion, archiveBytes, len(archiveBytes)).Scan(&tID)
+		`, req.AccountNumber, req.DeviceID, clientVer, archiveBytes, len(archiveBytes)).Scan(&tID)
 		if s.rdb != nil {
 			_ = s.rdb.Publish(context.Background(), "tickets:new", fmt.Sprintf("%d", tID)).Err()
 		}
@@ -9740,1965 +9426,29 @@ func extractFileFromTarGz(archive []byte, targetName string) (string, error) {
 }
 
 func (s *AppState) handleAdminTicketWeb(w http.ResponseWriter, r *http.Request) {
-	// If query key is passed, persist cookie
-	qKey := r.URL.Query().Get("key")
-	if qKey != "" && s.cfg.DashboardKey != "" && qKey == s.cfg.DashboardKey {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "admin_key",
-			Value:    qKey,
-			Path:     "/",
-			MaxAge:   30 * 86400,
-			HttpOnly: false,
-			SameSite: http.SameSiteLaxMode,
-		})
-	}
-
-	if !s.checkAdminAuth(r) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <title>WarLink Support // Доступ ограничен</title>
-    <style>
-        body { background: #0c0d10; color: #e6e8ee; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .box { background: #14161b; border: 1px solid #262a34; padding: 32px; border-radius: 2px; width: 340px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
-        h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 16px 0; color: #FF5E1F; }
-        p { font-size: 13px; color: #8b92a5; margin-bottom: 20px; line-height: 1.4; }
-        input { width: 100%; box-sizing: border-box; background: #0a0b0d; border: 1px solid #262a34; color: #fff; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; border-radius: 2px; outline: none; }
-        input:focus { border-color: #FF5E1F; }
-        button { width: 100%; background: #FF5E1F; color: #fff; border: none; padding: 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; cursor: pointer; border-radius: 2px; }
-        button:hover { background: #e04e14; }
-    </style>
-</head>
-<body>
-    <div class="box">
-        <h2>WARLINK SUPPORT</h2>
-        <p>Для доступа к операционному центру тикетов введите ключ администратора.</p>
-        <form method="GET" action="/admin/tickets">
-            <input type="password" name="key" placeholder="Ключ авторизации" autofocus required>
-            <button type="submit">Войти в систему</button>
-        </form>
-    </div>
-</body>
-</html>`)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(adminTicketCenterHTML))
+	http.Redirect(w, r, "https://warlink-hub.duckdns.org:8055/admin/content/support_tickets", http.StatusFound)
 }
-
-const adminTicketCenterHTML = `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>WarLink Support // Операционный центр тикетов</title>
-    <style>
-        :root {
-            --bg: #0c0d10;
-            --card-bg: #14161b;
-            --surface: #1a1d24;
-            --surface-hover: #222630;
-            --border: #262a34;
-            --border-focus: #3b4252;
-            --text: #e6e8ee;
-            --text-muted: #8b92a5;
-            --text-dim: #5c6375;
-            --accent: #FF5E1F;
-            --accent-hover: #e04e14;
-            --red: #ef4444;
-            --red-bg: rgba(239, 68, 68, 0.12);
-            --amber: #f59e0b;
-            --amber-bg: rgba(245, 158, 11, 0.12);
-            --green: #10b981;
-            --green-bg: rgba(16, 185, 129, 0.12);
-            --blue: #3b82f6;
-            --blue-bg: rgba(59, 130, 246, 0.12);
-            --radius: 2px;
-            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            --font-mono: 'JetBrains Mono', 'Consolas', 'Fira Code', monospace;
-        }
-
-        html, body {
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: var(--font-sans);
-            font-size: 13px;
-            line-height: 1.5;
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            scrollbar-width: thin;
-            scrollbar-color: #333946 transparent;
-        }
-
-        /* Top Header */
-        header {
-            height: 52px;
-            background: var(--card-bg);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 16px;
-            flex-shrink: 0;
-            gap: 16px;
-        }
-
-        .header-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .header-logo {
-            width: 24px;
-            height: 24px;
-            color: var(--accent);
-            flex-shrink: 0;
-        }
-
-        .brand-title {
-            font-size: 13px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--text);
-        }
-
-        .brand-badge {
-            font-size: 10px;
-            font-weight: 600;
-            padding: 2px 6px;
-            background: rgba(255, 94, 31, 0.15);
-            color: var(--accent);
-            border: 1px solid rgba(255, 94, 31, 0.3);
-            border-radius: var(--radius);
-            letter-spacing: 0.05em;
-        }
-
-        .header-stats {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .stat-pill {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            font-size: 11px;
-            font-weight: 600;
-            border-radius: var(--radius);
-            cursor: pointer;
-            border: 1px solid transparent;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            transition: all 0.15s;
-        }
-
-        .stat-pill.pill-new { background: var(--red-bg); color: var(--red); border-color: rgba(239, 68, 68, 0.3); }
-        .stat-pill.pill-progress { background: var(--amber-bg); color: var(--amber); border-color: rgba(245, 158, 11, 0.3); }
-        .stat-pill.pill-resolved { background: var(--green-bg); color: var(--green); border-color: rgba(16, 185, 129, 0.3); }
-        .stat-pill.active { outline: 1px solid currentColor; }
-
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .btn-link {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: var(--surface);
-            color: var(--text-muted);
-            border: 1px solid var(--border);
-            padding: 6px 10px;
-            border-radius: var(--radius);
-            font-size: 11px;
-            font-weight: 600;
-            text-decoration: none;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-link:hover { color: var(--text); background: var(--surface-hover); border-color: var(--border-focus); }
-
-        /* Workspace Grid */
-        .workspace {
-            display: flex;
-            flex: 1;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        /* Left Sidebar: Tickets List */
-        .sidebar {
-            width: 380px;
-            background: var(--bg);
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            flex-shrink: 0;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .sidebar-search-bar {
-            padding: 10px 12px;
-            border-bottom: 1px solid var(--border);
-            background: var(--card-bg);
-            display: flex;
-            gap: 8px;
-        }
-
-        .search-input {
-            flex: 1;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 7px 10px;
-            font-size: 12px;
-            border-radius: var(--radius);
-            outline: none;
-        }
-        .search-input:focus { border-color: var(--accent); }
-
-        .sidebar-tabs {
-            display: flex;
-            background: var(--card-bg);
-            border-bottom: 1px solid var(--border);
-            padding: 4px 8px;
-            gap: 4px;
-        }
-
-        .tab-btn {
-            flex: 1;
-            background: transparent;
-            border: none;
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 600;
-            padding: 6px 0;
-            cursor: pointer;
-            text-align: center;
-            border-radius: var(--radius);
-            transition: all 0.15s;
-        }
-        .tab-btn:hover { color: var(--text); background: var(--surface); }
-        .tab-btn.active { color: #fff; background: var(--surface-hover); border: 1px solid var(--border); }
-
-        .ticket-list {
-            flex: 1;
-            min-height: 0;
-            overflow-y: auto;
-            padding: 8px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .ticket-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 10px 12px;
-            cursor: pointer;
-            transition: border-color 0.15s, background 0.15s;
-            position: relative;
-        }
-        .ticket-card:hover { border-color: var(--border-focus); background: var(--surface); }
-        .ticket-card.selected { border-color: var(--accent); background: var(--surface); }
-
-        .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 4px;
-        }
-
-        .ticket-id {
-            font-family: var(--font-mono);
-            font-size: 11px;
-            font-weight: 700;
-            color: var(--text-muted);
-        }
-
-        .badge-status {
-            font-size: 9px;
-            font-weight: 700;
-            text-transform: uppercase;
-            padding: 2px 5px;
-            border-radius: var(--radius);
-            letter-spacing: 0.05em;
-        }
-        .badge-status.new { background: var(--red-bg); color: var(--red); }
-        .badge-status.in_progress { background: var(--amber-bg); color: var(--amber); }
-        .badge-status.resolved { background: var(--green-bg); color: var(--green); }
-        .badge-status.closed { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
-
-        .card-account {
-            font-family: var(--font-mono);
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text);
-            margin-bottom: 4px;
-        }
-
-        .card-category {
-            display: inline-block;
-            font-size: 10px;
-            font-weight: 600;
-            padding: 1px 5px;
-            background: var(--surface);
-            color: var(--text-muted);
-            border-radius: var(--radius);
-            margin-bottom: 6px;
-        }
-
-        .card-snippet {
-            font-size: 11px;
-            color: var(--text-muted);
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-            line-height: 1.4;
-            margin-bottom: 6px;
-        }
-
-        .card-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 10px;
-            color: var(--text-dim);
-        }
-
-        /* Right Detail Pane */
-        .detail-pane {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            background: var(--bg);
-            min-height: 0;
-            overflow-y: auto;
-            overflow-x: hidden;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .empty-placeholder {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-dim);
-            gap: 12px;
-            padding: 40px;
-            text-align: center;
-        }
-        .empty-placeholder svg { width: 48px; height: 48px; stroke: var(--text-dim); }
-
-        .detail-content {
-            padding: 20px 20px 80px 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 18px;
-            max-width: 1200px;
-            margin: 0 auto;
-            width: 100%;
-        }
-
-        /* Detail Action Bar */
-        .detail-action-bar {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            padding: 14px 16px;
-            border-radius: var(--radius);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-        }
-
-        .detail-title-group {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .detail-title {
-            font-size: 16px;
-            font-weight: 700;
-            font-family: var(--font-mono);
-            color: var(--text);
-        }
-
-        .status-actions {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn-status {
-            padding: 6px 12px;
-            font-size: 11px;
-            font-weight: 600;
-            border-radius: var(--radius);
-            border: 1px solid var(--border);
-            background: var(--surface);
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-status:hover { background: var(--surface-hover); color: #fff; }
-        .btn-status.btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
-        .btn-status.btn-accent:hover { background: var(--accent-hover); }
-
-        /* Diagnostic Info Grid */
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 12px;
-        }
-
-        .info-box {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 12px;
-        }
-
-        .info-label {
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-dim);
-            margin-bottom: 4px;
-        }
-
-        .info-val {
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--text);
-            font-family: var(--font-mono);
-            word-break: break-all;
-        }
-
-        /* User Comment Box */
-        .comment-section {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 16px;
-        }
-
-        .section-header {
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-muted);
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .comment-body {
-            background: #090a0d;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 12px;
-            font-size: 13px;
-            color: var(--text);
-            white-space: pre-wrap;
-            line-height: 1.5;
-        }
-
-        /* Log Explorer */
-        .log-section {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .log-nav-bar {
-            background: #111317;
-            border-bottom: 1px solid var(--border);
-            padding: 6px 12px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        .log-tabs {
-            display: flex;
-            gap: 4px;
-            overflow-x: auto;
-        }
-
-        .log-tab-btn {
-            background: transparent;
-            border: 1px solid transparent;
-            color: var(--text-muted);
-            font-size: 11px;
-            font-family: var(--font-mono);
-            padding: 4px 10px;
-            cursor: pointer;
-            border-radius: var(--radius);
-            transition: all 0.15s;
-            white-space: nowrap;
-        }
-        .log-tab-btn:hover { color: var(--text); background: var(--surface); }
-        .log-tab-btn.active { color: #fff; background: var(--surface); border-color: var(--border-focus); }
-
-        .log-tools {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .log-search-input {
-            background: #090a0d;
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 4px 8px;
-            font-size: 11px;
-            font-family: var(--font-mono);
-            border-radius: var(--radius);
-            outline: none;
-            width: 160px;
-        }
-        .log-search-input:focus { border-color: var(--accent); }
-
-        .log-terminal {
-            background: #08090b;
-            color: #d1d5db;
-            font-family: var(--font-mono);
-            font-size: 12px;
-            line-height: 1.45;
-            padding: 12px;
-            max-height: 480px;
-            overflow: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-
-        /* Syntax highlight tokens */
-        .tok-error { color: #f87171; font-weight: 700; background: rgba(239, 68, 68, 0.15); padding: 0 2px; }
-        .tok-warn  { color: #fbbf24; font-weight: 700; }
-        .tok-info  { color: #60a5fa; }
-        .tok-match { background: #ca8a04; color: #000; font-weight: 700; }
-
-        /* Reply & Notification Dispatcher */
-        .reply-section {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .preset-templates {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-bottom: 4px;
-        }
-
-        .btn-preset {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text-muted);
-            font-size: 10px;
-            font-weight: 600;
-            padding: 4px 8px;
-            border-radius: var(--radius);
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-preset:hover { background: var(--surface-hover); color: var(--text); border-color: var(--border-focus); }
-
-        .form-row {
-            display: flex;
-            gap: 12px;
-        }
-
-        .form-col {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .form-label {
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-dim);
-        }
-
-        .form-input, .form-select, .form-textarea {
-            background: #090a0d;
-            border: 1px solid var(--border);
-            color: var(--text);
-            padding: 8px 10px;
-            font-size: 12px;
-            border-radius: var(--radius);
-            outline: none;
-            font-family: var(--font-sans);
-        }
-        .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--accent); }
-
-        .form-textarea {
-            min-height: 90px;
-            resize: vertical;
-            line-height: 1.45;
-        }
-
-        .reply-actions {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-top: 4px;
-        }
-
-        .check-group {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 12px;
-            color: var(--text-muted);
-            cursor: pointer;
-        }
-
-        .btn-send-reply {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            padding: 8px 16px;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            border-radius: var(--radius);
-            cursor: pointer;
-            transition: background 0.15s;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .btn-send-reply:hover { background: var(--accent-hover); }
-
-        .reply-history-box {
-            background: rgba(16, 185, 129, 0.06);
-            border: 1px solid rgba(16, 185, 129, 0.25);
-            border-radius: var(--radius);
-            padding: 12px;
-            margin-top: 8px;
-        }
-
-        /* Custom Scrollbars */
-        ::-webkit-scrollbar { width: 7px; height: 7px; }
-        ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.25); }
-        ::-webkit-scrollbar-thumb { background: #3b4252; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #FF5E1F; }
-    </style>
-</head>
-<body>
-    <header>
-        <div class="header-brand">
-            <svg class="header-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
-            <div class="brand-title">WarLink Support Desk</div>
-            <div class="brand-badge">OPERATIONS</div>
-        </div>
-
-        <div class="header-stats">
-            <div class="stat-pill pill-new" id="pill-new" onclick="filterByStatus('new')">● <span id="count-new">0</span> Новых</div>
-            <div class="stat-pill pill-progress" id="pill-progress" onclick="filterByStatus('in_progress')">● <span id="count-progress">0</span> В работе</div>
-            <div class="stat-pill pill-resolved" id="pill-resolved" onclick="filterByStatus('resolved')">● <span id="count-resolved">0</span> Решено</div>
-        </div>
-
-        <div class="header-actions">
-            <a href="/admin/routing-feedback" class="btn-link" style="color:var(--accent);">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                Замеры маршрутов
-            </a>
-            <a href="/dashboard" class="btn-link" target="_blank">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
-                Телеметрия
-            </a>
-            <button class="btn-link" onclick="loadTickets()">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-                Обновить
-            </button>
-        </div>
-    </header>
-
-    <div class="workspace">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <div class="sidebar-search-bar">
-                <input type="text" class="search-input" id="search-input" placeholder="Поиск по аккаунту, ID или тексту..." oninput="handleSearch(this.value)">
-            </div>
-            <div class="sidebar-tabs">
-                <button class="tab-btn active" id="tab-all" onclick="filterByStatus('all')">Все (<span id="count-total">0</span>)</button>
-                <button class="tab-btn" id="tab-new" onclick="filterByStatus('new')">Новые</button>
-                <button class="tab-btn" id="tab-in_progress" onclick="filterByStatus('in_progress')">В работе</button>
-                <button class="tab-btn" id="tab-resolved" onclick="filterByStatus('resolved')">Решенные</button>
-            </div>
-            <div class="ticket-list" id="ticket-list">
-                <div style="padding:20px; text-align:center; color:var(--text-dim);">Загрузка обращений...</div>
-            </div>
-        </aside>
-
-        <!-- Main Detail Pane -->
-        <main class="detail-pane" id="detail-pane">
-            <div class="empty-placeholder" id="empty-placeholder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <path d="M22 12h-6l-2 3h-4l-2-3H2"/>
-                    <path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
-                </svg>
-                <div>
-                    <div style="font-size:14px; font-weight:600; color:var(--text-muted); margin-bottom:4px;">Выберите тикет из списка слева</div>
-                    <div style="font-size:12px;">Здесь отобразится системная диагностика, полный лог и форма отправки ответа.</div>
-                </div>
-            </div>
-
-            <div class="detail-content" id="detail-content" style="display:none;">
-                <!-- Action Bar -->
-                <div class="detail-action-bar">
-                    <div class="detail-title-group">
-                        <div class="detail-title" id="d-ticket-id">#TK-0000</div>
-                        <span class="badge-status new" id="d-status-badge">Новый</span>
-                    </div>
-                    <div class="status-actions">
-                        <button class="btn-status" onclick="setTicketStatus('in_progress')">В работу</button>
-                        <button class="btn-status" onclick="setTicketStatus('resolved')">Решено</button>
-                        <button class="btn-status" onclick="setTicketStatus('closed')">Закрыть</button>
-                        <button class="btn-status btn-accent" id="btn-download-archive" onclick="downloadLogsArchive()">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle; margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                            Скачать архив логов (.tar.gz)
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Info Grid -->
-                <div class="info-grid">
-                    <div class="info-box">
-                        <div class="info-label">Аккаунт пользователя</div>
-                        <div class="info-val" id="d-account" style="color:var(--accent);">5230-0000-0000-0000</div>
-                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-device">dev: ...</div>
-                    </div>
-                    <div class="info-box">
-                        <div class="info-label">Версия клиента & ОС</div>
-                        <div class="info-val" id="d-app-ver">v2.1.7</div>
-                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-os-ver">Windows 10.0</div>
-                    </div>
-                    <div class="info-box">
-                        <div class="info-label">Сетевой режим & Службы</div>
-                        <div class="info-val" id="d-network-mode">Комплексный режим</div>
-                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-services-status">sing-box: OK, winws2: OK</div>
-                    </div>
-                    <div class="info-box">
-                        <div class="info-label">Поступление & Размер</div>
-                        <div class="info-val" id="d-time-created">12:34:56 UTC</div>
-                        <div style="font-size:10px; color:var(--text-dim); margin-top:2px;" id="d-archive-size">145 KB</div>
-                    </div>
-                </div>
-
-                <!-- Conversation Stream -->
-                <div class="comment-section">
-                    <div class="section-header">
-                        <span>История переписки и контекст диалога</span>
-                        <span class="card-category" id="d-category-badge">Вылет из матча</span>
-                    </div>
-                    <div class="chat-thread-container" id="d-chat-thread" style="display:flex; flex-direction:column; gap:8px; max-height:220px; overflow-y:auto; padding:6px 0;">
-                        <div class="comment-body" id="d-user-comment">Текст обращения отсутствует.</div>
-                    </div>
-                </div>
-
-                <!-- Full Log Viewer -->
-                <div class="log-section">
-                    <div class="log-nav-bar">
-                        <div class="log-tabs" id="log-tabs">
-                            <!-- Dynamic log buttons -->
-                        </div>
-                        <div class="log-tools">
-                            <input type="text" class="log-search-input" id="log-search" placeholder="Поиск в логе (Ctrl+F)" oninput="filterLog(this.value)">
-                            <button class="btn-status" onclick="copyCurrentLog()">Копировать</button>
-                        </div>
-                    </div>
-                    <div class="log-terminal" id="log-terminal">Загрузка файла лога...</div>
-                </div>
-
-                <!-- Reply & Notification Dispatcher -->
-                <div class="reply-section">
-                    <div class="section-header">
-                        <span>Ответ пользователю через внутриигровое уведомление (Правило 7)</span>
-                        <span style="font-size:10px; color:var(--text-dim); font-weight:normal;">Депеша поступит на аккаунт пользователя в приложении WarLink</span>
-                    </div>
-
-                    <div class="preset-templates">
-                        <span style="font-size:10px; color:var(--text-dim); align-self:center; margin-right:4px;">Шаблоны быстрых ответов:</span>
-                        <button class="btn-preset" onclick="applyTemplate('error_114745308')">Ошибка 114745308 (Рассинхрон IP/UDP)</button>
-                        <button class="btn-preset" onclick="applyTemplate('zapret_crash')">Конфликт WinDivert / Запрет</button>
-                        <button class="btn-preset" onclick="applyTemplate('match_drop')">Вылет из матча (Таймаут шлюза)</button>
-                        <button class="btn-preset" onclick="applyTemplate('resolved')">Успешное решение</button>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-col" style="flex:2;">
-                            <label class="form-label">Заголовок депеши</label>
-                            <input type="text" class="form-input" id="reply-title" placeholder="Например: Решение по вашему обращению">
-                        </div>
-                        <div class="form-col" style="flex:1;">
-                            <label class="form-label">Важность (Цвет баннера)</label>
-                            <select class="form-select" id="reply-severity">
-                                <option value="update" selected>Update (Оранжевый)</option>
-                                <option value="urgent">Urgent (Красный)</option>
-                                <option value="warning">Warning (Желтый)</option>
-                                <option value="info">Info (Синий)</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="form-col">
-                        <label class="form-label">Текст сообщения</label>
-                        <textarea class="form-textarea" id="reply-message" placeholder="Введите рекомендации для пользователя..."></textarea>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-col">
-                            <label class="form-label">Текст кнопки действия (опционально)</label>
-                            <input type="text" class="form-input" id="reply-action-label" placeholder="Например: Проверить статус или Уровень WARDOGS">
-                        </div>
-                        <div class="form-col">
-                            <label class="form-label">Роут перехода (опционально)</label>
-                            <input type="text" class="form-input" id="reply-action-url" placeholder="Например: #view-details или #view-progression">
-                        </div>
-                    </div>
-
-                    <div class="reply-actions">
-                        <label class="check-group">
-                            <input type="checkbox" id="reply-mark-resolved" checked>
-                            <span>Отметить тикет как решенный (resolved)</span>
-                        </label>
-                        <button class="btn-send-reply" id="btn-send-reply" onclick="sendReply()">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                            Отправить депешу пользователю
-                        </button>
-                    </div>
-
-                    <div class="reply-history-box" id="reply-history" style="display:none;">
-                        <div style="font-size:10px; font-weight:700; color:var(--green); text-transform:uppercase; margin-bottom:4px;">Ранее отправленный ответ:</div>
-                        <div style="font-size:12px; color:var(--text);" id="reply-history-text"></div>
-                    </div>
-                </div>
-            </div>
-        </main>
-    </div>
-
-    <script>
-        let currentTickets = [];
-        let selectedTicket = null;
-        let selectedTicketFiles = [];
-        let currentActiveLogFile = '';
-        let currentRawLogText = '';
-        let currentStatusFilter = 'all';
-        let currentSearchQuery = '';
-
-        const categoryNames = {
-            'wardogs_crash': 'Вылет / Ошибка 114745308',
-            'discord_fail': 'Discord / Сеть',
-            'gateway_connect': 'Подключение к шлюзу',
-            'packet_loss': 'Пинг / Потери пакетов',
-            'other': 'Общий вопрос'
-        };
-
-        const replyTemplates = {
-            'error_114745308': {
-                title: 'Решение по ошибке 114745308',
-                severity: 'update',
-                message: 'Мы проанализировали ваши логи: код 114745308 (0x06D6DFDC) в WARDOGS вызван рассинхронизацией авторизации HTTPS и игровых UDP-портов AWS GameLift.\n\nРекомендация:\n1. В настройках WarLink переключитесь в «Комплексный режим».\n2. Перезапустите игру WARDOGS.\n3. Если игра запущена через сквад, убедитесь, что соединение установлено до начала поиска матча.',
-                action_label: 'Открыть настройки',
-                action_url: '#view-details'
-            },
-            'zapret_crash': {
-                title: 'Рекомендации по стабильности WinDivert',
-                severity: 'warning',
-                message: 'Анализ логов выявил сбой службы winws2 (WinDivert). Чаще всего это вызвано конфликтом с другим программным обеспечением (сторонние антивирусы, античит или параллельные DPI-клиенты).\n\nРекомендация:\n1. Добавьте папку WarLink в исключения Защитника Windows.\n2. Закройте другие программы фильтрации трафика.\n3. Запустите WarLink от имени администратора.',
-                action_label: 'Проверить статус',
-                action_url: '#view-details'
-            },
-            'match_drop': {
-                title: 'Анализ дисконнекта во время матча',
-                severity: 'info',
-                message: 'Мы зафиксировали кратковременный сброс сессии шлюза. Ваш Discord продолжал работать, так как использует отдельный маршрут.\n\nНа сервере проведена оптимизация тайм-аутов QUIC. Дополнительных действий не требуется, стабильность восстановлена.',
-                action_label: 'Телеметрия',
-                action_url: '#view-details'
-            },
-            'resolved': {
-                title: 'Ваше обращение успешно обработано',
-                severity: 'update',
-                message: 'Техническая команда WarLink проверила полученную диагностику. Все необходимые корректировки применены на шлюзе. Приятной игры!',
-                action_label: 'Уровень WARDOGS',
-                action_url: '#view-progression'
-            }
-        };
-
-        async function loadTickets() {
-            try {
-                let url = '/api/v1/admin/tickets?status=' + encodeURIComponent(currentStatusFilter);
-                if (currentSearchQuery) url += '&q=' + encodeURIComponent(currentSearchQuery);
-
-                const res = await fetch(url);
-                if (!res.ok) {
-                    if (res.status === 403 || res.status === 401) {
-                        window.location.reload();
-                    }
-                    return;
-                }
-                const data = await res.json();
-                if (data && data.success) {
-                    currentTickets = data.tickets || [];
-                    updateCounts(data.counts || {});
-                    renderTicketList();
-                    if (selectedTicket) {
-                        const updated = currentTickets.find(t => t.id === selectedTicket.id);
-                        if (updated) {
-                            selectedTicket = updated;
-                            updateDetailHeaderOnly();
-                        }
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to load tickets:', err);
-            }
-        }
-
-        function updateCounts(counts) {
-            document.getElementById('count-new').textContent = counts.new || 0;
-            document.getElementById('count-progress').textContent = counts.in_progress || 0;
-            document.getElementById('count-resolved').textContent = counts.resolved || 0;
-            document.getElementById('count-total').textContent = counts.total || 0;
-        }
-
-        function filterByStatus(st) {
-            currentStatusFilter = st;
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            document.querySelectorAll('.stat-pill').forEach(pill => pill.classList.remove('active'));
-
-            const tab = document.getElementById('tab-' + st);
-            if (tab) tab.classList.add('active');
-            if (st === 'new') document.getElementById('pill-new').classList.add('active');
-            if (st === 'in_progress') document.getElementById('pill-progress').classList.add('active');
-            if (st === 'resolved') document.getElementById('pill-resolved').classList.add('active');
-
-            loadTickets();
-        }
-
-        let searchDebounceTimer = null;
-        function handleSearch(val) {
-            clearTimeout(searchDebounceTimer);
-            searchDebounceTimer = setTimeout(() => {
-                currentSearchQuery = val.trim();
-                loadTickets();
-            }, 250);
-        }
-
-        function renderTicketList() {
-            const listEl = document.getElementById('ticket-list');
-            if (!currentTickets || currentTickets.length === 0) {
-                listEl.innerHTML = '<div style="padding:40px 20px; text-align:center; color:var(--text-dim); font-size:12px;">Обращений не найдено</div>';
-                return;
-            }
-
-            let html = '';
-            for (const t of currentTickets) {
-                const isSel = selectedTicket && selectedTicket.id === t.id;
-                const catName = categoryNames[t.category] || t.category || 'Общий';
-                const timeAgo = formatTimeAgo(t.created_at);
-                const kb = Math.round((t.logs_archive_size || 0) / 1024);
-                const statusClass = t.status || 'new';
-
-                html += '<div class="ticket-card ' + (isSel ? 'selected' : '') + '" onclick="selectTicket(' + t.id + ')">' +
-                    '<div class="card-header">' +
-                        '<span class="ticket-id">#TK-' + String(t.id).padStart(4, '0') + '</span>' +
-                        '<span class="badge-status ' + statusClass + '">' + formatStatusName(t.status) + '</span>' +
-                    '</div>' +
-                    '<div class="card-account">' + escapeHtml(t.account_number || t.device_id || 'Аноним') + '</div>' +
-                    '<div><span class="card-category">' + escapeHtml(catName) + '</span></div>' +
-                    '<div class="card-snippet">' + escapeHtml(t.user_comment || 'Без комментария') + '</div>' +
-                    '<div class="card-footer">' +
-                        '<span>' + timeAgo + '</span>' +
-                        '<span>' + kb + ' KB архива</span>' +
-                    '</div>' +
-                '</div>';
-            }
-            listEl.innerHTML = html;
-        }
-
-        let selectedTicketMessages = [];
-
-        async function selectTicket(id) {
-            try {
-                const res = await fetch('/api/v1/admin/tickets/' + id);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (data && data.success) {
-                    selectedTicket = data.ticket;
-                    selectedTicketFiles = data.files || [];
-                    selectedTicketMessages = data.messages || [];
-                    renderTicketDetail();
-                    renderTicketList();
-                }
-            } catch (err) {
-                console.error('Failed to select ticket:', err);
-            }
-        }
-
-        function renderTicketDetail() {
-            if (!selectedTicket) return;
-
-            document.getElementById('empty-placeholder').style.display = 'none';
-            document.getElementById('detail-content').style.display = 'flex';
-
-            document.getElementById('d-ticket-id').textContent = '#TK-' + String(selectedTicket.id).padStart(4, '0');
-            const badge = document.getElementById('d-status-badge');
-            badge.className = 'badge-status ' + (selectedTicket.status || 'new');
-            badge.textContent = formatStatusName(selectedTicket.status);
-
-            document.getElementById('d-account').textContent = selectedTicket.account_number || 'Не привязан';
-            document.getElementById('d-device').textContent = 'dev: ' + (selectedTicket.device_id ? selectedTicket.device_id.substring(0, 16) + '...' : 'none');
-            document.getElementById('d-app-ver').textContent = selectedTicket.app_version || 'v2.1.13';
-
-            // Parse system_info
-            const sys = selectedTicket.system_info || {};
-            document.getElementById('d-os-ver').textContent = sys.os || 'Windows';
-            document.getElementById('d-network-mode').textContent = sys.mode === 'complex' ? 'Комплексный режим' : 'Игровой режим (Direct)';
-            const singboxOk = sys.singbox_running ? 'sing-box: OK' : 'sing-box: OFF';
-            const winws2Ok = sys.winws2_running ? 'winws2: OK' : 'winws2: OFF';
-            const pingStr = sys.gateway_ping ? ', ping: ' + sys.gateway_ping + 'ms' : '';
-            document.getElementById('d-services-status').textContent = singboxOk + ', ' + winws2Ok + pingStr;
-
-            document.getElementById('d-time-created').textContent = selectedTicket.created_at ? selectedTicket.created_at.replace('T', ' ').replace('Z', ' UTC') : '';
-            document.getElementById('d-archive-size').textContent = Math.round((selectedTicket.logs_archive_size || 0) / 1024) + ' KB логов';
-
-            document.getElementById('d-category-badge').textContent = categoryNames[selectedTicket.category] || selectedTicket.category;
-
-            // Render conversation thread
-            const threadEl = document.getElementById('d-chat-thread');
-            if (threadEl) {
-                if (selectedTicketMessages && selectedTicketMessages.length > 0) {
-                    let threadHtml = '';
-                    for (const m of selectedTicketMessages) {
-                        const isUser = m.sender_type === 'user';
-                        const isAdmin = m.sender_type === 'admin';
-                        const isSys = m.sender_type === 'system';
-                        const timeStr = m.created_at ? m.created_at.replace('T', ' ').replace('Z', '') : '';
-
-                        if (isSys) {
-                            threadHtml += '<div style="background:#141414; border:1px solid #222; padding:6px 10px; border-radius:2px; font-size:11px; color:#888;">' +
-                                '<span style="font-weight:600; color:#ff9800;">Система:</span> ' + escapeHtml(m.message) +
-                                '<span style="font-size:9px; color:#555; float:right;">' + timeStr + '</span></div>';
-                        } else if (isAdmin) {
-                            threadHtml += '<div style="background:#17202a; border-left:3px solid #ff5e1f; padding:8px 10px; border-radius:2px; font-size:12px; color:#e0e0e0; margin-left:16px;">' +
-                                '<div style="font-size:10px; color:#ff5e1f; font-weight:600; margin-bottom:3px;">' + escapeHtml(m.sender_name || 'Max (Разработчик)') +
-                                '<span style="font-size:9px; color:#666; float:right;">' + timeStr + '</span></div>' +
-                                '<div style="white-space:pre-wrap;">' + escapeHtml(m.message) + '</div></div>';
-                        } else {
-                            threadHtml += '<div style="background:#1c1c1c; border-left:3px solid #5865F2; padding:8px 10px; border-radius:2px; font-size:12px; color:#ddd; margin-right:16px;">' +
-                                '<div style="font-size:10px; color:#7289da; font-weight:600; margin-bottom:3px;">' + escapeHtml(m.sender_name || 'Пользователь') +
-                                '<span style="font-size:9px; color:#666; float:right;">' + timeStr + '</span></div>' +
-                                '<div style="white-space:pre-wrap;">' + escapeHtml(m.message) + '</div></div>';
-                        }
-                    }
-                    threadEl.innerHTML = threadHtml;
-                    threadEl.scrollTop = threadEl.scrollHeight;
-                } else {
-                    threadEl.innerHTML = '<div class="comment-body">' + escapeHtml(selectedTicket.user_comment || 'Без комментария') + '</div>';
-                }
-            }
-
-            // Fill default reply title and actions
-            document.getElementById('reply-title').value = 'Решение по обращению #TK-' + String(selectedTicket.id).padStart(4, '0');
-            const actUrlEl = document.getElementById('reply-action-url');
-            if (actUrlEl) actUrlEl.value = '#view-support';
-            const actLblEl = document.getElementById('reply-action-label');
-            if (actLblEl) actLblEl.value = 'Открыть диалог';
-
-            // Render log tabs
-            renderLogTabs();
-        }
-
-        function updateDetailHeaderOnly() {
-            if (!selectedTicket) return;
-            const badge = document.getElementById('d-status-badge');
-            badge.className = 'badge-status ' + (selectedTicket.status || 'new');
-            badge.textContent = formatStatusName(selectedTicket.status);
-        }
-
-        function renderLogTabs() {
-            const tabsEl = document.getElementById('log-tabs');
-            if (!selectedTicketFiles || selectedTicketFiles.length === 0) {
-                tabsEl.innerHTML = '<span style="font-size:11px; color:var(--text-dim); padding:4px;">В архиве нет файлов логов</span>';
-                document.getElementById('log-terminal').textContent = 'Логи отсутствуют';
-                return;
-            }
-
-            let html = '';
-            // Prefer warlink.log first, or the first file
-            if (!currentActiveLogFile || !selectedTicketFiles.some(f => f.name === currentActiveLogFile)) {
-                const warlinkFile = selectedTicketFiles.find(f => f.name.includes('warlink.log'));
-                currentActiveLogFile = warlinkFile ? warlinkFile.name : selectedTicketFiles[0].name;
-            }
-
-            for (const f of selectedTicketFiles) {
-                const isActive = f.name === currentActiveLogFile;
-                const kb = Math.round(f.size / 1024);
-                html += '<button class="log-tab-btn ' + (isActive ? 'active' : '') + '" onclick="switchLogFile(\'' + escapeHtml(f.name) + '\')">' + escapeHtml(f.name) + ' (' + kb + 'KB)</button>';
-            }
-            tabsEl.innerHTML = html;
-            fetchLogFile(currentActiveLogFile);
-        }
-
-        async function switchLogFile(name) {
-            currentActiveLogFile = name;
-            document.querySelectorAll('.log-tab-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.textContent.startsWith(name));
-            });
-            await fetchLogFile(name);
-        }
-
-        async function fetchLogFile(fileName) {
-            if (!selectedTicket) return;
-            const term = document.getElementById('log-terminal');
-            term.textContent = 'Чтение ' + fileName + '...';
-
-            try {
-                const res = await fetch('/api/v1/admin/tickets/' + selectedTicket.id + '/file?name=' + encodeURIComponent(fileName));
-                if (!res.ok) {
-                    term.textContent = 'Ошибка загрузки файла ' + fileName;
-                    return;
-                }
-                const data = await res.json();
-                if (data && data.success) {
-                    currentRawLogText = data.content || '';
-                    renderLogTerminal(currentRawLogText);
-                }
-            } catch (err) {
-                term.textContent = 'Ошибка сети при получении лога: ' + err;
-            }
-        }
-
-        function renderLogTerminal(raw) {
-            const term = document.getElementById('log-terminal');
-            if (!raw) {
-                term.textContent = 'Файл пуст';
-                return;
-            }
-
-            // Syntax highlighting
-            const lines = raw.split('\n');
-            let out = [];
-            for (let line of lines) {
-                let esc = escapeHtml(line);
-                if (esc.includes('[ERROR]') || esc.includes('FATAL') || esc.includes('panic') || esc.includes('114745308')) {
-                    esc = '<span class="tok-error">' + esc + '</span>';
-                } else if (esc.includes('[WARN]')) {
-                    esc = '<span class="tok-warn">' + esc + '</span>';
-                } else if (esc.includes('[INFO]') || esc.includes('[NET]')) {
-                    esc = '<span class="tok-info">' + esc + '</span>';
-                }
-                out.push(esc);
-            }
-            term.innerHTML = out.join('\n');
-            term.scrollTop = term.scrollHeight; // Scroll to end
-        }
-
-        function filterLog(query) {
-            if (!query) {
-                renderLogTerminal(currentRawLogText);
-                return;
-            }
-            const q = query.toLowerCase();
-            const lines = currentRawLogText.split('\n');
-            let out = [];
-            for (let line of lines) {
-                if (line.toLowerCase().includes(q)) {
-                    let esc = escapeHtml(line);
-                    const regex = new RegExp('(' + escapeRegex(query) + ')', 'gi');
-                    esc = esc.replace(regex, '<span class="tok-match">$1</span>');
-                    out.push(esc);
-                }
-            }
-            const term = document.getElementById('log-terminal');
-            term.innerHTML = out.length > 0 ? out.join('\n') : '<span style="color:var(--text-dim);">Совпадений не найдено</span>';
-        }
-
-        function copyCurrentLog() {
-            if (!currentRawLogText) return;
-            navigator.clipboard.writeText(currentRawLogText).then(() => {
-                alert('Лог скопирован в буфер обмена');
-            });
-        }
-
-        function downloadLogsArchive() {
-            if (!selectedTicket) return;
-            window.open('/api/v1/admin/tickets/' + selectedTicket.id + '/archive', '_blank');
-        }
-
-        async function setTicketStatus(status) {
-            if (!selectedTicket) return;
-            try {
-                const res = await fetch('/api/v1/admin/tickets/' + selectedTicket.id + '/status', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status })
-                });
-                if (res.ok) {
-                    selectedTicket.status = status;
-                    updateDetailHeaderOnly();
-                    loadTickets();
-                }
-            } catch (err) {
-                console.error('Failed to set ticket status:', err);
-            }
-        }
-
-        function applyTemplate(key) {
-            const tmpl = replyTemplates[key];
-            if (!tmpl) return;
-            document.getElementById('reply-title').value = tmpl.title;
-            document.getElementById('reply-severity').value = tmpl.severity;
-            document.getElementById('reply-message').value = tmpl.message;
-            document.getElementById('reply-action-label').value = tmpl.action_label || '';
-            document.getElementById('reply-action-url').value = tmpl.action_url || '';
-        }
-
-        async function sendReply() {
-            if (!selectedTicket) return;
-
-            const title = document.getElementById('reply-title').value.trim();
-            const message = document.getElementById('reply-message').value.trim();
-            const severity = document.getElementById('reply-severity').value;
-            const actionLabel = document.getElementById('reply-action-label').value.trim();
-            const actionUrl = document.getElementById('reply-action-url').value.trim();
-            const markResolved = document.getElementById('reply-mark-resolved').checked;
-
-            if (!title || !message) {
-                alert('Заполните заголовок и текст сообщения');
-                return;
-            }
-
-            const sendBtn = document.getElementById('btn-send-reply');
-            sendBtn.disabled = true;
-            sendBtn.textContent = 'Отправка депеши...';
-
-            try {
-                const payload = {
-                    title,
-                    message,
-                    severity,
-                    action_label: actionLabel,
-                    action_url: actionUrl,
-                    status: markResolved ? 'resolved' : 'in_progress'
-                };
-
-                const res = await fetch('/api/v1/admin/tickets/' + selectedTicket.id + '/reply', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (res.ok) {
-                    const data = await res.json();
-                    selectedTicket.admin_reply = message;
-                    selectedTicket.status = data.status || (markResolved ? 'resolved' : 'in_progress');
-                    updateDetailHeaderOnly();
-
-                    const historyBox = document.getElementById('reply-history');
-                    historyBox.style.display = 'block';
-                    document.getElementById('reply-history-text').textContent = message;
-
-                    alert('Депеша успешно отправлена на аккаунт пользователя!');
-                    loadTickets();
-                } else {
-                    alert('Ошибка при отправке депеши');
-                }
-            } catch (err) {
-                alert('Сетевая ошибка: ' + err);
-            } finally {
-                sendBtn.disabled = false;
-                sendBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Отправить депешу пользователю';
-            }
-        }
-
-        function formatStatusName(st) {
-            switch(st) {
-                case 'new': return 'Новый';
-                case 'in_progress': return 'В работе';
-                case 'resolved': return 'Решен';
-                case 'closed': return 'Закрыт';
-                default: return st || 'Новый';
-            }
-        }
-
-        function formatTimeAgo(dateStr) {
-            if (!dateStr) return '';
-            const d = new Date(dateStr);
-            const now = new Date();
-            const diffSec = Math.floor((now - d) / 1000);
-            if (diffSec < 60) return 'только что';
-            if (diffSec < 3600) return Math.floor(diffSec / 60) + ' мин назад';
-            if (diffSec < 86400) return Math.floor(diffSec / 3600) + ' ч назад';
-            return Math.floor(diffSec / 86400) + ' дн назад';
-        }
-
-        function escapeHtml(str) {
-            if (!str) return '';
-            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
-
-        function escapeRegex(str) {
-            return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }
-
-        // Initialize
-        loadTickets();
-        setInterval(loadTickets, 15000); // 15-second background auto-refresh
-    </script>
-</body>
-</html>
-`
 
 func (s *AppState) handleAdminRoutingFeedbackWeb(w http.ResponseWriter, r *http.Request) {
-	qKey := r.URL.Query().Get("key")
-	if qKey != "" && s.cfg.DashboardKey != "" && qKey == s.cfg.DashboardKey {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "admin_key",
-			Value:    qKey,
-			Path:     "/",
-			MaxAge:   30 * 86400,
-			HttpOnly: false,
-			SameSite: http.SameSiteLaxMode,
-		})
-	}
-
-	if !s.checkAdminAuth(r) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <title>WarLink Routing // Доступ ограничен</title>
-    <style>
-        body { background: #0c0d10; color: #e6e8ee; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .box { background: #14161b; border: 1px solid #262a34; padding: 32px; border-radius: 2px; width: 340px; }
-        h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 16px 0; color: #FF5E1F; }
-        p { font-size: 13px; color: #8b92a5; margin-bottom: 20px; line-height: 1.4; }
-        input { width: 100%; box-sizing: border-box; background: #0a0b0d; border: 1px solid #262a34; color: #fff; padding: 10px 12px; font-size: 14px; margin-bottom: 16px; border-radius: 2px; outline: none; }
-        input:focus { border-color: #FF5E1F; }
-        button { width: 100%; background: #FF5E1F; color: #fff; border: none; padding: 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; cursor: pointer; border-radius: 2px; }
-        button:hover { background: #e04e14; }
-    </style>
-</head>
-<body>
-    <div class="box">
-        <h2>WARLINK ROUTING</h2>
-        <p>Для доступа к панели замеров маршрутов введите ключ администратора.</p>
-        <form method="GET" action="/admin/routing-feedback">
-            <input type="password" name="key" placeholder="Ключ авторизации" autofocus required>
-            <button type="submit">Войти в систему</button>
-        </form>
-    </div>
-</body>
-</html>`)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(adminRoutingFeedbackHTML))
+	http.Redirect(w, r, "https://warlink-hub.duckdns.org:8055/admin/content/routing_feedback", http.StatusFound)
 }
 
-const adminRoutingFeedbackHTML = `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>WarLink // Замеры и фидбек маршрутов</title>
-    <style>
-        :root {
-            --bg: #0c0d10;
-            --card-bg: #14161b;
-            --surface: #1a1d24;
-            --surface-hover: #222630;
-            --border: #262a34;
-            --text: #e6e8ee;
-            --text-muted: #8b92a5;
-            --text-dim: #5c6375;
-            --accent: #FF5E1F;
-            --green: #10b981;
-            --amber: #f59e0b;
-            --red: #ef4444;
-            --blue: #3b82f6;
-            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            --font-mono: 'JetBrains Mono', 'Consolas', monospace;
-        }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: var(--font-sans);
-            font-size: 13px;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
-        }
-
-        header {
-            height: 52px;
-            background: var(--card-bg);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 20px;
-            flex-shrink: 0;
-        }
-
-        .header-brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .brand-title {
-            font-size: 13px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--text);
-        }
-
-        .brand-badge {
-            font-size: 10px;
-            font-weight: 600;
-            padding: 2px 6px;
-            background: rgba(255, 94, 31, 0.15);
-            color: var(--accent);
-            border: 1px solid rgba(255, 94, 31, 0.3);
-            border-radius: 2px;
-        }
-
-        .header-nav {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .nav-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
-            background: #14161b;
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.12s ease;
-        }
-
-        .nav-btn:hover {
-            color: var(--text);
-            border-color: #3b4252;
-        }
-
-        .nav-btn.active {
-            background: #1c1512;
-            border-color: var(--accent);
-            color: #ffffff;
-        }
-
-        main {
-            flex: 1;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            max-width: 1400px;
-            width: 100%;
-            margin: 0 auto;
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-        }
-
-        .stat-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 14px 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            border-top: 2px solid var(--border);
-        }
-
-        .stat-card.mode-moscow { border-top-color: #10b981; }
-        .stat-card.mode-stockholm { border-top-color: #3b82f6; }
-        .stat-card.mode-transit { border-top-color: var(--accent); }
-
-        .stat-card-title {
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
-        }
-
-        .stat-card-main {
-            display: flex;
-            align-items: baseline;
-            gap: 8px;
-        }
-
-        .stat-card-ping {
-            font-size: 26px;
-            font-weight: 700;
-            font-family: var(--font-mono);
-            color: var(--text);
-        }
-
-        .stat-card-unit {
-            font-size: 12px;
-            color: var(--text-dim);
-            font-family: var(--font-mono);
-        }
-
-        .stat-card-meta {
-            display: flex;
-            justify-content: space-between;
-            font-size: 11px;
-            color: var(--text-dim);
-            border-top: 1px solid #1c202a;
-            padding-top: 6px;
-            margin-top: 4px;
-        }
-
-        .filter-bar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 8px 12px;
-        }
-
-        .filter-tabs {
-            display: flex;
-            gap: 6px;
-        }
-
-        .filter-tab {
-            padding: 5px 12px;
-            background: #111317;
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            color: var(--text-muted);
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-
-        .filter-tab:hover { color: var(--text); }
-        .filter-tab.active {
-            background: #1c1512;
-            border-color: var(--accent);
-            color: #ffffff;
-        }
-
-        .search-box {
-            position: relative;
-            width: 260px;
-        }
-
-        .search-input {
-            width: 100%;
-            height: 30px;
-            background: #0a0b0d;
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            padding: 0 10px;
-            color: var(--text);
-            font-size: 12px;
-            outline: none;
-        }
-
-        .search-input:focus { border-color: var(--accent); }
-
-        .table-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 2px;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            text-align: left;
-        }
-
-        th {
-            background: #111317;
-            border-bottom: 1px solid var(--border);
-            padding: 9px 12px;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-dim);
-        }
-
-        td {
-            padding: 10px 12px;
-            border-bottom: 1px solid #1a1e27;
-            font-size: 12px;
-            vertical-align: middle;
-        }
-
-        tr:hover td {
-            background: rgba(255, 255, 255, 0.02);
-        }
-
-        .font-mono { font-family: var(--font-mono); }
-
-        .badge-mode {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 2px;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 0.03em;
-        }
-        .badge-mode.direct_moscow { background: rgba(16, 185, 129, 0.12); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
-        .badge-mode.direct_stockholm { background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.3); }
-        .badge-mode.transit { background: rgba(255, 94, 31, 0.12); color: var(--accent); border: 1px solid rgba(255, 94, 31, 0.3); }
-
-        .badge-status {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-        .dot { width: 6px; height: 6px; border-radius: 50%; }
-        .dot-green { background: #10b981; }
-        .dot-yellow { background: #f59e0b; }
-        .dot-red { background: #ef4444; }
-
-        .badge-ping {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 2px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            font-weight: 700;
-        }
-        .ping-fast { background: #0c2b18; color: #34d399; }
-        .ping-medium { background: #0c203b; color: #60a5fa; }
-        .ping-high { background: #2f1b0c; color: #fb923c; }
-
-        .comment-text {
-            color: var(--text);
-            max-width: 400px;
-            word-break: break-word;
-            line-height: 1.35;
-        }
-
-        .empty-state {
-            padding: 40px;
-            text-align: center;
-            color: var(--text-dim);
-            font-size: 13px;
-        }
-    </style>
-</head>
-<body>
-    <header>
-        <div class="header-brand">
-            <svg class="header-logo" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2">
-                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-                <line x1="6" y1="6" x2="6.01" y2="6"/>
-                <line x1="6" y1="18" x2="6.01" y2="18"/>
-            </svg>
-            <span class="brand-title">WARLINK // ОПЕРАЦИОННЫЙ ЦЕНТР</span>
-            <span class="brand-badge">ЗАМЕРЫ СЕТИ</span>
-        </div>
-        <div class="header-nav">
-            <a href="/admin/tickets" class="nav-btn">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                Тикеты пользователей
-            </a>
-            <a href="/admin/routing-feedback" class="nav-btn active">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                Замеры маршрутов
-            </a>
-            <a href="/dashboard" class="nav-btn" target="_blank">
-                Телеметрия
-            </a>
-        </div>
-    </header>
-
-    <main>
-        <!-- Summary Cards -->
-        <div class="stats-grid">
-            <div class="stat-card mode-moscow">
-                <span class="stat-card-title">Москва (RU)</span>
-                <div class="stat-card-main">
-                    <span class="stat-card-ping" id="stat-ping-moscow">—</span>
-                    <span class="stat-card-unit">мс средний пинг</span>
-                </div>
-                <div class="stat-card-meta">
-                    <span id="stat-count-moscow">0 замеров</span>
-                    <span id="stat-rate-moscow" style="color:#10b981;">— % отлично</span>
-                </div>
-            </div>
-
-            <div class="stat-card mode-stockholm">
-                <span class="stat-card-title">Стокгольм (EU)</span>
-                <div class="stat-card-main">
-                    <span class="stat-card-ping" id="stat-ping-stockholm">—</span>
-                    <span class="stat-card-unit">мс средний пинг</span>
-                </div>
-                <div class="stat-card-meta">
-                    <span id="stat-count-stockholm">0 замеров</span>
-                    <span id="stat-rate-stockholm" style="color:#3b82f6;">— % отлично</span>
-                </div>
-            </div>
-
-            <div class="stat-card mode-transit">
-                <span class="stat-card-title">Транзит (RU→EU)</span>
-                <div class="stat-card-main">
-                    <span class="stat-card-ping" id="stat-ping-transit">—</span>
-                    <span class="stat-card-unit">мс средний пинг</span>
-                </div>
-                <div class="stat-card-meta">
-                    <span id="stat-count-transit">0 замеров</span>
-                    <span id="stat-rate-transit" style="color:var(--accent);">— % отлично</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Filter Bar -->
-        <div class="filter-bar">
-            <div class="filter-tabs">
-                <button class="filter-tab active" data-filter="all" onclick="setFilter('all')">Все замеры (<span id="count-all">0</span>)</button>
-                <button class="filter-tab" data-filter="direct_moscow" onclick="setFilter('direct_moscow')">Москва</button>
-                <button class="filter-tab" data-filter="direct_stockholm" onclick="setFilter('direct_stockholm')">Стокгольм</button>
-                <button class="filter-tab" data-filter="transit" onclick="setFilter('transit')">Транзит</button>
-            </div>
-            <div style="display:flex; align-items:center; gap:8px;">
-                <div class="search-box">
-                    <input type="text" id="search-input" class="search-input" placeholder="Поиск по аккаунту или тексту..." oninput="handleSearch(this.value)">
-                </div>
-                <button class="nav-btn" onclick="loadFeedbackData()">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-                    Обновить
-                </button>
-            </div>
-        </div>
-
-        <!-- Table Card -->
-        <div class="table-card">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="width:130px;">Время (МСК)</th>
-                        <th style="width:140px;">Аккаунт</th>
-                        <th style="width:120px;">Маршрут</th>
-                        <th style="width:90px;">Пинг</th>
-                        <th style="width:140px;">Статус</th>
-                        <th style="width:180px;">Матч / Discord</th>
-                        <th>Комментарий игрока</th>
-                    </tr>
-                </thead>
-                <tbody id="feedback-tbody">
-                    <tr><td colspan="7" class="empty-state">Загрузка данных замеров...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </main>
-
-    <script>
-        let allItems = [];
-        let currentFilter = 'all';
-        let searchQuery = '';
-
-        async function loadFeedbackData() {
-            try {
-                const res = await fetch('/api/v1/admin/routing-feedback', { credentials: 'same-origin' });
-                if (!res.ok) {
-                    if (res.status === 401 || res.status === 403) { location.reload(); return; }
-                    throw new Error('HTTP ' + res.status);
-                }
-                const data = await res.json();
-                if (data && data.success) {
-                    renderStats(data.stats || []);
-                    allItems = data.items || [];
-                    renderTable();
-                } else {
-                    throw new Error(data && data.error ? data.error : 'Unknown error');
-                }
-            } catch(e) {
-                console.error('Feedback fetch error:', e);
-                const tbody = document.getElementById('feedback-tbody');
-                if (tbody && allItems.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="empty-state" style="color:var(--status-red);">Ошибка загрузки: ' + escapeHtml(e.message) + '</td></tr>';
-                }
-            }
-        }
-
-        function renderStats(stats) {
-            const map = {};
-            for (const st of stats) {
-                map[st.mode] = st;
-            }
-
-            const moscow = map['direct_moscow'] || { count: 0, avg_ping: 0, great_pct: 0 };
-            const stockholm = map['direct_stockholm'] || { count: 0, avg_ping: 0, great_pct: 0 };
-            const transit = map['transit'] || { count: 0, avg_ping: 0, great_pct: 0 };
-
-            document.getElementById('stat-ping-moscow').textContent = moscow.avg_ping ? Math.round(moscow.avg_ping) : '—';
-            document.getElementById('stat-count-moscow').textContent = moscow.count + ' замеров';
-            document.getElementById('stat-rate-moscow').textContent = (moscow.great_pct || 0) + '% отлично';
-
-            document.getElementById('stat-ping-stockholm').textContent = stockholm.avg_ping ? Math.round(stockholm.avg_ping) : '—';
-            document.getElementById('stat-count-stockholm').textContent = stockholm.count + ' замеров';
-            document.getElementById('stat-rate-stockholm').textContent = (stockholm.great_pct || 0) + '% отлично';
-
-            document.getElementById('stat-ping-transit').textContent = transit.avg_ping ? Math.round(transit.avg_ping) : '—';
-            document.getElementById('stat-count-transit').textContent = transit.count + ' замеров';
-            document.getElementById('stat-rate-transit').textContent = (transit.great_pct || 0) + '% отлично';
-        }
-
-        function setFilter(mode) {
-            currentFilter = mode;
-            document.querySelectorAll('.filter-tab').forEach(b => {
-                b.classList.toggle('active', b.getAttribute('data-filter') === mode);
-            });
-            renderTable();
-        }
-
-        function handleSearch(q) {
-            searchQuery = (q || '').trim().toLowerCase();
-            renderTable();
-        }
-
-        function renderTable() {
-            const tbody = document.getElementById('feedback-tbody');
-            const countAllEl = document.getElementById('count-all');
-            if (countAllEl) countAllEl.textContent = allItems.length;
-
-            const filtered = allItems.filter(it => {
-                if (currentFilter !== 'all' && it.route_mode !== currentFilter) return false;
-                if (searchQuery) {
-                    const acc = (it.account_number || '').toLowerCase();
-                    const comm = (it.user_comment || '').toLowerCase();
-                    if (!acc.includes(searchQuery) && !comm.includes(searchQuery)) return false;
-                }
-                return true;
-            });
-
-            if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Нет данных замеров по выбранному фильтру</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = filtered.map(it => {
-                const modeLabel = it.route_mode === 'direct_moscow' ? 'Москва (RU)' :
-                                 (it.route_mode === 'direct_stockholm' ? 'Стокгольм (EU)' : 'Транзит');
-                
-                let pingClass = 'ping-fast';
-                if (it.in_game_ping > 80) pingClass = 'ping-high';
-                else if (it.in_game_ping > 40) pingClass = 'ping-medium';
-
-                let statusDot = 'dot-green';
-                let statusText = 'Отлично';
-                if (it.status === 'has_issues') { statusDot = 'dot-yellow'; statusText = 'Проблемы'; }
-                else if (it.status === 'cant_connect') { statusDot = 'dot-red'; statusText = 'Не подключается'; }
-
-                let matchLabel = 'Без фризов';
-                if (it.match_quality === 'microstutter') matchLabel = 'Микрофризы';
-                else if (it.match_quality === 'disconnected') matchLabel = 'Вылет из матча';
-
-                let discordLabel = 'Чистый войс';
-                if (it.discord_status === 'robovoice') discordLabel = 'Робовойс';
-                else if (it.discord_status === 'no_connection') discordLabel = 'Войс офлайн';
-                else if (it.discord_status === 'not_used') discordLabel = 'Без Discord';
-
-                const commentSafe = escapeHtml(it.user_comment || '—');
-
-                return '<tr>' +
-                    '<td class="font-mono" style="color:var(--text-muted); font-size:11px;">' + escapeHtml(it.created_at) + '</td>' +
-                    '<td><span class="font-mono" style="color:var(--accent); font-weight:600;">' + escapeHtml(it.account_number || '#—') + '</span></td>' +
-                    '<td><span class="badge-mode ' + escapeHtml(it.route_mode) + '">' + modeLabel + '</span></td>' +
-                    '<td><span class="badge-ping ' + pingClass + '">' + (it.in_game_ping ? it.in_game_ping + ' мс' : '—') + '</span></td>' +
-                    '<td><span class="badge-status"><span class="dot ' + statusDot + '"></span>' + statusText + '</span></td>' +
-                    '<td style="color:var(--text-muted); font-size:11px;">' + matchLabel + ' · ' + discordLabel + '</td>' +
-                    '<td class="comment-text">' + commentSafe + '</td>' +
-                '</tr>';
-            }).join('');
-        }
-
-        function escapeHtml(str) {
-            if (!str) return '';
-            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
-
-        loadFeedbackData();
-        setInterval(loadFeedbackData, 15000);
-    </script>
-</body>
-</html>
-`
-
-
-
+// handleReloadFilters hot-reloads Steam game blacklist and nickname rules from PostgreSQL
+func (s *AppState) handleReloadFilters(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.checkAdminAuth(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	s.loadBlockedSteamGames()
+	s.loadSupportedGames()
+	LoadDynamicNicknameRules(s.db)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Фильтры запрещенных игр, поддерживаемых игр и позывных успешно перезагружены из PostgreSQL",
+	})
+}

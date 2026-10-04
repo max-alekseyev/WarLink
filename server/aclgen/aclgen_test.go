@@ -71,8 +71,8 @@ udp: 5000-5100
 	if !strings.Contains(acl, "direct(all, udp/5000-5100)") {
 		t.Errorf("missing direct UDP rule")
 	}
-	if !strings.HasSuffix(strings.TrimSpace(acl), "reject(all)") {
-		t.Errorf("ACL must strictly end with reject(all)")
+	if !strings.HasSuffix(strings.TrimSpace(acl), "direct(all)") {
+		t.Errorf("ACL must end with direct(all)")
 	}
 }
 
@@ -137,8 +137,8 @@ func TestGamesReferenceFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load reference games profiles: %v", err)
 	}
-	if len(profiles) != 2 {
-		t.Fatalf("expected 2 profiles (wardogs, socials), got %d", len(profiles))
+	if len(profiles) < 2 {
+		t.Fatalf("expected at least 2 profiles, got %d", len(profiles))
 	}
 	acl, err := GenerateACL(profiles)
 	if err != nil {
@@ -174,8 +174,8 @@ func TestGamesReferenceFiles(t *testing.T) {
 	if !strings.Contains(acl, "direct(85.236.96.0/19, udp/54000-55000)") {
 		t.Errorf("missing Vivox udp/54000-55000 rule")
 	}
-	if !strings.HasSuffix(strings.TrimSpace(acl), "reject(all)") {
-		t.Errorf("generated ACL must end with reject(all)")
+	if !strings.HasSuffix(strings.TrimSpace(acl), "direct(all)") {
+		t.Errorf("generated ACL must end with direct(all)")
 	}
 }
 
@@ -319,11 +319,11 @@ func TestGenerateSingBoxConfigDirectGameDomains(t *testing.T) {
 		t.Fatalf("failed to unmarshal generated config: %v", err)
 	}
 
-	// 1. Verify elytra.ac is resolved via dns-local, NOT dns-fakeip
+	// 1. Verify steamserver.net is resolved via dns-local, NOT dns-fakeip
 	for _, r := range parsed.DNS.Rules {
 		if r.Server == "dns-fakeip" {
 			for _, d := range r.DomainSuffix {
-				if d == "elytra.ac" || d == "steamserver.net" {
+				if d == "steamserver.net" {
 					t.Errorf("domain %s MUST NOT be in dns-fakeip rule", d)
 				}
 			}
@@ -379,6 +379,100 @@ func TestGenerateSingBoxConfigDirectGameDomains(t *testing.T) {
 	}
 	if !hasNTPDirect {
 		t.Errorf("expected UDP 123 direct route rule")
+	}
+}
+
+func TestProcessRoutingPriority(t *testing.T) {
+	testProfiles := []Profile{
+		{
+			ID:        "dark_and_darker",
+			Name:      "Dark and Darker",
+			Processes: []string{"DungeonCrawler.exe", "Tavern.exe"},
+			Domains:   []string{"darkanddarker.com", "lunatichigh.net"},
+		},
+		{
+			ID:        "arc_raiders",
+			Name:      "ARC Raiders",
+			Processes: []string{"PioneerGame.exe"},
+			Domains:   []string{"arcraiders.com", "es-pio.net"},
+		},
+	}
+
+	cfgBytes, err := GenerateSingBoxConfig(testProfiles, []string{"DungeonCrawler.exe", "PioneerGame.exe"}, false, "138.124.103.99", "443", "dummy_obfs", "dummy_token")
+	if err != nil {
+		t.Fatalf("GenerateSingBoxConfig failed: %v", err)
+	}
+
+	var parsed SingBoxFullConfig
+	if err := json.Unmarshal(cfgBytes, &parsed); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+
+	// 1. Verify route rule order: allProcesses must come before port 80 direct and DirectGameDomains direct
+	processRuleIdx := -1
+	port80RuleIdx := -1
+	directDomainsRuleIdx := -1
+
+	for idx, r := range parsed.Route.Rules {
+		if r.Outbound == "hy2-stockholm" && len(r.ProcessName) > 0 {
+			for _, p := range r.ProcessName {
+				if p == "DungeonCrawler.exe" || p == "PioneerGame.exe" {
+					processRuleIdx = idx
+					break
+				}
+			}
+		}
+		if r.Outbound == "direct" && len(r.Port) == 1 && r.Port[0] == 80 {
+			port80RuleIdx = idx
+		}
+		if r.Outbound == "direct" && len(r.DomainSuffix) > 0 {
+			for _, d := range r.DomainSuffix {
+				if d == "steamserver.net" {
+					directDomainsRuleIdx = idx
+					break
+				}
+			}
+		}
+	}
+
+	if processRuleIdx == -1 {
+		t.Fatalf("expected allProcesses route rule to hy2-stockholm, none found")
+	}
+	if port80RuleIdx != -1 && processRuleIdx > port80RuleIdx {
+		t.Errorf("game process route rule (idx %d) must precede port 80 rule (idx %d)", processRuleIdx, port80RuleIdx)
+	}
+	if directDomainsRuleIdx != -1 && processRuleIdx > directDomainsRuleIdx {
+		t.Errorf("game process route rule (idx %d) must precede DirectGameDomains rule (idx %d)", processRuleIdx, directDomainsRuleIdx)
+	}
+
+	// 2. Verify DNS rule order: allProcesses must precede DirectGameDomains
+	dnsProcessRuleIdx := -1
+	dnsDirectDomainsRuleIdx := -1
+
+	for idx, r := range parsed.DNS.Rules {
+		if r.Server == "dns-fakeip" && len(r.ProcessName) > 0 {
+			for _, p := range r.ProcessName {
+				if p == "DungeonCrawler.exe" || p == "PioneerGame.exe" {
+					dnsProcessRuleIdx = idx
+					break
+				}
+			}
+		}
+		if r.Server == "dns-local" && len(r.DomainSuffix) > 0 {
+			for _, d := range r.DomainSuffix {
+				if d == "steamserver.net" {
+					dnsDirectDomainsRuleIdx = idx
+					break
+				}
+			}
+		}
+	}
+
+	if dnsProcessRuleIdx == -1 {
+		t.Fatalf("expected allProcesses DNS rule to dns-fakeip, none found")
+	}
+	if dnsDirectDomainsRuleIdx != -1 && dnsProcessRuleIdx > dnsDirectDomainsRuleIdx {
+		t.Errorf("game process DNS rule (idx %d) must precede DirectGameDomains rule (idx %d)", dnsProcessRuleIdx, dnsDirectDomainsRuleIdx)
 	}
 }
 

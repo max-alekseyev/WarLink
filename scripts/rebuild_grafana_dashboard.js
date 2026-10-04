@@ -1105,59 +1105,72 @@ const pingDistributionPanel = {
   type: "timeseries"
 };
 
-const packetLossHeatmapPanel = {
+const packetLossTimeseriesPanel = {
   datasource: { type: "prometheus", uid: "VictoriaMetrics" },
-  description: "Тепловая карта стабильности передачи и потерь UDP пакетов (Packet Loss) в игровых потоках WARDOGS.",
+  description: "Динамика потерь UDP пакетов по трем маршрутам сети. Нормальное значение: 0%.",
   fieldConfig: {
     defaults: {
       custom: {
-        hideFrom: { legend: false, tooltip: false, viz: false }
-      }
+        drawStyle: "line",
+        lineInterpolation: "smooth",
+        lineWidth: 2,
+        fillOpacity: 12,
+        gradientMode: "opacity"
+      },
+      unit: "percent",
+      min: 0,
+      max: 100
     },
-    overrides: []
+    overrides: [
+      {
+        matcher: { id: "byName", options: "Транзит (Москва -> Стокгольм)" },
+        properties: [{ id: "color", value: { fixedColor: "#FF5E1F", mode: "fixed" } }]
+      },
+      {
+        matcher: { id: "byName", options: "Прямой (Стокгольм Core)" },
+        properties: [{ id: "color", value: { fixedColor: "#3B82F6", mode: "fixed" } }]
+      },
+      {
+        matcher: { id: "byName", options: "Прямой (Москва Ingress)" },
+        properties: [{ id: "color", value: { fixedColor: "#10B981", mode: "fixed" } }]
+      }
+    ]
   },
   gridPos: { h: 8, w: 8, x: 16, y: 36 },
   id: 411,
   options: {
-    calculate: false,
-    cellGap: 1,
-    cellRadius: 2,
-    color: {
-      exponent: 0.5,
-      fill: "#FF5E1F",
-      mode: "scheme",
-      reverse: false,
-      scale: "exponential",
-      scheme: "Oranges"
-    },
-    exemplars: { color: "rgba(255,0,0,0.7)" },
-    filterValues: { le: 1e-9 },
-    legend: { show: true },
-    rowsFrame: { layout: "auto" },
-    tooltip: { mode: "single", show: true, yHistogram: false },
-    yAxis: { axisPlacement: "left", unit: "percent" }
+    legend: { displayMode: "list", placement: "bottom", showLegend: true },
+    tooltip: { mode: "multi", sort: "desc" }
   },
   pluginVersion: "13.2.2",
   targets: [
     {
       datasource: { type: "prometheus", uid: "VictoriaMetrics" },
       editorMode: "code",
-      expr: "(avg by (route_mode) (warlink_client_loss_ratio{server=\"game\"}) * 100) or warlink_player_packet_loss_percent",
+      expr: 'avg by (route_mode) (warlink_client_loss_ratio{route_mode="transit"} * 100) or (warlink_player_packet_loss_percent{route_mode="transit"})',
       format: "time_series",
-      legendFormat: "Потери: {{route_mode}}",
+      legendFormat: "Транзит (Москва -> Стокгольм)",
       refId: "A"
     },
     {
       datasource: { type: "prometheus", uid: "VictoriaMetrics" },
       editorMode: "code",
-      expr: "rate(warlink_udp_rcvbuf_errors_total[1m]) * 0",
+      expr: 'avg by (route_mode) (warlink_client_loss_ratio{route_mode="direct_stockholm"} * 100) or (warlink_player_packet_loss_percent{route_mode="direct_stockholm"})',
       format: "time_series",
-      legendFormat: "Дропы сокет-буферов ядра",
+      legendFormat: "Прямой (Стокгольм Core)",
       refId: "B"
+    },
+    {
+      datasource: { type: "prometheus", uid: "VictoriaMetrics" },
+      editorMode: "code",
+      expr: 'avg by (route_mode) (warlink_client_loss_ratio{route_mode="direct_moscow"} * 100) or (warlink_player_packet_loss_percent{route_mode="direct_moscow"})',
+      format: "time_series",
+      legendFormat: "Прямой (Москва Ingress)",
+      refId: "C"
     }
   ],
-  title: "Тепловая карта потерь пакетов (Packet Loss)",
-  type: "heatmap"
+  title: "Потери пакетов по маршрутам (Packet Loss %)",
+  type: "timeseries"
 };
 
 const regionalEfficiencyPanel = {
@@ -1345,7 +1358,7 @@ newPanels.push(createRow(109, "3. Качество связи: задержки,
 newPanels.push(createRow(104, "4. Автоматическая сетевая телеметрия игроков (Транзит Москва vs Прямой Стокгольм)", 35));
 newPanels.push(nodeUsersPanel);
 newPanels.push(pingDistributionPanel);
-newPanels.push(packetLossHeatmapPanel);
+newPanels.push(packetLossTimeseriesPanel);
 newPanels.push(regionalEfficiencyPanel);
 
 // SECTION 5: Нагрузка и детализация накопителя

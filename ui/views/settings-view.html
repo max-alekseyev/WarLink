@@ -8,12 +8,12 @@
     <div class="details-content">
         <div class="setting-group">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">КОМПЛЕКСНЫЙ РЕЖИМ (DPI)</span>
+                <span class="setting-group-title" style="margin-bottom: 0;">КОМПЛЕКСНЫЙ РЕЖИМ</span>
                 <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
             </div>
             <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
                 <div class="privacy-info-text">
-                    WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов (ст. 3 152-ФЗ).
+                    WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
                 </div>
             </div>
             <div class="setting-info-row">
@@ -23,13 +23,13 @@
             <div class="setting-row" style="margin-top: 6px;">
                 <span class="setting-label">Профиль десинхронизации (Discord / YouTube):</span>
                 <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
-                    <option value="Автокалибровка (Circular Adaptive)">Автокалибровка (Circular Adaptive)</option>
+                    <option value="Автокалибровка (Circular Adaptive)">Автокалибровка</option>
                 </select>
             </div>
             <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
                 <button id="btn-run-benchmark" class="btn-link" style="font-size: 11px; padding: 2px 0; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--action);" onclick="runBenchmark()">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/></svg>
-                    Подобрать лучший профиль (автотест)
+                    Подобрать лучший профиль
                 </button>
             </div>
             <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
@@ -50,14 +50,14 @@
             <div class="setting-row" style="margin-top: 6px;">
                 <span class="setting-label">Выбор маршрута:</span>
                 <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
-                    <option value="transit">1. Клиент — Москва — Стокгольм — Игра</option>
-                    <option value="direct_stockholm">2. Клиент — Стокгольм — Игра</option>
-                    <option value="direct_moscow">3. Клиент — Москва — Игра</option>
+                    <option value="direct_moscow">Москва</option>
+                    <option value="direct_frankfurt">Франкфурт</option>
+                    <option value="transit">Москва → Франкфурт</option>
                 </select>
             </div>
             <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
                 <span class="info-label">Описание:</span>
-                <span id="route-mode-desc-val" class="info-value">Транзитный маршрут через Европу (~80 мс)</span>
+                <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
             </div>
         </div>
 
