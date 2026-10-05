@@ -1,10 +1,33 @@
-// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.2.0
+// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.2.1
 
 class UIStoreClass {
     constructor() {
         this._cache = new Map();
         this._imageCache = new Map();
         this._inflight = new Map();
+        this._storagePrefix = 'wl_cache_';
+        this._loadPersistentCache();
+    }
+
+    _loadPersistentCache() {
+        try {
+            if (typeof localStorage === 'undefined') return;
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith(this._storagePrefix)) {
+                    const endpointKey = k.substring(this._storagePrefix.length);
+                    const raw = localStorage.getItem(k);
+                    if (raw) {
+                        const parsed = JSON.parse(raw);
+                        if (parsed && parsed.data !== undefined) {
+                            this._cache.set(endpointKey, parsed);
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('UIStore failed to hydrate from localStorage:', e);
+        }
     }
 
     get(key) {
@@ -14,12 +37,18 @@ class UIStoreClass {
 
     set(key, data, etag = null) {
         const hash = this.fastHash(data);
-        this._cache.set(key, {
+        const item = {
             data,
             hash,
             etag,
             timestamp: Date.now()
-        });
+        };
+        this._cache.set(key, item);
+        try {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.setItem(this._storagePrefix + key, JSON.stringify(item));
+            }
+        } catch (e) {}
     }
 
     has(key) {
@@ -28,6 +57,11 @@ class UIStoreClass {
 
     invalidate(key) {
         this._cache.delete(key);
+        try {
+            if (typeof localStorage !== 'undefined') {
+                localStorage.removeItem(this._storagePrefix + key);
+            }
+        } catch (e) {}
     }
 
     // 32-bit FNV-1a fast hashing algorithm
@@ -132,14 +166,14 @@ class UIStoreClass {
         const endpoints = [
             '/api/sponsors',
             '/api/votes',
-            '/api/profile',
             '/api/user-profile',
             '/api/notifications',
             '/api/progression',
-            '/api/progression/database'
+            '/api/v1/boosty-goal',
+            '/api/support/active'
         ];
 
-        await Promise.allSettled(endpoints.map(async (url) => {
+        for (const url of endpoints) {
             try {
                 const resp = await fetch(url);
                 if (resp.ok) {
@@ -149,7 +183,9 @@ class UIStoreClass {
             } catch (e) {
                 // Ignore silent prefetch failures
             }
-        }));
+            // Small pause between background fetches to keep UI loop silky smooth
+            await new Promise(r => setTimeout(r, 60));
+        }
     }
 }
 

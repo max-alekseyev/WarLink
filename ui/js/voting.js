@@ -26,10 +26,18 @@ function isBlockedSteamGame(appId) {
     return BLOCKED_STEAM_APP_IDS.has(parseInt(appId));
 }
 
+function loadCachedCommunityVotes() {
+    try {
+        const raw = localStorage.getItem('warlink_community_votes');
+        if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return null;
+}
+
 let selectedSteamGame = null;
 let voteSearchTimer = null;
 let voteAutoPollTimer = null;
-let cachedCommunityVotes = null;
+let cachedCommunityVotes = loadCachedCommunityVotes();
 
 function getVoteGamesSkeletonHtml(count = 3) {
     let html = '';
@@ -320,6 +328,9 @@ async function loadCommunityVotes() {
             },
             (data, isFresh) => {
                 cachedCommunityVotes = data;
+                try {
+                    localStorage.setItem('warlink_community_votes', JSON.stringify(data));
+                } catch (e) {}
                 renderCommunityVotes(data);
             },
             () => {
@@ -347,6 +358,9 @@ async function loadCommunityVotes() {
         }
         const data = await res.json();
         cachedCommunityVotes = data;
+        try {
+            localStorage.setItem('warlink_community_votes', JSON.stringify(data));
+        } catch (e) {}
         renderCommunityVotes(data);
     } catch (e) {
         if (cachedCommunityVotes === null) {

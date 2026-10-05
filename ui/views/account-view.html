@@ -3,7 +3,7 @@
     <div class="details-header">
         <div style="display: flex; align-items: center; gap: 8px;">
             <span class="details-title">Профиль и аккаунт</span>
-            <div class="profile-tier-badge" id="profile-tier-badge"><span class="skeleton" style="width: 130px; height: 12px;"></span></div>
+            <div class="profile-tier-badge" id="profile-tier-badge"><span>Боец WarLink</span></div>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
             <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; text-decoration: none;" onclick="openMyDossier()" title="Посмотреть боевое досье оператора">Моё досье</button>
@@ -34,7 +34,7 @@
             </div>
             <div class="profile-hero-sub">
                 <span class="info-label" style="font-size:11px;">Аккаунт:</span>
-                <span id="val-account-number" class="info-value font-mono" style="letter-spacing: 0.5px;"><span class="skeleton" style="width: 140px; height: 11px;"></span></span>
+                <span id="val-account-number" class="info-value font-mono" style="letter-spacing: 0.5px; min-width: 140px; display: inline-block;">—</span>
                 <button class="btn-copy-code" onclick="copyAccountNumber()" title="Скопировать номер аккаунта">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
                 </button>

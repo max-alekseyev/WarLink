@@ -392,8 +392,8 @@ async def redis_ticket_listener():
         try:
             r = aioredis.from_url(config.REDIS_URL)
             pubsub = r.pubsub()
-            await pubsub.subscribe("tickets:new", "tickets:updated", "tickets:message", "discord:progression_update")
-            logger.info("Subscribed to Redis channels: 'tickets:new', 'tickets:updated', 'tickets:message', 'discord:progression_update'")
+            await pubsub.subscribe("tickets:new", "tickets:updated", "tickets:message", "discord:progression_update", "discord:ops_alert")
+            logger.info("Subscribed to Redis channels: 'tickets:new', 'tickets:updated', 'tickets:message', 'discord:progression_update', 'discord:ops_alert'")
 
             async for message in pubsub.listen():
                 if message and message["type"] == "message":
@@ -424,6 +424,14 @@ async def redis_ticket_listener():
                             await handle_ticket_message_event(m_info)
                         except Exception as m_err:
                             logger.error(f"Error handling ticket message event: {m_err}")
+                    elif ch == "discord:ops_alert":
+                        try:
+                            raw_data = message["data"].decode("utf-8")
+                            alert_info = json.loads(raw_data)
+                            logger.info(f"Received Ops Alert: {alert_info.get('title')}")
+                            await handle_ops_alert_event(alert_info)
+                        except Exception as alert_err:
+                            logger.error(f"Error handling ops alert event: {alert_err}")
                     elif ch == "discord:progression_update":
                         try:
                             raw_data = message["data"].decode("utf-8")
@@ -448,6 +456,49 @@ async def redis_ticket_listener():
         except Exception as e:
             logger.warning(f"Redis connection error: {e}. Retrying in 5 seconds...")
             await asyncio.sleep(5)
+
+
+async def handle_ops_alert_event(alert_info: dict):
+    if not config.DISCORD_MONITOR_CHANNEL_ID:
+        return
+    channel = bot.get_channel(config.DISCORD_MONITOR_CHANNEL_ID)
+    if not channel:
+        try:
+            channel = await bot.fetch_channel(config.DISCORD_MONITOR_CHANNEL_ID)
+        except Exception:
+            channel = None
+    if not channel:
+        logger.warning(f"Monitoring channel {config.DISCORD_MONITOR_CHANNEL_ID} not found")
+        return
+
+    severity = alert_info.get("severity", "warning").lower()
+    color = 0xF59E0B  # Amber/Warning
+    if severity in ("critical", "urgent", "error"):
+        color = 0xEF4444  # Red/Critical
+    elif severity in ("info", "ok", "recovered"):
+        color = 0x10B981  # Green/Recovered
+
+    title = alert_info.get("title", "Операционное оповещение")
+    message = alert_info.get("message", "")
+    details = alert_info.get("details", "")
+
+    embed = discord.Embed(
+        title=title,
+        description=message,
+        color=color,
+        timestamp=discord.utils.utcnow()
+    )
+    node = alert_info.get("node")
+    if node:
+        embed.add_field(name="Узел кластера", value=node, inline=True)
+    metric = alert_info.get("metric")
+    if metric:
+        embed.add_field(name="Показатель", value=metric, inline=True)
+    if details:
+        embed.add_field(name="Технические детали", value=f"```{details}```", inline=False)
+
+    embed.set_footer(text="WarLink Ops Sentinel • Zero Emoji")
+    await channel.send(embed=embed)
 
 
 async def get_ticket_thread(ticket_id: int):
@@ -529,7 +580,7 @@ async def update_discord_ticket_thread(ticket_id: int):
     admin_reply = t.get("admin_reply", "")
     cat = t.get("category", "other")
     cat_title = CATEGORY_NAMES.get(cat, cat)
-    ver = t.get("app_version", "v2.2.0")
+    ver = t.get("app_version", "v2.2.1")
 
     target_thread = await get_ticket_thread(ticket_id)
     if not target_thread:
@@ -622,7 +673,7 @@ async def handle_new_ticket_event(ticket_id: int):
     t = data.get("ticket", {})
     acc = t.get("account_number", "Не указан")
     dev = t.get("device_id", "none")
-    ver = t.get("app_version", "v2.2.0")
+    ver = t.get("app_version", "v2.2.1")
     cat = t.get("category", "other")
     cat_title = CATEGORY_NAMES.get(cat, cat)
     comment = t.get("user_comment", "Без комментария")
@@ -858,7 +909,7 @@ async def live_monitor_task():
         active_slots = data.get("active_sessions", 0)
         max_slots = data.get("max_sessions", 61)
         latency = data.get("ping_hint_ms", 25)
-        version = data.get("version", "v2.2.0")
+        version = data.get("version", "v2.2.1")
 
         embed.add_field(name="Швеция: Стокгольм", value=f"{latency:.0f} ms", inline=True)
         embed.add_field(name="Загрузка слотов", value=f"{active_slots} / {max_slots}", inline=True)

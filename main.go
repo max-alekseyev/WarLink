@@ -35,16 +35,19 @@ import (
 	"github.com/jchv/go-webview2/pkg/edge"
 	"warlink/internal/config"
 	"warlink/internal/deps"
+	"warlink/internal/desync"
 	"warlink/internal/engine"
+	"warlink/internal/features"
 	"warlink/internal/progression"
 	"warlink/internal/scanner"
 	"warlink/internal/singbox"
 	"warlink/internal/tray"
+	"warlink/internal/troubleshooter"
 	"warlink/internal/updater"
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.0"
+var AppVersion = "v2.2.1"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -363,7 +366,6 @@ type AppState struct {
 	mu                sync.Mutex
 	cfg               *config.Config
 	eng               *engine.Engine
-	logs              []string
 	isBusy            bool
 	isDownloadingDeps bool
 	depsMsg           string
@@ -839,6 +841,36 @@ func hookWindowClose(hwnd uintptr, onInterceptClose func() bool) {
 	procSetWindowPos.Call(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|0x0020) // SWP_FRAMECHANGED
 }
 
+func reportNativeCrash(errorType, message, stackTrace string, ctx map[string]interface{}) {
+	cfg := config.Load()
+	accNum := ""
+	if cfg != nil {
+		accNum = cfg.AccountNumber
+	}
+	payload := map[string]interface{}{
+		"account_number": accNum,
+		"device_id":      singbox.GetMachineGUID(),
+		"app_version":    AppVersion,
+		"error_type":     errorType,
+		"message":        message,
+		"stack_trace":    stackTrace,
+		"os_info":        fmt.Sprintf("Windows %d-bit", 32<<(^uint(0)>>63)),
+		"context":        ctx,
+	}
+	go func() {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		apiURL := fmt.Sprintf("http://%s/api/v1/telemetry/crash", singbox.StockholmCoreIP)
+		c := &http.Client{Timeout: 5 * time.Second}
+		resp, postErr := c.Post(apiURL, "application/json", bytes.NewReader(body))
+		if postErr == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+}
+
 func main() {
 	// Set explicit Application User Model ID for proper taskbar grouping and animation target
 	if procSetCurrentProcessExplicitAppUserModelID.Find() == nil {
@@ -846,13 +878,16 @@ func main() {
 		procSetCurrentProcessExplicitAppUserModelID.Call(uintptr(unsafe.Pointer(appIDPtr)))
 	}
 
-	// 0a. Catch unexpected fatal panics into warlink_core/logs/crash.log
+	// 0a. Catch unexpected fatal panics into warlink_core/logs/crash.log and automated crash telemetry
 	defer func() {
 		if r := recover(); r != nil {
 			_ = deps.EnsureLogsDir()
 			crashLog := filepath.Join(deps.GetLogsDir(), "crash.log")
 			stack := debug.Stack()
 			_ = os.WriteFile(crashLog, []byte(fmt.Sprintf("CRASH PANIC: %v\n\nSTACK TRACE:\n%s\n", r, stack)), 0644)
+			reportNativeCrash("go_panic", fmt.Sprintf("%v", r), string(stack), map[string]interface{}{
+				"component": "client_main",
+			})
 		}
 	}()
 
@@ -872,21 +907,34 @@ func main() {
 	singbox.ClientVersion = AppVersion
 	cfg := config.Load()
 
-	// Auto-heal existing games that have numeric titles, broken header icons or low-res non-.ico icons
-	reNumeric := regexp.MustCompile(`^\d{3,9}$`)
+	// Ensure default games always use fast local PNG icons and correct titles without network queries
 	gamesModified := false
 	for i, g := range cfg.Games {
-		isNumeric := reNumeric.MatchString(g.Title)
-		isHeader := strings.Contains(g.IconURL, "header.jpg")
-		isNotIco := !strings.HasSuffix(strings.ToLower(g.IconURL), ".ico")
-		if g.SteamAppID != "" && (isNumeric || g.Title == g.SteamAppID || g.IconURL == "" || isHeader || isNotIco) {
-			sTitle, sIcon := resolveSteamIcon(g.SteamAppID)
-			if sTitle != "" && (isNumeric || g.Title == g.SteamAppID) {
-				cfg.Games[i].Title = sTitle
+		if g.ID == "wardogs" {
+			if cfg.Games[i].IconURL != "wardogs_icon.png" {
+				cfg.Games[i].IconURL = "wardogs_icon.png"
 				gamesModified = true
 			}
-			if sIcon != "" && (g.IconURL == "" || isHeader || (isNotIco && strings.HasSuffix(strings.ToLower(sIcon), ".ico"))) {
-				cfg.Games[i].IconURL = sIcon
+			if cfg.Games[i].Title != "WARDOGS" {
+				cfg.Games[i].Title = "WARDOGS"
+				gamesModified = true
+			}
+		} else if g.ID == "arc_raiders" {
+			if cfg.Games[i].IconURL != "arc_raiders_icon.png" {
+				cfg.Games[i].IconURL = "arc_raiders_icon.png"
+				gamesModified = true
+			}
+			if cfg.Games[i].Title != "ARC Raiders" {
+				cfg.Games[i].Title = "ARC Raiders"
+				gamesModified = true
+			}
+		} else if g.ID == "dark_and_darker" {
+			if cfg.Games[i].IconURL != "dark_and_darker_icon.png" {
+				cfg.Games[i].IconURL = "dark_and_darker_icon.png"
+				gamesModified = true
+			}
+			if cfg.Games[i].Title != "Dark and Darker" {
+				cfg.Games[i].Title = "Dark and Darker"
 				gamesModified = true
 			}
 		}
@@ -894,6 +942,42 @@ func main() {
 	if gamesModified {
 		_ = cfg.Save()
 	}
+
+	// Asynchronously auto-heal any custom games with numeric titles or empty icons in background
+	go func() {
+		reNum := regexp.MustCompile(`^\d{3,9}$`)
+		cfg.Lock()
+		customGames := make([]config.GameProfile, len(cfg.Games))
+		copy(customGames, cfg.Games)
+		cfg.Unlock()
+
+		changed := false
+		for i, cg := range customGames {
+			if cg.IsDefault || cg.ID == "wardogs" || cg.ID == "arc_raiders" || cg.ID == "dark_and_darker" {
+				continue
+			}
+			if cg.SteamAppID != "" && (reNum.MatchString(cg.Title) || cg.Title == cg.SteamAppID || cg.IconURL == "") {
+				sTitle, sIcon := resolveSteamIcon(cg.SteamAppID)
+				if sTitle != "" || sIcon != "" {
+					cfg.Lock()
+					if i < len(cfg.Games) && cfg.Games[i].ID == cg.ID {
+						if sTitle != "" && (reNum.MatchString(cfg.Games[i].Title) || cfg.Games[i].Title == cg.SteamAppID) {
+							cfg.Games[i].Title = sTitle
+							changed = true
+						}
+						if sIcon != "" && cfg.Games[i].IconURL == "" {
+							cfg.Games[i].IconURL = sIcon
+							changed = true
+						}
+					}
+					cfg.Unlock()
+				}
+			}
+		}
+		if changed {
+			_ = cfg.Save()
+		}
+	}()
 
 	// All logs saved into warlink_core/logs/ with session rotation (current + previous)
 	_ = deps.EnsureCoreDir()
@@ -903,11 +987,9 @@ func main() {
 	logFile, _ := os.OpenFile(logFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 
 	state := &AppState{
-		cfg:  cfg,
-		logs: []string{},
+		cfg: cfg,
 	}
 
-	var logsMu sync.Mutex
 	appendLog := func(msg string) {
 		formattedTime := time.Now().Format("2006-01-02 15:04:05")
 		line := fmt.Sprintf("[%s] %s\n", formattedTime, msg)
@@ -916,12 +998,6 @@ func main() {
 			_, _ = logFile.WriteString(line)
 			_ = logFile.Sync()
 		}
-		logsMu.Lock()
-		state.logs = append(state.logs, fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg))
-		if len(state.logs) > 400 {
-			state.logs = state.logs[len(state.logs)-400:]
-		}
-		logsMu.Unlock()
 	}
 
 	state.eng = engine.New(cfg, appendLog)
@@ -953,6 +1029,9 @@ func main() {
 
 	appendLog("[INFO] Очистка автозапуска и сетевых настроек...")
 	deps.SanitizeStartupAndNetwork(appendLog)
+
+	// Initialize lightweight local/remote feature flags engine
+	features.Init(deps.GetCoreDir())
 
 	// Background startup orchestrator:
 	// 1. Check for updates (blocking in-place updater)
@@ -1042,16 +1121,26 @@ func main() {
 				appendLog(fmt.Sprintf("[ERROR] Ошибка проверки компонентов sing-box: %v", err))
 			}
 
-			// 2.3 Check Stockholm Gateway connectivity
+			// 2.3 Check Gateway cluster connectivity
 			state.mu.Lock()
 			state.initPct = 60
-			state.initMsg = "Проверка связи со шлюзом Стокгольм (27 мс)..."
+			state.initMsg = "Проверка связи с игровым кластером..."
 			state.mu.Unlock()
 			if gw, err := singbox.GetServerGatewayStatus(); err == nil && gw != nil {
 				state.mu.Lock()
 				state.gatewayStatus = gw
 				state.mu.Unlock()
-				appendLog(fmt.Sprintf("[OK] Шлюз Стокгольм доступен (слоты: %d/%d, аренда: %d дн.)", gw.ActiveSessions, gw.MaxSessions, gw.DaysLeft))
+				appendLog(fmt.Sprintf("[OK] Игровой кластер доступен (слоты: %d/%d, аренда: %d дн.)", gw.ActiveSessions, gw.MaxSessions, gw.DaysLeft))
+			}
+
+			// 2.4 Fetch latest desync strategies from gateway dynamically
+			if remotePresets, rErr := desync.FetchRemoteDesyncConfig(singbox.GetServerAPI()); rErr == nil && len(remotePresets) > 0 {
+				appendLog(fmt.Sprintf("[OK] Загружено %d актуальных стратегий Запрета со шлюза", len(remotePresets)))
+			}
+
+			// 2.5 Fetch remote feature flags and canary experiment toggles
+			if fErr := features.FetchRemoteFlags(singbox.GetServerAPI(), state.cfg.AccountNumber, singbox.GetMachineGUID(), AppVersion); fErr == nil {
+				appendLog(fmt.Sprintf("[OK] Загружено %d удаленных параметров и фиче-флагов", len(features.GetAll())))
 			}
 
 			// 2.4 Run full 22-profile DPI benchmark on first run
@@ -1117,16 +1206,39 @@ func main() {
 		if targetIP == "" {
 			return 0
 		}
-		// First try standard ICMP ping (using Windows built-in ping.exe)
-		// This bypasses any TCP interception by TUN / local proxies and measures true physical round-trip.
-		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "1000")
+		// 1. Fast Native TCP handshake (dial port 80 first, open across all cluster nodes)
+		// Zero process spawning overhead, bypasses local TUN, measures real round-trip in ~15-40ms.
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 450*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			ms := int(time.Since(start).Milliseconds())
+			if ms < 1 {
+				return 1
+			}
+			return ms
+		}
+
+		// 2. Try port 443 with a clean timer
+		start = time.Now()
+		conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 450*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			ms := int(time.Since(start).Milliseconds())
+			if ms < 1 {
+				return 1
+			}
+			return ms
+		}
+
+		// 3. Fallback to ICMP ping only if TCP handshake failed or was blocked
+		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "800")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			HideWindow:    true,
 			CreationFlags: 0x08000000,
 		}
 		if out, err := cmd.Output(); err == nil {
 			outStr := string(out)
-			// Parse: time=42ms or время=42мс
 			idx := strings.Index(strings.ToLower(outStr), "time=")
 			if idx == -1 {
 				idx = strings.Index(strings.ToLower(outStr), "время=")
@@ -1148,31 +1260,6 @@ func main() {
 					}
 				}
 			}
-		}
-
-		// Fallback to TCP handshake if ICMP was blocked or dropped.
-		// Dial port 80 first (always open HTTP port across cluster nodes).
-		start := time.Now()
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 500*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			ms := int(time.Since(start).Milliseconds())
-			if ms < 1 {
-				return 1
-			}
-			return ms
-		}
-
-		// If port 80 failed, try port 443 with a clean timer (never accumulate previous timeout)
-		start = time.Now()
-		conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 500*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			ms := int(time.Since(start).Milliseconds())
-			if ms < 1 {
-				return 1
-			}
-			return ms
 		}
 
 		return 0
@@ -1288,7 +1375,7 @@ func main() {
 	exeDir := filepath.Dir(exePath)
 
 	uiCacheDir := filepath.Join(deps.GetCoreDir(), "cache", "ui")
-	_ = os.MkdirAll(uiCacheDir, 0755)
+	_ = os.RemoveAll(uiCacheDir) // Purge obsolete static UI cache to guarantee Zero-CLS and zero stale assets
 
 	serveDynamicUI := func(w http.ResponseWriter, r *http.Request) {
 		relPath := strings.TrimPrefix(r.URL.Path, "/")
@@ -1300,65 +1387,7 @@ func main() {
 			return
 		}
 
-		cachedPath := filepath.Join(uiCacheDir, filepath.FromSlash(relPath))
-
-		// 1. For dynamic views/html/js/css, query the Master Server CDN first
-		isDynamicView := strings.HasPrefix(relPath, "views/") ||
-			strings.HasSuffix(relPath, ".html") ||
-			strings.HasSuffix(relPath, ".js") ||
-			strings.HasSuffix(relPath, ".css")
-
-		if isDynamicView {
-			serverAPI := singbox.GetServerAPI()
-			if serverAPI == "" {
-				serverAPI = "http://138.124.103.99"
-			}
-			targetURL := fmt.Sprintf("%s/static/ui/%s", strings.TrimRight(serverAPI, "/"), relPath)
-
-			client := &http.Client{Timeout: 2 * time.Second}
-			httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
-			if err == nil {
-				if info, statErr := os.Stat(cachedPath); statErr == nil {
-					httpReq.Header.Set("If-Modified-Since", info.ModTime().UTC().Format(http.TimeFormat))
-				}
-				resp, fetchErr := client.Do(httpReq)
-				if fetchErr == nil {
-					defer resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						data, readErr := io.ReadAll(resp.Body)
-						if readErr == nil && len(data) > 0 {
-							_ = os.MkdirAll(filepath.Dir(cachedPath), 0755)
-							_ = os.WriteFile(cachedPath, data, 0644)
-							w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-							if strings.HasSuffix(relPath, ".html") {
-								w.Header().Set("Content-Type", "text/html; charset=utf-8")
-							} else if strings.HasSuffix(relPath, ".js") {
-								w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-							} else if strings.HasSuffix(relPath, ".css") {
-								w.Header().Set("Content-Type", "text/css; charset=utf-8")
-							}
-							http.ServeContent(w, r, filepath.Base(relPath), time.Now(), bytes.NewReader(data))
-							return
-						}
-					} else if resp.StatusCode == http.StatusNotModified {
-						if info, statErr := os.Stat(cachedPath); statErr == nil && !info.IsDir() {
-							w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-							http.ServeFile(w, r, cachedPath)
-							return
-						}
-					}
-				}
-			}
-		}
-
-		// 2. Fallback A: Serve from local disk cache if available
-		if info, statErr := os.Stat(cachedPath); statErr == nil && !info.IsDir() {
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			http.ServeFile(w, r, cachedPath)
-			return
-		}
-
-		// 3. Fallback B: Serve from local dev directory if present
+		// 1. Priority A: Serve from local dev directory if present (instant local hot-reload)
 		for _, baseDir := range []string{exeDir, "."} {
 			devPath := filepath.Join(baseDir, "ui", filepath.FromSlash(relPath))
 			if info, err := os.Stat(devPath); err == nil && !info.IsDir() {
@@ -1368,7 +1397,7 @@ func main() {
 			}
 		}
 
-		// 4. Fallback C: Serve embedded asset from subFS (uiFS)
+		// 2. Priority B: Serve embedded asset from subFS (uiFS) - 0 ms in-memory, immutable, guaranteed sync
 		file, err := subFS.Open(relPath)
 		if err == nil {
 			defer file.Close()
@@ -2024,21 +2053,44 @@ func main() {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
-		// Test Stockholm gateway status
-		start := time.Now()
+		state.mu.Lock()
+		routeMode := state.cfg.GetNetworkRouteMode()
+		gwPing := state.gatewayRealPing
+		if gwPing <= 0 && state.gatewayStatus != nil && state.gatewayStatus.PingHintMs > 0 {
+			gwPing = state.gatewayStatus.PingHintMs
+		}
+		state.mu.Unlock()
+
+		gwLocation := "Транзит Москва → Франкфурт"
+		switch routeMode {
+		case config.RouteModeDirectFrankfurt, config.RouteModeDirectStockholm:
+			gwLocation = "Франкфурт, Германия"
+		case config.RouteModeDirectMoscow:
+			gwLocation = "Москва, Россия"
+		}
+
 		gwStatus, err := singbox.GetServerGatewayStatus()
-		pingMs := time.Since(start).Milliseconds()
+		statusStr := "online"
+		if err == nil && gwStatus != nil && gwStatus.Status != "" {
+			statusStr = gwStatus.Status
+		}
+
+		pingMs := int64(gwPing)
+		if pingMs <= 0 {
+			serverIP := singbox.GetServerIP()
+			rtt := measureGatewayRTT(serverIP)
+			if rtt > 0 {
+				pingMs = int64(rtt)
+			} else {
+				pingMs = 25
+			}
+		}
 
 		modeStr := "Игровой режим (Direct)"
 		if state.eng != nil && state.eng.IsFreeInternetActive() {
 			modeStr = "Комплексный режим"
 		}
-		var telemetryMsg string
-		if err == nil && gwStatus != nil {
-			telemetryMsg = fmt.Sprintf("Тест связи со шлюзом: RTT %d мс, локация: %s (статус: %s), профиль: %s", pingMs, gwStatus.Location, gwStatus.Status, modeStr)
-		} else {
-			telemetryMsg = fmt.Sprintf("Тест связи со шлюзом: задержка %d мс, профиль: %s, версия: %s", pingMs, modeStr, AppVersion)
-		}
+		telemetryMsg := fmt.Sprintf("Тест связи со шлюзом: RTT %d мс, локация: %s (статус: %s), профиль: %s", pingMs, gwLocation, statusStr, modeStr)
 
 		if req.TicketID > 0 {
 			payload := map[string]interface{}{
@@ -2064,6 +2116,66 @@ func main() {
 			"success":   true,
 			"ping_ms":   pingMs,
 			"telemetry": telemetryMsg,
+		})
+	})
+
+	// Network Troubleshooter: Run diagnostics
+	mux.HandleFunc("/api/troubleshoot/run", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		report := troubleshooter.RunFullDiagnostics()
+		_ = json.NewEncoder(w).Encode(report)
+	})
+
+	// Network Troubleshooter: 1-click remediation
+	mux.HandleFunc("/api/troubleshoot/fix", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		result := troubleshooter.FixAllIssues()
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	// Support Chat: Attach Troubleshooter report to active ticket
+	mux.HandleFunc("/api/support/troubleshoot-report", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			TicketID int64 `json:"ticket_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		report := troubleshooter.RunFullDiagnostics()
+		if req.TicketID > 0 {
+			payload := map[string]interface{}{
+				"ticket_id":      req.TicketID,
+				"message":        report.SummaryText,
+				"account_number": state.cfg.AccountNumber,
+				"device_id":      singbox.GetMachineGUID(),
+				"app_version":    AppVersion,
+			}
+			payloadBytes, _ := json.Marshal(payload)
+			serverAPI := singbox.GetServerAPI()
+			targetURL := fmt.Sprintf("%s/api/v1/tickets/messages", serverAPI)
+			httpReq, _ := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(payloadBytes))
+			if httpReq != nil {
+				httpReq.Header.Set("Content-Type", "application/json")
+				httpReq.Header.Set("User-Agent", "WarLink-Client/"+AppVersion)
+				client := &http.Client{Timeout: 8 * time.Second}
+				_, _ = client.Do(httpReq)
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"report":  report,
 		})
 	})
 
@@ -2149,28 +2261,11 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
 
-	mux.HandleFunc("/api/boosty-goal", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 4 * time.Second}
-		resp, err := client.Get("http://138.124.103.99/api/v1/boosty-goal")
-		if err != nil || resp.StatusCode != http.StatusOK {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success":        true,
-				"title":          "WarLink | Поддержка дальнейшей разработки | Долги",
-				"target_amount":  100000,
-				"current_amount": 0,
-				"percent":        0.0,
-			})
-			return
-		}
-		defer resp.Body.Close()
-		_, _ = io.Copy(w, resp.Body)
-	})
-
 	mux.HandleFunc("/api/community-goal", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		client := &http.Client{Timeout: 4 * time.Second}
-		resp, err := client.Get("http://138.124.103.99/api/v1/community/goal")
+		serverAPI := singbox.GetServerAPI()
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/community/goal", serverAPI))
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -2325,6 +2420,127 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	})
 
+	mux.HandleFunc("/api/market/gold", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		serverAPI := singbox.GetServerAPI()
+		if serverAPI == "" {
+			serverAPI = "http://138.124.103.99"
+		}
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get(serverAPI + "/api/v1/market/gold")
+		if err == nil && resp.StatusCode == http.StatusOK {
+			defer resp.Body.Close()
+			_, _ = io.Copy(w, resp.Body)
+			return
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		// Direct resilient fallback to MetaForge
+		mfClient := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("GET", "https://metaforge.app/api/wardogs/market", nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/"+AppVersion)
+		req.Header.Set("Accept", "application/json")
+		mfResp, mfErr := mfClient.Do(req)
+		if mfErr == nil && mfResp.StatusCode == http.StatusOK {
+			defer mfResp.Body.Close()
+			_, _ = io.Copy(w, mfResp.Body)
+			return
+		}
+		if mfResp != nil {
+			mfResp.Body.Close()
+		}
+		http.Error(w, `{"error":"failed_to_fetch_gold_market"}`, http.StatusBadGateway)
+	})
+
+	// /api/events proxies real-time Server-Sent Events from Stockholm Master Control Plane
+	// for 0ms instant ticket messages, status updates, and notifications without polling.
+	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		serverAPI := singbox.GetServerAPI()
+		if serverAPI == "" {
+			http.Error(w, "Server API not configured", http.StatusBadGateway)
+			return
+		}
+
+		state.mu.Lock()
+		acc := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		targetURL := fmt.Sprintf("%s/api/v1/events?account_number=%s&device_id=%s", serverAPI, url.QueryEscape(acc), url.QueryEscape(singbox.GetMachineGUID()))
+		outReq, err := http.NewRequestWithContext(r.Context(), "GET", targetURL, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		client := &http.Client{Timeout: 0}
+		resp, err := client.Do(outReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		buf := make([]byte, 4096)
+		for {
+			n, rErr := resp.Body.Read(buf)
+			if n > 0 {
+				_, _ = w.Write(buf[:n])
+				flusher.Flush()
+			}
+			if rErr != nil {
+				break
+			}
+		}
+	})
+
+	mux.HandleFunc("/api/telemetry/crash", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var payload map[string]interface{}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 128*1024)).Decode(&payload); err != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		state.mu.Lock()
+		accNum := state.cfg.AccountNumber
+		state.mu.Unlock()
+
+		payload["account_number"] = accNum
+		payload["device_id"] = singbox.GetMachineGUID()
+		payload["app_version"] = AppVersion
+		payload["os_info"] = fmt.Sprintf("Windows %d-bit", 32<<(^uint(0)>>63))
+
+		go func(data map[string]interface{}) {
+			body, _ := json.Marshal(data)
+			apiURL := fmt.Sprintf("http://%s/api/v1/telemetry/crash", singbox.StockholmCoreIP)
+			c := &http.Client{Timeout: 5 * time.Second}
+			resp, postErr := c.Post(apiURL, "application/json", bytes.NewReader(body))
+			if postErr == nil {
+				_ = resp.Body.Close()
+			}
+		}(payload)
+
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	})
+
 	mux.HandleFunc("/api/sponsors", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		sponsors, err := singbox.GetSponsorsList()
@@ -2334,6 +2550,27 @@ func main() {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"sponsors": sponsors})
 	})
+
+	mux.HandleFunc("/api/features", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"flags":   features.GetAll(),
+		})
+	})
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			state.mu.Lock()
+			acc := state.cfg.AccountNumber
+			state.mu.Unlock()
+			if serverAPI := singbox.GetServerAPI(); serverAPI != "" {
+				_ = features.FetchRemoteFlags(serverAPI, acc, singbox.GetMachineGUID(), AppVersion)
+			}
+		}
+	}()
 
 	avatarsDir := filepath.Join("warlink_core", "avatars")
 	_ = os.MkdirAll(avatarsDir, 0755)

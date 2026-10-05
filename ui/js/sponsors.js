@@ -1,6 +1,14 @@
 // ui/js/sponsors.js - Sponsors Hall of Fame Logic
 
-let cachedSponsors = null;
+function loadCachedSponsors() {
+    try {
+        const raw = localStorage.getItem('warlink_sponsors_cache');
+        if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return null;
+}
+
+let cachedSponsors = loadCachedSponsors();
 let currentSponsorCategory = 'all'; // 'all' | 'month' | 'new'
 
 function getSponsorsSkeletonHtml(count = 4) {
@@ -22,10 +30,6 @@ function getSponsorsSkeletonHtml(count = 4) {
 function toggleSponsors(e) {
     if (e) e.stopPropagation();
     switchView('view-sponsors');
-}
-
-function closeSponsors() {
-    switchView(null);
 }
 
 function switchSponsorCategory(cat) {
@@ -58,6 +62,9 @@ async function fetchSponsors() {
             (data, isFresh) => {
                 const sponsors = (data && data.sponsors) ? data.sponsors : [];
                 cachedSponsors = sponsors;
+                try {
+                    localStorage.setItem('warlink_sponsors_cache', JSON.stringify(sponsors));
+                } catch (e) {}
                 updateCommunityGoal(cachedSponsors);
                 renderSponsors(cachedSponsors);
             },
@@ -82,6 +89,9 @@ async function fetchSponsors() {
         if (!resp.ok) return;
         const data = await resp.json();
         cachedSponsors = data.sponsors || [];
+        try {
+            localStorage.setItem('warlink_sponsors_cache', JSON.stringify(cachedSponsors));
+        } catch (e) {}
         updateCommunityGoal(cachedSponsors);
         renderSponsors(cachedSponsors);
     } catch (e) {
@@ -132,94 +142,29 @@ async function updateCommunityGoal(sponsors) {
     }
 
     const infraFillEl = document.getElementById('infra-progress-fill');
-    const infraTextEl = document.getElementById('infra-progress-text');
     const infraPctEl = document.getElementById('infra-progress-pct');
     const infraNode = document.getElementById('goal-node-infra');
-
-    const frankFillEl = document.getElementById('frankfurt-progress-fill');
-    const frankTextEl = document.getElementById('frankfurt-progress-text');
-    const frankPctEl = document.getElementById('frankfurt-progress-pct');
-    const frankNode = document.getElementById('goal-node-frankfurt');
-
-    const bf6FillEl = document.getElementById('bf6-progress-fill');
-    const bf6TextEl = document.getElementById('bf6-progress-text');
-    const bf6PctEl = document.getElementById('bf6-progress-pct');
-    const bf6Card = document.getElementById('goal-special-bf6');
-    const bf6TargetLabel = document.getElementById('bf6-target-label');
 
     try {
         const res = await fetch('/api/community-goal');
         if (res.ok) {
             const data = await res.json();
             if (data && data.success) {
-                // 1. Unified Cluster infrastructure (13 EUR / 1690 RUB / mo)
+                // Unified Cluster infrastructure (13 EUR / 1690 RUB / mo)
                 if (data.infrastructure && infraFillEl) {
                     const infra = data.infrastructure;
                     const pct = Math.min(100, Math.max(0, infra.percent || 0));
                     infraFillEl.style.width = pct + '%';
-                    if (infraTextEl) {
-                        infraTextEl.textContent = 'Баланс: ' + (infra.current_balance_rub || 0).toLocaleString('ru-RU') + ' ₽ (' + infra.days_left + ' дн.)';
-                    }
                     if (infraPctEl) {
                         infraPctEl.textContent = pct + '%';
                     }
                     if (infraNode) {
-                        infraNode.title = 'Инфраструктура кластера: Стокгольм + Москва + Франкфурт (13 € / мес)';
-                        const titleSpan = infraNode.querySelector('.compact-node-title');
-                        if (titleSpan) {
-                            titleSpan.textContent = 'Инфраструктура кластера (13 € / мес):';
-                        }
-                        const flagsCont = infraNode.querySelector('.compact-flags');
-                        if (flagsCont && flagsCont.children.length === 2) {
-                            const deFlag = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                            deFlag.setAttribute('class', 'node-flag');
-                            deFlag.setAttribute('width', '12');
-                            deFlag.setAttribute('height', '9');
-                            deFlag.setAttribute('viewBox', '0 0 16 11');
-                            deFlag.setAttribute('fill', 'none');
-                            deFlag.innerHTML = '<rect width="16" height="3.67" rx="1" fill="#202020"/><rect y="3.67" width="16" height="3.67" fill="#DD1111"/><rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>';
-                            flagsCont.appendChild(deFlag);
-                        }
                         if (infra.is_covered || pct >= 100) {
                             infraNode.classList.add('covered');
                             infraNode.classList.remove('target');
                         } else {
                             infraNode.classList.remove('covered');
                             infraNode.classList.add('target');
-                        }
-                    }
-                }
-
-                // If legacy DOM has separate Frankfurt strip item, hide it and divider
-                if (frankNode) {
-                    frankNode.style.display = 'none';
-                    const divEl = document.querySelector('.compact-strip-divider');
-                    if (divEl) divEl.style.display = 'none';
-                }
-
-                // 3. Battlefield 6 Special Project
-                if (data.special_projects && data.special_projects.length > 0 && bf6FillEl) {
-                    const bf6 = data.special_projects[0];
-                    const pct = Math.min(100, Math.max(0, bf6.percent || 0));
-                    bf6FillEl.style.width = pct + '%';
-                    if (bf6TargetLabel) {
-                        bf6TargetLabel.textContent = (bf6.target_amount_rub || 1600).toLocaleString('ru-RU') + ' ₽';
-                    }
-                    if (bf6TextEl) {
-                        if (bf6.is_completed) {
-                            bf6TextEl.textContent = 'Цель достигнута! Игра получена разработчиком';
-                        } else {
-                            bf6TextEl.textContent = 'Собрано: ' + (bf6.current_amount_rub || 0).toLocaleString('ru-RU') + ' ₽ из ' + (bf6.target_amount_rub || 1600).toLocaleString('ru-RU') + ' ₽';
-                        }
-                    }
-                    if (bf6PctEl) {
-                        bf6PctEl.textContent = pct + '%';
-                    }
-                    if (bf6Card) {
-                        if (bf6.is_completed) {
-                            bf6Card.classList.add('completed');
-                        } else {
-                            bf6Card.classList.remove('completed');
                         }
                     }
                 }

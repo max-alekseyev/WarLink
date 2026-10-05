@@ -122,11 +122,11 @@ func RunFullBenchmark(
 			continue
 		}
 
-		// Wait briefly for WinDivert driver filter hook
-		time.Sleep(100 * time.Millisecond)
+		// Wait for WinDivert driver filter hook and large ipset/hostlist parsing
+		time.Sleep(1200 * time.Millisecond)
 
-		// Phase 1: Fast Canary probe (350ms timeout)
-		canaryResults := probeAllEndpointsWithTimeout(CanaryTargets, 350*time.Millisecond)
+		// Phase 1: Fast Canary probe (600ms timeout)
+		canaryResults := probeAllEndpointsWithTimeout(CanaryTargets, 600*time.Millisecond)
 		canaryPassed := 0
 		for _, cr := range canaryResults {
 			if cr.HTTPOk || cr.TLS3Ok || cr.TLS2Ok {

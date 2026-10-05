@@ -8,7 +8,7 @@
     <div class="details-content">
         <div class="setting-group">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">КОМПЛЕКСНЫЙ РЕЖИМ</span>
+                <span class="setting-group-title" style="margin-bottom: 0;">МАРШРУТИЗАЦИЯ И СЕТЬ</span>
                 <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
             </div>
             <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
@@ -16,48 +16,28 @@
                     WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
                 </div>
             </div>
-            <div class="setting-info-row">
-                <span class="info-label">Сетевой фильтр:</span>
-                <span class="info-value">WinDivert (Zapret winws2)</span>
-            </div>
-            <div class="setting-row" style="margin-top: 6px;">
-                <span class="setting-label">Профиль десинхронизации (Discord / YouTube):</span>
-                <select id="select-profile" class="setting-select" onchange="onProfileChange(this.value)">
-                    <option value="Автокалибровка (Circular Adaptive)">Автокалибровка</option>
-                </select>
-            </div>
-            <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
-                <button id="btn-run-benchmark" class="btn-link" style="font-size: 11px; padding: 2px 0; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--action);" onclick="runBenchmark()">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/></svg>
-                    Подобрать лучший профиль
-                </button>
-            </div>
-            <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                <span class="info-label">Авто-доменов в списке:</span>
-                <span style="display: flex; gap: 8px; align-items: center;">
-                    <span id="auto-hosts-count" class="info-value">0</span>
-                    <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
-                </span>
-            </div>
-            <div id="circular-strategy-row" class="setting-info-row" style="margin-top: 4px; font-size: 11px; display: none;">
-                <span class="info-label">Оркестратор:</span>
-                <span id="circular-strategy-val" class="info-value" style="color: var(--action);">Авторотация активна</span>
-            </div>
-        </div>
-
-        <div class="setting-group">
-            <span class="setting-group-title">МАРШРУТ ПОДКЛЮЧЕНИЯ</span>
             <div class="setting-row" style="margin-top: 6px;">
                 <span class="setting-label">Выбор маршрута:</span>
                 <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
-                    <option value="direct_moscow">Москва</option>
-                    <option value="direct_frankfurt">Франкфурт</option>
+                    <option value="direct_moscow">Москва (Транзит, РФ)</option>
+                    <option value="direct_frankfurt">Франкфурт (Европа)</option>
                     <option value="transit">Москва → Франкфурт</option>
                 </select>
             </div>
             <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
                 <span class="info-label">Описание:</span>
                 <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
+            </div>
+            <div class="setting-info-row" style="margin-top: 6px;">
+                <span class="info-label">Сетевой фильтр:</span>
+                <span class="info-value">WinDivert (Автономный режим)</span>
+            </div>
+            <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                <span class="info-label">Кэш авто-доменов:</span>
+                <span style="display: flex; gap: 8px; align-items: center;">
+                    <span id="auto-hosts-count" class="info-value">0</span>
+                    <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
+                </span>
             </div>
         </div>
 
@@ -91,11 +71,11 @@
         <div class="setting-group">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                 <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                <button id="btn-open-bug-report" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="switchView('view-support')">
+                <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
                     </svg>
-                    Поддержка и диалог
+                    Мастер диагностики сети
                 </button>
             </div>
             <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">

@@ -316,8 +316,12 @@ func (b *AutoBeacon) sendBeacon(isFinal bool) {
 	deviceID := singbox.GetMachineGUID()
 	appVersion := singbox.ClientVersion
 
+	hTrace := sha256.Sum256([]byte(accountNumber + deviceID))
+	traceID := fmt.Sprintf("trc-%x-%d", hTrace[:4], time.Now().Unix())
+
 	// Build telemetry payload compatible with both /telemetry/beacon and /routing-feedback
 	payload := map[string]interface{}{
+		"trace_id":             traceID,
 		"account_number":       accountNumber,
 		"device_id":            deviceID,
 		"app_version":          appVersion,

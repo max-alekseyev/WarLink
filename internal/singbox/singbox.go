@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	ClientVersion       = "v2.2.0"
+	ClientVersion       = "v2.2.1"
 	DefaultServerIP     = "138.124.103.99"
 	DefaultServerAPI    = "http://138.124.103.99"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -131,7 +131,6 @@ type Config struct {
 	Log          LogConfig           `json:"log"`
 	DNS          *DNSConfig          `json:"dns,omitempty"`
 	Inbounds     []InboundConfig     `json:"inbounds"`
-	Endpoints    []Endpoint          `json:"endpoints,omitempty"`
 	Outbounds    []Outbound          `json:"outbounds"`
 	Route        RouteConfig         `json:"route"`
 	Experimental *ExperimentalConfig `json:"experimental,omitempty"`
@@ -184,23 +183,6 @@ type InboundConfig struct {
 	StrictRoute         bool     `json:"strict_route"`
 	Stack               string   `json:"stack"`
 	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
-}
-
-type Endpoint struct {
-	Type       string   `json:"type"`
-	Tag        string   `json:"tag"`
-	Address    []string `json:"address"`
-	PrivateKey string   `json:"private_key"`
-	MTU        int      `json:"mtu"`
-	Peers      []Peer   `json:"peers"`
-}
-
-type Peer struct {
-	Address    string   `json:"address"`
-	Port       int      `json:"port"`
-	PublicKey  string   `json:"public_key"`
-	AllowedIPs []string `json:"allowed_ips"`
-	Reserved   []int    `json:"reserved"`
 }
 
 type OutboundTLSOptions struct {
@@ -314,13 +296,6 @@ var DirectGameDomains = []string{
 	"steamcommunity.com",
 	"steamstatic.com",
 	"steamgames.com",
-	// Epic Games Store — WARDOGS lobby auth & backend
-	"epicgames.com",
-	"epicgames.dev",
-	"epicgames.net",
-	"unrealengine.com",
-	"ol.epicgames.com",
-	"api.epicgames.dev",
 	// EGS CDN & auth services
 	"cloudfront.net",
 	"amazonaws.com",
@@ -426,8 +401,6 @@ var DirectLauncherProcesses = []string{
 	"vgtray.exe",
 	"EasyAntiCheat.exe",
 	"easyanticheat.exe",
-	"EasyAntiCheat_EOS.exe",
-	"easyanticheat_eos.exe",
 	"BEService.exe",
 	"beservice.exe",
 	"faceitclient.exe",
@@ -644,8 +617,15 @@ func AcquireSession(game ...string) (string, error) {
 		return "", fmt.Errorf("ошибка авторизации на шлюзе (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 
+	body, errRead := io.ReadAll(resp.Body)
+	if errRead != nil {
+		return "", fmt.Errorf("ошибка чтения ответа шлюза: %w", errRead)
+	}
 	var sessResp SessionResult
-	if err := json.NewDecoder(resp.Body).Decode(&sessResp); err != nil || sessResp.Token == "" {
+	if err := json.Unmarshal(body, &sessResp); err != nil || sessResp.Token == "" {
+		if len(body) > 0 {
+			return "", fmt.Errorf("некорректный ответ шлюза: %s", strings.TrimSpace(string(body)))
+		}
 		return "", fmt.Errorf("некорректный ответ шлюза")
 	}
 
@@ -959,9 +939,8 @@ func GetDefaultLogsDir() string {
 	return l
 }
 
-
 // GenerateConfig creates a sing-box JSON configuration routing target processes,
-// and optionally Meta/WhatsApp/X IP ranges and blocked web domains, to Hysteria 2 Stockholm tunnel.
+// and optionally Meta/WhatsApp/X IP ranges and blocked web domains, to Hysteria 2 tunnel.
 func GenerateConfig(targetProcesses []string, includeWebServices bool, optionalToken ...string) ([]byte, error) {
 	return GenerateConfigFromProfiles(nil, targetProcesses, includeWebServices, optionalToken...)
 }
@@ -1098,11 +1077,11 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-gateway
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
-			Outbound: "hy2-stockholm",
+			Outbound: "hy2-gateway",
 		},
 		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
@@ -1133,13 +1112,13 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		})
 	}
 
-	// 8. Route specified target game processes to hy2-stockholm with HIGHEST PRIORITY!
+	// 8. Route specified target game processes to hy2-gateway with HIGHEST PRIORITY!
 	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
 	// MUST go through tunnel!
 	if len(allProcesses) > 0 {
 		rules = append(rules, RouteRule{
 			ProcessName: allProcesses,
-			Outbound:    "hy2-stockholm",
+			Outbound:    "hy2-gateway",
 		})
 	}
 
@@ -1175,11 +1154,11 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		rules = append(rules,
 			RouteRule{
 				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-stockholm",
+				Outbound:     "hy2-gateway",
 			},
 			RouteRule{
 				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-stockholm",
+				Outbound: "hy2-gateway",
 			},
 		)
 	}
@@ -1188,7 +1167,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	if len(allDomains) > 0 {
 		rules = append(rules, RouteRule{
 			DomainSuffix: allDomains,
-			Outbound:     "hy2-stockholm",
+			Outbound:     "hy2-gateway",
 		})
 	}
 
@@ -1196,18 +1175,18 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	if len(allIPs) > 0 {
 		rules = append(rules, RouteRule{
 			IPCIDR:   allIPs,
-			Outbound: "hy2-stockholm",
+			Outbound: "hy2-gateway",
 		})
 	}
 
-	// Route WARDOGS dedicated match servers (AWS GameLift UDP 4000-4500, e.g. port 4192) through Stockholm gateway
+	// Route WARDOGS dedicated match servers (AWS GameLift UDP 4000-4500, e.g. port 4192) through gateway
 	rules = append(rules, RouteRule{
 		Network:   "udp",
 		PortRange: []string{"4000:4500"},
-		Outbound:  "hy2-stockholm",
+		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-50100, 3478) strictly for Discord processes routes direct
+	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) strictly for Discord processes routes direct
 	// with WinDivert desync to avoid server UDP port limits and ensure minimum audio latency
 	rules = append(rules,
 		RouteRule{
@@ -1219,7 +1198,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		RouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
-			PortRange:   []string{"19294:19344", "50000:50100"},
+			PortRange:   []string{"19294:19344", "50000:65535"},
 			Outbound:    "direct",
 		},
 	)
@@ -1323,7 +1302,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Tag:    "dns-remote",
 				Type:   "tcp",
 				Server: "1.1.1.1",
-				Detour: "hy2-stockholm",
+				Detour: "hy2-gateway",
 			},
 			{
 				Tag:    "dns-local",
@@ -1385,7 +1364,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Tag:                 "tun-in",
 				InterfaceName:       "WarLink-Tun",
 				Address:             []string{"172.19.0.1/30"},
-				MTU:                 1360,
+				MTU:                 1320,
 				AutoRoute:           true,
 				StrictRoute:         false,
 				Stack:               "mixed",
@@ -1395,7 +1374,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		Outbounds: []Outbound{
 			{
 				Type:        "hysteria2",
-				Tag:         "hy2-stockholm",
+				Tag:         "hy2-gateway",
 				Server:      targetServer,
 				ServerPort:  hy2Port,
 				ServerPorts: hy2Ports,
@@ -1577,11 +1556,11 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-gateway
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
-			Outbound: "hy2-stockholm",
+			Outbound: "hy2-gateway",
 		},
 		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
@@ -1629,13 +1608,13 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		})
 	}
 
-	// 8. Route specified target game processes to hy2-stockholm with HIGHEST PRIORITY!
+	// 8. Route specified target game processes to hy2-gateway with HIGHEST PRIORITY!
 	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
 	// MUST go through tunnel!
 	if len(allProcesses) > 0 {
 		rules = append(rules, RouteRule{
 			ProcessName: allProcesses,
-			Outbound:    "hy2-stockholm",
+			Outbound:    "hy2-gateway",
 		})
 	}
 
@@ -1669,20 +1648,20 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		rules = append(rules,
 			RouteRule{
 				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-stockholm",
+				Outbound:     "hy2-gateway",
 			},
 			RouteRule{
 				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-stockholm",
+				Outbound: "hy2-gateway",
 			},
 		)
 	}
 
-	// Route profile domains & AWS GameLift / DynamoDB telemetry to Stockholm
+	// Route profile domains & AWS GameLift / DynamoDB telemetry to gateway
 	if len(allDomains) > 0 {
 		rules = append(rules, RouteRule{
 			DomainSuffix: allDomains,
-			Outbound:     "hy2-stockholm",
+			Outbound:     "hy2-gateway",
 		})
 	}
 
@@ -1690,15 +1669,15 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	if len(allIPs) > 0 {
 		rules = append(rules, RouteRule{
 			IPCIDR:   allIPs,
-			Outbound: "hy2-stockholm",
+			Outbound: "hy2-gateway",
 		})
 	}
 
-	// Route WARDOGS dedicated match UDP traffic (ports 4000:4500) through Stockholm
+	// Route WARDOGS dedicated match UDP traffic (ports 4000:4500) through gateway
 	rules = append(rules, RouteRule{
 		Network:   "udp",
 		PortRange: []string{"4000:4500"},
-		Outbound:  "hy2-stockholm",
+		Outbound:  "hy2-gateway",
 	})
 
 	// Discord Voice WebRTC UDP media strictly for Discord processes routes direct with WinDivert desync
@@ -1712,7 +1691,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		RouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
-			PortRange:   []string{"19294:19344", "50000:50100"},
+			PortRange:   []string{"19294:19344", "50000:65535"},
 			Outbound:    "direct",
 		},
 	)
@@ -1810,7 +1789,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Tag:    "dns-remote",
 				Type:   "tcp",
 				Server: "1.1.1.1",
-				Detour: "hy2-stockholm",
+				Detour: "hy2-gateway",
 			},
 			{
 				Tag:    "dns-local",
@@ -1873,7 +1852,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
 				Address:       []string{"172.19.0.1/30"},
-				MTU:           1380, // Optimized fastpath MTU to prevent packet fragmentation
+				MTU:           1320, // Standard safe MTU (1320) avoiding UDP packet fragmentation across PPPoE and regional ISP tunnels
 				AutoRoute:     true,
 				StrictRoute:   false,
 				Stack:         "mixed", // Mixed stack: native kernel UDP for gaming fastpath, gVisor TCP for honest end-to-end RTT
@@ -1883,7 +1862,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		Outbounds: []Outbound{
 			{
 				Type:        "hysteria2",
-				Tag:         "hy2-stockholm",
+				Tag:         "hy2-gateway",
 				Server:      targetServer,
 				ServerPort:  hy2ServerPort,
 				ServerPorts: hy2ServerPorts,
@@ -2053,16 +2032,16 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 		return err
 	}
 
-	// Request active session from Stockholm server
+	// Request active session from central server
 	if logFn != nil {
-		logFn("[INFO] Авторизация на шлюзе Стокгольм (проверка свободных слотов)...")
+		logFn("[INFO] Авторизация игровой сессии (проверка свободных слотов)...")
 	}
 	token, err := AcquireSession(targetGame)
 	if err != nil {
 		return err
 	}
 	if logFn != nil {
-		logFn("[OK] Авторизация на шлюзе Стокгольм успешна (токен выдан)")
+		logFn("[OK] Авторизация сессии успешна (токен выдан)")
 	}
 
 	m.targetProcesses = append([]string(nil), targetProcesses...)
@@ -2114,12 +2093,17 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	}
 
 	if logFn != nil {
-		modeStr := "Игровой шлюз Стокгольм (27 мс)"
+		gwHost, _, _ := GetActiveGatewayTarget()
+		nodeName := "Франкфурт"
+		if strings.Contains(gwHost, MoscowIngressIP) {
+			nodeName = "Москва"
+		}
+		modeStr := fmt.Sprintf("Игровой шлюз %s", nodeName)
 		if includeWebServices {
 			if len(targetProcesses) > 0 {
-				modeStr = "Композитный шлюз (Игра + Комплексный режим)"
+				modeStr = fmt.Sprintf("Композитный шлюз (%s + Комплексный режим)", nodeName)
 			} else {
-				modeStr = "Комплексный режим (Стокгольм)"
+				modeStr = fmt.Sprintf("Комплексный режим (%s)", nodeName)
 			}
 		}
 		logFn(fmt.Sprintf("[INFO] Запуск туннеля Hysteria 2 (%s: %s)...", modeStr, strings.Join(targetProcesses, ", ")))

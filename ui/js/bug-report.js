@@ -17,6 +17,12 @@
     };
 
     function getAccountNumber() {
+        try {
+            const stored = localStorage.getItem('warlink_account_number');
+            if (stored && stored !== '—' && !stored.includes('—')) {
+                return stored;
+            }
+        } catch (e) {}
         if (window.UIStore) {
             const cachedProfile = window.UIStore.get('/api/user-profile');
             if (cachedProfile && cachedProfile.account_number) {
@@ -27,7 +33,7 @@
         if (accEl && accEl.textContent && !accEl.textContent.includes('—')) {
             return accEl.textContent.trim();
         }
-        return 'Анонимный оператор';
+        return 'Оператор';
     }
 
     function checkCooldown() {
@@ -192,7 +198,7 @@
             if (logChevron) logChevron.style.transform = 'rotate(180deg)';
 
             // Build sanitized diagnostic dump
-            const appVer = document.querySelector('.brand-version')?.textContent || 'v2.2.0';
+            const appVer = document.querySelector('.brand-version')?.textContent || 'v2.2.1';
             const acc = getAccountNumber();
             const gwPing = document.getElementById('gw-ping')?.textContent || '—';
             const freenet = document.getElementById('free-net-control')?.classList.contains('active') ? 'Активен' : 'Отключен';

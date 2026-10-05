@@ -1,8 +1,31 @@
 // ui/js/support.js - Conversational Support & Ticket Thread Controller (Dark Cloudflare Utility)
 
 (function () {
-    let currentTicket = null;
-    let currentMessages = [];
+    const SUPPORT_ACTIVE_STORAGE_KEY = 'warlink_support_active';
+    const SUPPORT_HISTORY_STORAGE_KEY = 'warlink_support_history';
+
+    function loadCachedSupportActive() {
+        try {
+            const raw = localStorage.getItem(SUPPORT_ACTIVE_STORAGE_KEY);
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return null;
+    }
+
+    function saveCachedSupportActive(ticket, messages) {
+        try {
+            if (ticket) {
+                localStorage.setItem(SUPPORT_ACTIVE_STORAGE_KEY, JSON.stringify({ ticket, messages }));
+            } else {
+                localStorage.removeItem(SUPPORT_ACTIVE_STORAGE_KEY);
+            }
+        } catch (e) {}
+    }
+
+    const cachedActive = loadCachedSupportActive();
+    let currentTicket = cachedActive ? cachedActive.ticket : null;
+    window.currentSupportTicket = currentTicket;
+    let currentMessages = (cachedActive && cachedActive.messages) ? cachedActive.messages : [];
     let pollInterval = null;
     let isSending = false;
     let isNewTopicMode = false;
@@ -58,6 +81,46 @@
         return map[cat] || cat || 'Обращение';
     }
 
+    function getSupportChatSkeletonHtml() {
+        return `
+            <div class="support-chat-skeleton" style="display: flex; flex-direction: column; gap: 14px; padding: 14px 4px;">
+                <div class="support-msg-row support-msg-agent skeleton-card" style="display: flex; justify-content: flex-start;">
+                    <div class="skeleton" style="width: 280px; height: 46px; border-radius: 3px;"></div>
+                </div>
+                <div class="support-msg-row support-msg-user skeleton-card" style="display: flex; justify-content: flex-end;">
+                    <div class="skeleton" style="width: 220px; height: 38px; border-radius: 3px;"></div>
+                </div>
+                <div class="support-msg-row support-msg-agent skeleton-card" style="display: flex; justify-content: flex-start;">
+                    <div class="skeleton" style="width: 320px; height: 56px; border-radius: 3px;"></div>
+                </div>
+            </div>
+        `;
+    }
+
+    function getSupportHistorySkeletonHtml(count = 3) {
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            html += `
+                <div class="support-history-card skeleton-card">
+                    <div class="history-card-header">
+                        <div class="history-card-left" style="gap: 8px;">
+                            <div class="skeleton" style="width: 55px; height: 14px;"></div>
+                            <div class="skeleton" style="width: 110px; height: 14px;"></div>
+                        </div>
+                        <div class="skeleton" style="width: 45px; height: 14px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 85%; height: 12px; margin-top: 8px;"></div>
+                    <div class="skeleton" style="width: 60%; height: 12px; margin-top: 4px;"></div>
+                    <div class="history-card-footer" style="margin-top: 8px;">
+                        <div class="skeleton" style="width: 65px; height: 12px;"></div>
+                        <div class="skeleton" style="width: 70px; height: 12px;"></div>
+                    </div>
+                </div>
+            `;
+        }
+        return html;
+    }
+
     async function fetchSupportChat(silent = false, ticketId = null) {
         if (isNewTopicMode && !ticketId) {
             // Keep user on the new topic creation screen without overriding it
@@ -66,11 +129,7 @@
 
         const streamEl = document.getElementById('support-chat-stream');
         if (!silent && streamEl && (!currentMessages || currentMessages.length === 0)) {
-            streamEl.innerHTML = `
-                <div class="support-chat-empty">
-                    <span class="font-mono text-muted" style="font-size: 11px;">Синхронизация истории диалога...</span>
-                </div>
-            `;
+            streamEl.innerHTML = getSupportChatSkeletonHtml();
         }
 
         try {
@@ -80,6 +139,7 @@
                 if (!silent) {
                     currentTicket = null;
                     currentMessages = [];
+                    saveCachedSupportActive(null, []);
                     renderEmptySupportState();
                 }
                 return;
@@ -88,14 +148,18 @@
 
             if (data && data.success && data.ticket) {
                 currentTicket = data.ticket;
+                window.currentSupportTicket = currentTicket;
                 currentMessages = data.messages || [];
                 isNewTopicMode = false;
+                saveCachedSupportActive(currentTicket, currentMessages);
                 renderSupportHeader();
                 renderSupportChatMessages();
             } else {
                 if (!silent || !currentTicket) {
                     currentTicket = null;
+                    window.currentSupportTicket = null;
                     currentMessages = [];
+                    saveCachedSupportActive(null, []);
                     renderEmptySupportState();
                 }
             }
@@ -104,6 +168,7 @@
             if (!silent) {
                 currentTicket = null;
                 currentMessages = [];
+                saveCachedSupportActive(null, []);
                 renderEmptySupportState();
             }
         }
@@ -267,79 +332,89 @@
         }
     }
 
-    async function fetchSupportHistory() {
+    function loadCachedSupportHistory() {
+        try {
+            const raw = localStorage.getItem(SUPPORT_HISTORY_STORAGE_KEY);
+            if (raw) return JSON.parse(raw);
+        } catch (e) {}
+        return null;
+    }
+
+    function renderHistoryList(tickets) {
         const listEl = document.getElementById('support-history-list');
         const countEl = document.getElementById('support-history-count');
-        if (listEl) {
+        if (countEl) {
+            countEl.textContent = `${tickets.length} обращений`;
+        }
+        if (!listEl) return;
+
+        if (tickets.length === 0) {
             listEl.innerHTML = `
-                <div class="support-chat-empty">
-                    <span class="font-mono text-muted" style="font-size: 11px;">Загрузка списка обращений...</span>
+                <div class="support-welcome-card" style="margin: 30px 10px;">
+                    <div class="support-welcome-title">История обращений пуста</div>
+                    <div class="support-welcome-desc">
+                        У вас пока нет созданных тикетов. Нажмите «+ Новое обращение», чтобы отправить вопрос разработчику.
+                    </div>
+                    <button class="btn btn-primary" onclick="startNewSupportTopic()" style="font-size: 11px; padding: 6px 14px;">Создать обращение</button>
+                </div>
+            `;
+            return;
+        }
+
+        let html = '';
+        for (const t of tickets) {
+            const bInfo = getStatusBadge(t.status);
+            const isCurrent = currentTicket && currentTicket.id === t.id;
+            const catName = getCategoryName(t.category);
+            const dateStr = formatFullDate(t.created_at);
+            const snippet = t.admin_reply ? `Ответ разработчика: ${t.admin_reply}` : (t.user_comment || 'Без комментария');
+            const msgsCount = t.messages_count || 1;
+
+            html += `
+                <div class="support-history-card ${isCurrent ? 'is-active-ticket' : ''}" onclick="openTicketById(${t.id})">
+                    <div class="history-card-header">
+                        <div class="history-card-left">
+                            <span class="history-card-id font-mono">#TK-${String(t.id).padStart(4, '0')}</span>
+                            <span class="history-card-category">${escapeHtml(catName)}</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span class="history-card-time font-mono">${escapeHtml(dateStr)}</span>
+                            <span class="${bInfo.cls}" style="font-size: 9px; padding: 2px 6px;">${bInfo.text}</span>
+                        </div>
+                    </div>
+                    <div class="history-card-snippet font-sans">${escapeHtml(snippet)}</div>
+                    <div class="history-card-footer font-mono">
+                        <span>Сообщений: ${msgsCount}</span>
+                        <span style="color: var(--action);">Открыть диалог →</span>
+                    </div>
                 </div>
             `;
         }
 
+        listEl.innerHTML = html;
+    }
+
+    async function fetchSupportHistory(silent = false) {
+        const listEl = document.getElementById('support-history-list');
+        const cached = loadCachedSupportHistory();
+        if (cached && Array.isArray(cached) && cached.length > 0) {
+            renderHistoryList(cached);
+        } else if (!silent && listEl) {
+            listEl.innerHTML = getSupportHistorySkeletonHtml(3);
+        }
+
         try {
             const resp = await fetch('/api/support/history');
-            if (!resp.ok) {
-                if (listEl) listEl.innerHTML = `<div class="support-chat-empty"><span class="text-muted" style="font-size: 11px;">Не удалось загрузить историю</span></div>`;
-                return;
-            }
+            if (!resp.ok) return;
             const data = await resp.json();
             const tickets = (data && data.tickets) ? data.tickets : [];
-
-            if (countEl) {
-                countEl.textContent = `${tickets.length} обращений`;
-            }
-
-            if (tickets.length === 0) {
-                if (listEl) {
-                    listEl.innerHTML = `
-                        <div class="support-welcome-card" style="margin: 30px 10px;">
-                            <div class="support-welcome-title">История обращений пуста</div>
-                            <div class="support-welcome-desc">
-                                У вас пока нет созданных тикетов. Нажмите «+ Новое обращение», чтобы отправить вопрос разработчику.
-                            </div>
-                            <button class="btn btn-primary" onclick="startNewSupportTopic()" style="font-size: 11px; padding: 6px 14px;">Создать обращение</button>
-                        </div>
-                    `;
-                }
-                return;
-            }
-
-            let html = '';
-            for (const t of tickets) {
-                const bInfo = getStatusBadge(t.status);
-                const isCurrent = currentTicket && currentTicket.id === t.id;
-                const catName = getCategoryName(t.category);
-                const dateStr = formatFullDate(t.created_at);
-                const snippet = t.admin_reply ? `Ответ разработчика: ${t.admin_reply}` : (t.user_comment || 'Без комментария');
-                const msgsCount = t.messages_count || 1;
-
-                html += `
-                    <div class="support-history-card ${isCurrent ? 'is-active-ticket' : ''}" onclick="openTicketById(${t.id})">
-                        <div class="history-card-header">
-                            <div class="history-card-left">
-                                <span class="history-card-id font-mono">#TK-${String(t.id).padStart(4, '0')}</span>
-                                <span class="history-card-category">${escapeHtml(catName)}</span>
-                            </div>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <span class="history-card-time font-mono">${escapeHtml(dateStr)}</span>
-                                <span class="${bInfo.cls}" style="font-size: 9px; padding: 2px 6px;">${bInfo.text}</span>
-                            </div>
-                        </div>
-                        <div class="history-card-snippet font-sans">${escapeHtml(snippet)}</div>
-                        <div class="history-card-footer font-mono">
-                            <span>Сообщений: ${msgsCount}</span>
-                            <span style="color: var(--action);">Открыть диалог →</span>
-                        </div>
-                    </div>
-                `;
-            }
-
-            if (listEl) listEl.innerHTML = html;
+            try {
+                localStorage.setItem(SUPPORT_HISTORY_STORAGE_KEY, JSON.stringify(tickets));
+            } catch (e) {}
+            renderHistoryList(tickets);
         } catch (e) {
             console.error('Failed to load support history:', e);
-            if (listEl) listEl.innerHTML = `<div class="support-chat-empty"><span class="text-muted" style="font-size: 11px;">Ошибка соединения</span></div>`;
+            if (listEl && listEl.children.length === 0) listEl.innerHTML = `<div class="support-chat-empty"><span class="text-muted" style="font-size: 11px;">Ошибка соединения</span></div>`;
         }
     }
 
@@ -581,11 +656,27 @@
         }
     };
 
+    window.initSupportCache = function () {
+        if (currentTicket && currentMessages && currentMessages.length > 0) {
+            renderSupportHeader();
+            renderSupportChatMessages();
+        }
+    };
+
     window.openSupportChat = function () {
         switchSupportPane('chat');
-        isFirstLoad = true;
-        lastRenderedSignature = '';
-        fetchSupportChat();
+        if (currentTicket && currentMessages && currentMessages.length > 0) {
+            renderSupportHeader();
+            renderSupportChatMessages();
+            fetchSupportChat(true, currentTicket.id);
+        } else {
+            renderSupportHeader();
+            const streamEl = document.getElementById('support-chat-stream');
+            if (streamEl && !isNewTopicMode) {
+                streamEl.innerHTML = getSupportChatSkeletonHtml();
+            }
+            fetchSupportChat(false);
+        }
         if (pollInterval) clearInterval(pollInterval);
         pollInterval = setInterval(() => {
             const viewEl = document.getElementById('view-support');
@@ -604,6 +695,41 @@
         if (event) event.stopPropagation();
         if (typeof switchView === 'function') {
             switchView('view-support');
+        }
+    };
+
+    // Live real-time SSE push hooks (0ms instant message display)
+    window.onLiveTicketMessage = function (msg) {
+        if (!msg || !msg.ticket_id) return;
+        if (currentTicket && Number(currentTicket.id) === Number(msg.ticket_id)) {
+            const alreadyExists = currentMessages.some(m => m.id === msg.id || (m.created_at === msg.created_at && m.message === msg.message));
+            if (!alreadyExists) {
+                currentMessages.push({
+                    id: msg.id || Date.now(),
+                    ticket_id: msg.ticket_id,
+                    sender_type: msg.sender_type || 'admin',
+                    sender_name: msg.sender_name || 'Разработчик',
+                    message: msg.message,
+                    created_at: msg.created_at || new Date().toISOString()
+                });
+                if (msg.status) {
+                    currentTicket.status = msg.status;
+                }
+                saveCachedSupportActive(currentTicket, currentMessages);
+                renderSupportHeader();
+                renderSupportChatMessages();
+                if (msg.sender_type === 'admin') {
+                    if (window.WarLinkAudio && typeof window.WarLinkAudio.playNotification === 'function') {
+                        window.WarLinkAudio.playNotification('info');
+                    }
+                }
+            }
+        }
+    };
+
+    window.onLiveTicketUpdated = function (tId) {
+        if (currentTicket && String(currentTicket.id) === String(tId)) {
+            fetchSupportChat(true, currentTicket.id);
         }
     };
 })();

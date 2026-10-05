@@ -1,0 +1,2858 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WarLink Support — Центр диалогов с игроками</title>
+    <style>
+        :root {
+            --bg-root: #0a0a0a;
+            --bg-header: #111111;
+            --bg-sidebar: #0f0f0f;
+            --bg-panel: #141414;
+            --bg-card: #181818;
+            --bg-card-hover: #1f1f1f;
+            --bg-active: #222222;
+            --bg-user-bubble: #191919;
+            --bg-admin-bubble: #1d150e;
+            --bg-sys-card: #141414;
+            
+            --border-subtle: #202020;
+            --border-card: #282828;
+            --border-active: #383838;
+            --border-admin: #4a2815;
+            
+            --accent-orange: #ff5e1f;
+            --accent-orange-hover: #e04f16;
+            --accent-orange-glow: rgba(255, 94, 31, 0.15);
+            
+            --text-primary: #ededed;
+            --text-secondary: #9e9e9e;
+            --text-muted: #5e5e5e;
+            
+            --status-new: #ff5e1f;
+            --status-progress: #3b82f6;
+            --status-resolved: #10b981;
+            --status-closed: #6b7280;
+
+            --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        ::selection {
+            background-color: rgba(255, 94, 31, 0.35);
+            color: #ffffff;
+        }
+
+        body {
+            background-color: var(--bg-root);
+            color: var(--text-primary);
+            font-family: var(--font-ui);
+            font-size: 13px;
+            line-height: 1.45;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+
+        button, .btn-action, .btn-link, .btn-send, .filter-tab {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Top Header */
+        header.app-header {
+            height: 48px;
+            background-color: var(--bg-header);
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            flex-shrink: 0;
+        }
+
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand-title {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .brand-badge {
+            background: rgba(255, 94, 31, 0.12);
+            color: var(--accent-orange);
+            border: 1px solid rgba(255, 94, 31, 0.25);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 5px;
+            border-radius: 2px;
+            letter-spacing: 0.5px;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.35; transform: scale(0.92); }
+        }
+
+        .status-dot-pulse {
+            width: 7px;
+            height: 7px;
+            background-color: var(--status-resolved);
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .header-stats {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            overflow-x: auto;
+            scrollbar-width: none;
+            padding: 2px 0;
+        }
+
+        .header-stats::-webkit-scrollbar {
+            display: none;
+        }
+
+        .header-stat-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            white-space: nowrap;
+        }
+
+        .stat-count {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-link {
+            background: transparent;
+            border: 1px solid var(--border-card);
+            color: var(--text-secondary);
+            padding: 5px 10px;
+            border-radius: 2px;
+            font-size: 11px;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn-link:hover {
+            color: var(--text-primary);
+            border-color: var(--border-active);
+            background: var(--bg-card);
+        }
+
+        /* 3-Pane Layout */
+        .workspace {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            height: calc(100vh - 48px);
+        }
+
+        /* Left Pane: Queue */
+        .pane-queue {
+            width: 360px;
+            min-width: 260px;
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            transition: width 0.2s ease;
+        }
+
+        .queue-toolbar {
+            padding: 12px 14px 10px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .search-box {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .search-box svg.search-icon {
+            position: absolute;
+            left: 10px;
+            color: var(--text-muted);
+            pointer-events: none;
+        }
+
+        .search-input {
+            width: 100%;
+            height: 32px;
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            padding: 0 28px 0 32px;
+            color: var(--text-primary);
+            font-size: 12px;
+            outline: none;
+            transition: border-color 0.15s ease;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent-orange);
+        }
+
+        .search-clear-btn {
+            position: absolute;
+            right: 6px;
+            width: 18px;
+            height: 18px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 2px;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .search-clear-btn:hover {
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+
+        .search-clear-btn.visible {
+            display: flex;
+        }
+
+        .filter-tabs {
+            display: flex;
+            gap: 3px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            padding-bottom: 2px;
+        }
+
+        .filter-tabs::-webkit-scrollbar {
+            display: none;
+        }
+
+        .filter-tab {
+            flex: 1;
+            padding: 5px 6px;
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            font-size: 11px;
+            border-radius: 2px;
+            cursor: pointer;
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            white-space: nowrap;
+            transition: all 0.15s ease;
+        }
+
+        .filter-tab:hover {
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+
+        .filter-tab.active {
+            color: var(--text-primary);
+            background: var(--bg-card);
+            border-color: var(--border-card);
+            font-weight: 600;
+        }
+
+        .filter-tab .badge {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            background: rgba(255, 255, 255, 0.08);
+            padding: 1px 4px;
+            border-radius: 2px;
+        }
+
+        .filter-tab.active .badge {
+            background: var(--accent-orange);
+            color: #000;
+            font-weight: 700;
+        }
+
+        .filter-tab.active .badge.badge-online {
+            background: #10b981;
+            color: #000;
+        }
+
+        /* User Online Status Indicators */
+        .online-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            padding: 1px 6px;
+            border-radius: 2px;
+            line-height: 14px;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .online-pill.online {
+            background: rgba(16, 185, 129, 0.12);
+            color: #10b981;
+            border: 1px solid rgba(16, 185, 129, 0.28);
+        }
+
+        .online-pill.online .online-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: #10b981;
+        }
+
+        .online-pill.offline {
+            background: rgba(107, 114, 128, 0.12);
+            color: #9ca3af;
+            border: 1px solid rgba(107, 114, 128, 0.22);
+        }
+
+        .online-pill.offline .online-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: #6b7280;
+        }
+
+        .queue-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .queue-list::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .queue-list::-webkit-scrollbar-thumb {
+            background: #252525;
+            border-radius: 2px;
+        }
+
+        .ticket-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-left: 3px solid transparent;
+            padding: 10px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+
+        .ticket-card:hover {
+            background-color: var(--bg-card-hover);
+            border-color: var(--border-card);
+        }
+
+        .ticket-card.selected {
+            background-color: #1a1a1a;
+            border-color: var(--border-active);
+            border-left-color: var(--accent-orange);
+        }
+
+        .ticket-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .ticket-num {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        .ticket-time {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .ticket-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+
+        .ticket-acc {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .cat-tag {
+            font-size: 10px;
+            padding: 1px 5px;
+            border-radius: 2px;
+            background: #232323;
+            color: #bbb;
+            white-space: nowrap;
+        }
+
+        .cat-tag.game_crash {
+            background: rgba(239, 68, 68, 0.12);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+
+        .cat-tag.high_ping {
+            background: rgba(245, 158, 11, 0.12);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.25);
+        }
+
+        .cat-tag.gateway_conn {
+            background: rgba(59, 130, 246, 0.12);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.25);
+        }
+
+        .cat-tag.discord_dpi {
+            background: rgba(168, 85, 247, 0.12);
+            color: #c084fc;
+            border: 1px solid rgba(168, 85, 247, 0.25);
+        }
+
+        .cat-tag.routing {
+            background: rgba(56, 189, 248, 0.12);
+            color: #38bdf8;
+            border: 1px solid rgba(56, 189, 248, 0.25);
+        }
+
+        .cat-tag.speed {
+            background: rgba(52, 211, 153, 0.12);
+            color: #34d399;
+            border: 1px solid rgba(52, 211, 153, 0.25);
+        }
+
+        .cat-tag.billing {
+            background: rgba(255, 159, 67, 0.12);
+            color: #ff9f43;
+            border: 1px solid rgba(255, 159, 67, 0.25);
+        }
+
+        .cat-tag.auth {
+            background: rgba(251, 113, 133, 0.12);
+            color: #fb7185;
+            border: 1px solid rgba(251, 113, 133, 0.25);
+        }
+
+        .cat-tag.other {
+            background: rgba(255, 255, 255, 0.06);
+            color: #9e9e9e;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .ticket-preview {
+            font-size: 12px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 8px;
+            line-height: 1.35;
+        }
+
+        .ticket-card-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .status-pill {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-pill.new {
+            background: rgba(255, 94, 31, 0.15);
+            color: var(--status-new);
+            border: 1px solid rgba(255, 94, 31, 0.3);
+        }
+
+        .status-pill.in_progress {
+            background: rgba(59, 130, 246, 0.15);
+            color: var(--status-progress);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .status-pill.resolved {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--status-resolved);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .status-pill.closed {
+            background: rgba(107, 114, 128, 0.15);
+            color: var(--status-closed);
+            border: 1px solid rgba(107, 114, 128, 0.3);
+        }
+
+        .msg-count-tag {
+            font-size: 10px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .dot-unread {
+            width: 7px;
+            height: 7px;
+            background: var(--accent-orange);
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        /* Center Pane: Dialogue Stream */
+        .pane-dialogue {
+            flex: 1;
+            background-color: var(--bg-panel);
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        .dialogue-header {
+            height: 52px;
+            padding: 0 18px;
+            background-color: var(--bg-panel);
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .dialogue-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .dialogue-tid {
+            font-family: var(--font-mono);
+            font-size: 15px;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .dialogue-acc {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-secondary);
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            padding: 2px 7px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: border-color 0.15s ease;
+        }
+
+        .dialogue-acc:hover {
+            border-color: var(--text-secondary);
+            color: #fff;
+        }
+
+        .dialogue-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        select.status-select {
+            height: 30px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-card);
+            color: var(--text-primary);
+            font-size: 11px;
+            padding: 0 8px;
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        select.status-select:focus {
+            border-color: var(--accent-orange);
+        }
+
+        .btn-action {
+            height: 30px;
+            padding: 0 10px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-card);
+            color: var(--text-primary);
+            font-size: 11px;
+            border-radius: 2px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+
+        .btn-action:hover {
+            background-color: var(--bg-card-hover);
+            border-color: var(--border-active);
+        }
+
+        .btn-action.active {
+            background-color: var(--bg-card-hover);
+            border-color: var(--accent-orange);
+            color: var(--accent-orange);
+        }
+
+        .btn-action.resolve {
+            border-color: rgba(16, 185, 129, 0.4);
+            color: var(--status-resolved);
+        }
+
+        .btn-action.resolve:hover {
+            background: rgba(16, 185, 129, 0.15);
+        }
+
+        /* Message Stream */
+        .dialogue-stream {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            background-color: #0d0d0d;
+        }
+
+        .dialogue-stream::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .dialogue-stream::-webkit-scrollbar-thumb {
+            background: #232323;
+            border-radius: 2px;
+        }
+
+        .date-divider {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 10px 0;
+            position: relative;
+        }
+
+        .date-divider::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #1c1c1c;
+        }
+
+        .date-divider-text {
+            background: #0d0d0d;
+            padding: 0 12px;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            position: relative;
+        }
+
+        /* Message Row */
+        .msg-row {
+            display: flex;
+            flex-direction: column;
+            max-width: 82%;
+        }
+
+        .msg-row.user {
+            align-self: flex-start;
+        }
+
+        .msg-row.admin {
+            align-self: flex-end;
+        }
+
+        .msg-row.system {
+            align-self: center;
+            max-width: 90%;
+            width: 100%;
+        }
+
+        .msg-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            margin-bottom: 4px;
+            padding: 0 4px;
+        }
+
+        .msg-author {
+            font-weight: 600;
+        }
+
+        .msg-row.user .msg-author {
+            color: #bbb;
+            font-family: var(--font-mono);
+        }
+
+        .msg-row.admin .msg-author {
+            color: var(--accent-orange);
+            font-family: var(--font-ui);
+        }
+
+        .msg-time {
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 10px;
+        }
+
+        .msg-bubble {
+            padding: 10px 14px;
+            border-radius: 2px;
+            font-size: 13px;
+            line-height: 1.5;
+            word-break: break-word;
+            user-select: text;
+        }
+
+        .msg-row.user .msg-bubble {
+            background-color: var(--bg-user-bubble);
+            border: 1px solid var(--border-card);
+            color: var(--text-primary);
+        }
+
+        .msg-row.admin .msg-bubble {
+            background-color: var(--bg-admin-bubble);
+            border: 1px solid var(--border-admin);
+            color: #f7eee7;
+        }
+
+        .msg-row.admin .msg-footer {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 4px;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+
+        .msg-link {
+            color: var(--accent-orange);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            word-break: break-all;
+        }
+
+        .msg-link:hover {
+            color: var(--accent-orange-hover);
+        }
+
+        .inline-code {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 1px 5px;
+            border-radius: 2px;
+            color: #f3f3f3;
+        }
+
+        /* System Diagnostic Card */
+        .sys-card {
+            background: var(--bg-sys-card);
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            padding: 10px 14px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .sys-card-icon {
+            color: var(--accent-orange);
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .sys-card-content {
+            flex: 1;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .sys-card-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+            text-transform: uppercase;
+        }
+
+        .sys-card-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .sys-card-btn {
+            background: #1f1f1f;
+            border: 1px solid #333;
+            color: #ddd;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 2px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.15s ease;
+        }
+
+        .sys-card-btn:hover {
+            background: #2a2a2a;
+            border-color: #444;
+            color: #fff;
+        }
+
+        /* Reply Composer */
+        .dialogue-composer {
+            background-color: var(--bg-panel);
+            border-top: 1px solid var(--border-subtle);
+            padding: 12px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        .composer-canned-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .canned-select {
+            flex: 1;
+            height: 28px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            color: var(--text-secondary);
+            font-size: 11px;
+            padding: 0 8px;
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .canned-select:focus {
+            border-color: var(--accent-orange);
+            color: var(--text-primary);
+        }
+
+        .composer-input-wrap {
+            position: relative;
+        }
+
+        .composer-textarea {
+            width: 100%;
+            min-height: 80px;
+            max-height: 200px;
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            padding: 10px 12px;
+            color: var(--text-primary);
+            font-family: var(--font-ui);
+            font-size: 13px;
+            line-height: 1.45;
+            resize: vertical;
+            outline: none;
+            transition: border-color 0.15s ease;
+            user-select: text;
+        }
+
+        .composer-textarea:focus {
+            border-color: var(--accent-orange);
+        }
+
+        .composer-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .composer-options {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .composer-options label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+        }
+
+        .composer-options input[type="checkbox"] {
+            accent-color: var(--accent-orange);
+            cursor: pointer;
+        }
+
+        .composer-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .key-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .btn-send {
+            height: 32px;
+            padding: 0 16px;
+            background-color: var(--accent-orange);
+            border: 1px solid transparent;
+            color: #000000;
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: 2px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+
+        .btn-send:hover {
+            background-color: var(--accent-orange-hover);
+        }
+
+        .btn-send:disabled {
+            background-color: #333;
+            color: #777;
+            cursor: not-allowed;
+        }
+
+        /* Right Pane: Inspector */
+        .pane-inspector {
+            width: 320px;
+            background-color: var(--bg-sidebar);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            overflow-y: auto;
+            border-left: 1px solid var(--border-subtle);
+            transition: width 0.2s ease, opacity 0.2s ease;
+        }
+
+        .pane-inspector.collapsed {
+            width: 0 !important;
+            min-width: 0 !important;
+            opacity: 0;
+            overflow: hidden;
+            border-left: none;
+            pointer-events: none;
+        }
+
+        .inspector-header {
+            height: 52px;
+            padding: 0 16px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+
+        .inspector-body {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .inspector-section {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .section-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.5px;
+        }
+
+        .info-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 2px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .info-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+
+        .info-key {
+            color: var(--text-muted);
+        }
+
+        .info-val {
+            font-family: var(--font-mono);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .info-val.copyable {
+            cursor: pointer;
+            padding: 1px 4px;
+            border-radius: 2px;
+            transition: background-color 0.15s ease;
+        }
+
+        .info-val.copyable:hover {
+            background-color: var(--bg-card-hover);
+            color: #fff;
+        }
+
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .file-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            padding: 7px 10px;
+            border-radius: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+        }
+
+        .file-name {
+            font-family: var(--font-mono);
+            color: var(--text-primary);
+        }
+
+        .file-size {
+            font-family: var(--font-mono);
+            color: var(--text-muted);
+        }
+
+        .file-view-btn {
+            background: transparent;
+            border: 1px solid var(--border-card);
+            color: var(--text-secondary);
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+
+        .file-view-btn:hover {
+            border-color: var(--accent-orange);
+            color: #fff;
+        }
+
+        /* Empty State */
+        .empty-placeholder {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 40px;
+        }
+
+        .empty-placeholder svg {
+            color: #2a2a2a;
+        }
+
+        /* Log Viewer Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.82);
+            backdrop-filter: blur(2px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .modal-window {
+            width: 90vw;
+            max-width: 1100px;
+            height: 82vh;
+            background: #0d0d0d;
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            height: 48px;
+            background: var(--bg-header);
+            border-bottom: 1px solid var(--border-subtle);
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .modal-title {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .log-lines-badge {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            padding: 1px 6px;
+            border-radius: 2px;
+            border: 1px solid var(--border-card);
+            white-space: nowrap;
+        }
+
+        .log-filter-box {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .log-filter-input {
+            width: 170px;
+            height: 26px;
+            background-color: #141414;
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            padding: 0 20px 0 8px;
+            color: var(--text-primary);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            outline: none;
+            transition: border-color 0.15s ease;
+        }
+
+        .log-filter-input:focus {
+            border-color: var(--accent-orange);
+        }
+
+        .log-filter-clear {
+            position: absolute;
+            right: 4px;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px;
+            display: none;
+            line-height: 1;
+        }
+
+        .log-filter-clear.visible {
+            display: block;
+        }
+
+        .log-level-filters {
+            display: flex;
+            gap: 2px;
+        }
+
+        .log-lvl-btn {
+            background: transparent;
+            border: 1px solid var(--border-card);
+            color: var(--text-muted);
+            font-size: 10px;
+            font-family: var(--font-mono);
+            font-weight: 600;
+            padding: 3px 6px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .log-lvl-btn:hover {
+            color: var(--text-primary);
+            background: var(--bg-card);
+        }
+
+        .log-lvl-btn.active {
+            background: var(--bg-card);
+            border-color: var(--border-active);
+            color: var(--text-primary);
+        }
+
+        .log-lvl-btn[data-lvl="err"].active {
+            color: #f87171;
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .log-lvl-btn[data-lvl="warn"].active {
+            color: #fbbf24;
+            border-color: rgba(245, 158, 11, 0.4);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .modal-body {
+            flex: 1;
+            background: #080808;
+            padding: 14px;
+            overflow: auto;
+        }
+
+        .log-terminal {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            line-height: 1.5;
+            color: #bbb;
+            white-space: pre-wrap;
+            word-break: break-all;
+            user-select: text;
+        }
+
+        .log-terminal .line-warn {
+            color: #fbbf24;
+        }
+
+        .log-terminal .line-err {
+            color: #f87171;
+            font-weight: 600;
+        }
+
+        .log-terminal .line-info {
+            color: #60a5fa;
+        }
+
+        /* Login Overlay */
+        .login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #0a0a0a;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .login-overlay.active {
+            display: flex;
+        }
+
+        .login-card {
+            width: 360px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            padding: 28px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .login-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .login-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .login-input {
+            width: 100%;
+            height: 36px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 2px;
+            padding: 0 12px;
+            color: #fff;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            outline: none;
+        }
+
+        .login-input:focus {
+            border-color: var(--accent-orange);
+        }
+
+        .login-btn {
+            height: 36px;
+            background: var(--accent-orange);
+            color: #000;
+            font-weight: 600;
+            border: none;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+
+        .login-btn:hover {
+            background: var(--accent-orange-hover);
+        }
+
+        .login-err {
+            color: #f87171;
+            font-size: 11px;
+            display: none;
+        }
+
+        /* Responsive Breakpoints */
+        @media (max-width: 1200px) {
+            .pane-queue {
+                width: 310px;
+                min-width: 250px;
+            }
+            .pane-inspector {
+                width: 280px;
+            }
+            .header-stats {
+                gap: 10px;
+            }
+        }
+
+        @media (max-width: 992px) {
+            .pane-queue {
+                width: 270px;
+            }
+            .header-stat-item:nth-child(4),
+            .header-stat-item:nth-child(5) {
+                display: none;
+            }
+            .composer-bottom {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            header.app-header {
+                padding: 0 10px;
+            }
+            .header-stats {
+                display: none;
+            }
+            .btn-label-inspector {
+                display: none;
+            }
+            .workspace {
+                position: relative;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Login Modal -->
+    <div id="loginOverlay" class="login-overlay">
+        <div class="login-card">
+            <div class="login-title">
+                <span class="brand-badge">WARLINK</span>
+                <span>Центр поддержки</span>
+            </div>
+            <div class="login-desc">Введите секретный ключ администратора для доступа к диалогам:</div>
+            <input type="password" id="loginKeyInput" class="login-input" placeholder="Dashboard Key" autocomplete="off" />
+            <div id="loginError" class="login-err">Неверный ключ доступа</div>
+            <button id="loginSubmitBtn" class="login-btn">Войти в систему</button>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-brand">
+            <div class="brand-title">
+                <span>WARLINK</span>
+                <span class="brand-badge">DIALOGS</span>
+            </div>
+            <div class="header-stat-item" style="margin-left: 8px;">
+                <span class="status-dot-pulse"></span>
+                <span style="font-size: 11px; color: var(--text-muted);">LIVE</span>
+            </div>
+        </div>
+
+        <div class="header-stats">
+            <div class="header-stat-item">
+                <span>В сети:</span>
+                <span id="statOnline" class="stat-count" style="color: #10b981;">0</span>
+            </div>
+            <div class="header-stat-item">
+                <span>Новых:</span>
+                <span id="statNew" class="stat-count" style="color: var(--status-new);">0</span>
+            </div>
+            <div class="header-stat-item">
+                <span>В работе:</span>
+                <span id="statProgress" class="stat-count" style="color: var(--status-progress);">0</span>
+            </div>
+            <div class="header-stat-item">
+                <span>Решено:</span>
+                <span id="statResolved" class="stat-count" style="color: var(--status-resolved);">0</span>
+            </div>
+            <div class="header-stat-item">
+                <span>Всего:</span>
+                <span id="statTotal" class="stat-count">0</span>
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <button class="btn-link" id="btnManualRefresh" title="Синхронизировать">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                <span>Обновить</span>
+            </button>
+            <a href="https://warlink-hub.duckdns.org:8055/admin/content/support_tickets" target="_blank" class="btn-link">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="3" y1="9" x2="21" y2="9"></line>
+                    <line x1="9" y1="21" x2="9" y2="9"></line>
+                </svg>
+                <span>Directus</span>
+            </a>
+            <a href="https://warlink-hub.duckdns.org:3000" target="_blank" class="btn-link">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="20" x2="18" y2="10"></line>
+                    <line x1="12" y1="20" x2="12" y2="4"></line>
+                    <line x1="6" y1="20" x2="6" y2="14"></line>
+                </svg>
+                <span>Grafana</span>
+            </a>
+        </div>
+    </header>
+
+    <!-- Workspace -->
+    <div class="workspace">
+        
+        <!-- Left Pane: Queue -->
+        <aside class="pane-queue">
+            <div class="queue-toolbar">
+                <div class="search-box">
+                    <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="searchInput" class="search-input" placeholder="Поиск по номеру, ID, тексту..." />
+                    <button id="searchClearBtn" class="search-clear-btn" title="Очистить поиск">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div class="filter-tabs">
+                    <button class="filter-tab active" data-filter="all">Все <span class="badge" id="tabBadgeAll">0</span></button>
+                    <button class="filter-tab" data-filter="new">Новые <span class="badge" id="tabBadgeNew">0</span></button>
+                    <button class="filter-tab" data-filter="in_progress">В работе <span class="badge" id="tabBadgeProgress">0</span></button>
+                    <button class="filter-tab" data-filter="online">В сети <span class="badge badge-online" id="tabBadgeOnline">0</span></button>
+                    <button class="filter-tab" data-filter="resolved">Решено <span class="badge" id="tabBadgeResolved">0</span></button>
+                </div>
+            </div>
+
+            <div id="queueList" class="queue-list">
+                <!-- Dynamically Populated -->
+            </div>
+        </aside>
+
+        <!-- Center Pane: Dialogue -->
+        <main class="pane-dialogue">
+            <div id="emptyDialogue" class="empty-placeholder">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
+                <div style="font-size: 14px; font-weight: 500; color: var(--text-secondary);">Выберите тикет для просмотра диалога</div>
+                <div style="font-size: 12px; color: var(--text-muted); max-width: 320px;">
+                    Здесь отображается полная хронологическая история сообщений игрока, системных отчетов диагностики и ответов разработчика.
+                </div>
+            </div>
+
+            <div id="activeDialogue" style="display: none; flex: 1; flex-direction: column; height: 100%;">
+                <!-- Dialogue Header -->
+                <div class="dialogue-header">
+                    <div class="dialogue-title-wrap">
+                        <span id="activeTicketId" class="dialogue-tid">#TK-0000</span>
+                        <span id="activeTicketAcc" class="dialogue-acc" title="Нажмите, чтобы скопировать аккаунт">
+                            <span id="activeTicketAccText">0000-0000-0000-0000</span>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 3px; opacity: 0.65; vertical-align: middle;">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </span>
+                        <span id="activeTicketCat" class="cat-tag">Категория</span>
+                        <span id="activeOnlinePill" class="online-pill offline" title="Статус пользователя в сети">
+                            <span class="online-dot"></span>
+                            <span id="activeOnlineText">Офлайн</span>
+                        </span>
+                    </div>
+
+                    <div class="dialogue-controls">
+                        <select id="activeStatusSelect" class="status-select">
+                            <option value="new">Новый</option>
+                            <option value="in_progress">В работе</option>
+                            <option value="resolved">Решен</option>
+                            <option value="closed">В архиве</option>
+                        </select>
+                        <button id="btnQuickResolve" class="btn-action resolve">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            <span>Решено</span>
+                        </button>
+                        <button id="btnDownloadLogs" class="btn-action">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            <span>Логи .tar.gz</span>
+                        </button>
+                        <button id="btnToggleInspector" class="btn-action" title="Скрыть/показать панель инспектора">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="15" y1="3" x2="15" y2="21"></line>
+                            </svg>
+                            <span class="btn-label-inspector">Инспектор</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Message Stream -->
+                <div id="dialogueStream" class="dialogue-stream">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <!-- Reply Composer -->
+                <div class="dialogue-composer">
+                    <div class="composer-canned-bar">
+                        <select id="cannedSelect" class="canned-select">
+                            <option value="">Выбрать готовый шаблон ответа...</option>
+                            <!-- Canned options loaded dynamically -->
+                        </select>
+                        <button id="btnClearReply" class="btn-action" style="height: 28px; padding: 0 8px;">Очистить</button>
+                    </div>
+
+                    <div class="composer-input-wrap">
+                        <textarea id="replyTextarea" class="composer-textarea" placeholder="Написать ответ игроку... (Ctrl+Enter для быстрой отправки)"></textarea>
+                    </div>
+
+                    <div class="composer-bottom">
+                        <div class="composer-options">
+                            <label>
+                                <input type="checkbox" id="chkSendDepeche" checked />
+                                <span>Отправить пуш-депешу в лаунчер</span>
+                            </label>
+                            <label style="margin-left: 8px;">
+                                <span>Важность:</span>
+                                <select id="selectSeverity" class="status-select" style="height: 24px; padding: 0 4px; font-size: 10px;">
+                                    <option value="update" selected>Обновление</option>
+                                    <option value="info">Инфо</option>
+                                    <option value="warning">Внимание</option>
+                                    <option value="urgent">Срочно</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <div class="composer-actions">
+                            <span class="key-hint">Ctrl + Enter</span>
+                            <button id="btnSendReply" class="btn-send">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                                <span>Отправить ответ</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Pane: Inspector -->
+        <aside class="pane-inspector">
+            <div class="inspector-header">
+                <span>Инспектор тикета</span>
+            </div>
+
+            <div class="inspector-body">
+                <div class="inspector-section">
+                    <div class="section-label">Данные игрока</div>
+                    <div class="info-card">
+                        <div class="info-row">
+                            <span class="info-key">Аккаунт:</span>
+                            <span id="inspAccount" class="info-val copyable" title="Нажмите, чтобы скопировать аккаунт">—</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-key">Статус сети:</span>
+                            <span id="inspOnlineStatus" class="info-val">
+                                <span class="online-pill offline"><span class="online-dot"></span><span>Офлайн</span></span>
+                            </span>
+                        </div>
+                        <div id="inspOnlineDetailsWrap" style="display: none; flex-direction: column; gap: 4px; margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--border-subtle);">
+                            <div class="info-row">
+                                <span class="info-key">Маршрут:</span>
+                                <span id="inspRouteNode" class="info-val" style="color: var(--accent-orange); font-size: 11px;">—</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-key">Активность:</span>
+                                <span id="inspGame" class="info-val" style="font-size: 11px;">—</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-key">В сети:</span>
+                                <span id="inspDuration" class="info-val" style="font-size: 11px;">—</span>
+                            </div>
+                        </div>
+                        <div id="inspOfflineWrap" style="display: none; margin-top: 4px; padding-top: 4px; border-top: 1px dashed var(--border-subtle);">
+                            <div class="info-row">
+                                <span class="info-key">Был в сети:</span>
+                                <span id="inspLastSeen" class="info-val" style="color: var(--text-muted); font-size: 11px;">—</span>
+                            </div>
+                        </div>
+                        <div class="info-row" style="margin-top: 4px;">
+                            <span class="info-key">Версия:</span>
+                            <span id="inspVersion" class="info-val">—</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-key">Device GUID:</span>
+                            <span id="inspDevice" class="info-val copyable" title="Нажмите, чтобы скопировать полный GUID" style="font-size: 10px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; cursor: pointer;">—</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-key">Создан:</span>
+                            <span id="inspCreated" class="info-val" style="font-size: 11px;">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="inspector-section">
+                    <div class="section-label">Диагностический архив</div>
+                    <div class="info-card">
+                        <div class="info-row">
+                            <span class="info-key">Размер архива:</span>
+                            <span id="inspArchiveSize" class="info-val">—</span>
+                        </div>
+                        <div class="info-row" style="margin-top: 4px;">
+                            <span class="info-key">Файлов в архиве:</span>
+                            <span id="inspFileCount" class="info-val">—</span>
+                        </div>
+                    </div>
+                    <div id="inspFileList" class="file-list" style="margin-top: 6px;">
+                        <!-- Files listed dynamically -->
+                    </div>
+                </div>
+
+                <div class="inspector-section">
+                    <div class="section-label">Быстрые действия</div>
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <button id="btnDirectusJump" class="btn-action" style="justify-content: center; height: 32px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                                <polyline points="15 3 21 3 21 9"></polyline>
+                                <line x1="10" y1="14" x2="21" y2="3"></line>
+                            </svg>
+                            <span>Открыть в Directus CMS</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="inspector-section">
+                    <div class="section-label">Оперативное управление сессией</div>
+                    <div class="info-card" style="display: flex; flex-direction: column; gap: 8px;">
+                        <div>
+                            <span class="info-key" style="margin-bottom: 4px; display: block;">Принудительный маршрут:</span>
+                            <select id="inspRouteOverrideSelect" class="search-input" style="width: 100%; height: 28px; background: #161616; border: 1px solid var(--border-color); color: var(--text-primary); font-size: 11px; padding: 2px 6px;">
+                                <option value="auto">Авто (по выбору клиента)</option>
+                                <option value="transit">Москва → Франкфурт (Транзит)</option>
+                                <option value="direct_frankfurt">Франкфурт Edge (Прямой)</option>
+                                <option value="direct_moscow">Москва Ingress (Прямой)</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 6px;">
+                            <button id="btnKickSession" class="btn-action" style="flex: 1; justify-content: center; height: 28px; color: #ffb800; border-color: rgba(255, 184, 0, 0.3);" title="Сбросить активную сессию игрока на шлюзе">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                                    <line x1="12" y1="2" x2="12" y2="12"></line>
+                                </svg>
+                                <span>Сброс (Kick)</span>
+                            </button>
+                            <button id="btnBanUser" class="btn-action" style="flex: 1; justify-content: center; height: 28px; color: var(--accent-red); border-color: rgba(248, 81, 73, 0.3);" title="Блокировка аккаунта/устройства">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                                </svg>
+                                <span id="btnBanUserText">Бан (Ban)</span>
+                            </button>
+                        </div>
+                        <div id="inspActionFeedback" style="display: none; font-size: 10px; color: var(--action); text-align: center; padding: 2px 0;"></div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+    </div>
+
+    <!-- Modal Log Viewer -->
+    <div id="logModal" class="modal-overlay">
+        <div class="modal-window">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                    <span id="logModalTitle" class="modal-title">warlink.log</span>
+                    <span id="logLinesCount" class="log-lines-badge">0 строк</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div class="log-filter-box">
+                        <input type="text" id="logFilterInput" class="log-filter-input" placeholder="Поиск в логе (Grep)..." />
+                        <button id="logFilterClear" class="log-filter-clear" title="Сбросить поиск">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="log-level-filters">
+                        <button class="log-lvl-btn active" data-lvl="all">Все</button>
+                        <button class="log-lvl-btn" data-lvl="err">ERR</button>
+                        <button class="log-lvl-btn" data-lvl="warn">WARN</button>
+                    </div>
+                    <button id="btnCopyLog" class="btn-action" style="height: 26px;">Скопировать</button>
+                    <button id="btnCloseModal" class="btn-action" style="height: 26px;">Закрыть</button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <pre id="logTerminalContent" class="log-terminal">Загрузка файла лога...</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let tickets = [];
+        let counts = { new: 0, in_progress: 0, resolved: 0, closed: 0, total: 0 };
+        let activeTicketId = null;
+        let activeTicketData = null;
+        let activeFilter = 'all';
+        let searchQuery = '';
+        let cannedResponses = [];
+        let pollTimer = null;
+        let rawLogContent = '';
+        let currentLogLevel = 'all';
+        let currentLogQuery = '';
+
+        const categoryLabels = {
+            'game_crash': 'Вылет игры WARDOGS',
+            'gateway_conn': 'Ошибка шлюза',
+            'high_ping': 'Высокий пинг / потери',
+            'discord_dpi': 'Сбой Discord / DPI',
+            'routing': 'Маршрутизация',
+            'speed': 'Скорость / Трафик',
+            'billing': 'Подписка / Оплата',
+            'auth': 'Авторизация',
+            'other': 'Общий вопрос'
+        };
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function formatMessageContent(raw) {
+            if (!raw) return '';
+            let escaped = escapeHtml(raw);
+            const urlRegex = /(https?:\/\/[^\s<]+)/g;
+            escaped = escaped.replace(urlRegex, (url) => {
+                return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="msg-link">${url}</a>`;
+            });
+            escaped = escaped.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+            return escaped.replace(/\n/g, '<br/>');
+        }
+
+        function formatTime(isoStr) {
+            if (!isoStr) return '';
+            const d = new Date(isoStr);
+            if (isNaN(d.getTime())) return '';
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            return `${hh}:${mm}`;
+        }
+
+        function formatDateFull(isoStr) {
+            if (!isoStr) return '';
+            const d = new Date(isoStr);
+            if (isNaN(d.getTime())) return '';
+            const dd = String(d.getDate()).padStart(2, '0');
+            const mo = String(d.getMonth() + 1).padStart(2, '0');
+            const hh = String(d.getHours()).padStart(2, '0');
+            const mm = String(d.getMinutes()).padStart(2, '0');
+            return `${dd}.${mo} ${hh}:${mm}`;
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes <= 0) return '0 B';
+            const k = 1024;
+            const dm = 1;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // Init
+        document.addEventListener('DOMContentLoaded', () => {
+            initAuth();
+            initEvents();
+            loadCannedResponses();
+            loadTickets();
+            startPolling();
+        });
+
+        function initAuth() {
+            // Check if key param in URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const keyParam = urlParams.get('key');
+            if (keyParam) {
+                document.cookie = `admin_key=${encodeURIComponent(keyParam)}; path=/; max-age=2592000; SameSite=Lax`;
+            }
+        }
+
+        function showLogin() {
+            document.getElementById('loginOverlay').classList.add('active');
+        }
+
+        function hideLogin() {
+            document.getElementById('loginOverlay').classList.remove('active');
+        }
+
+        function initEvents() {
+            // Login
+            document.getElementById('loginSubmitBtn').addEventListener('click', async () => {
+                const key = document.getElementById('loginKeyInput').value.trim();
+                if (!key) return;
+                try {
+                    const resp = await fetch('/api/v1/admin/dialogs/auth', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key })
+                    });
+                    if (resp.ok) {
+                        hideLogin();
+                        loadTickets();
+                    } else {
+                        document.getElementById('loginError').style.display = 'block';
+                    }
+                } catch (e) {
+                    document.getElementById('loginError').style.display = 'block';
+                }
+            });
+
+            document.getElementById('loginKeyInput').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') document.getElementById('loginSubmitBtn').click();
+            });
+
+            // Filter Tabs
+            document.querySelectorAll('.filter-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    activeFilter = tab.getAttribute('data-filter');
+                    renderQueue();
+                });
+            });
+
+            // Search with Clear Button & Escape
+            const searchInput = document.getElementById('searchInput');
+            const searchClearBtn = document.getElementById('searchClearBtn');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    searchQuery = e.target.value.toLowerCase().trim();
+                    if (searchClearBtn) searchClearBtn.classList.toggle('visible', searchInput.value.length > 0);
+                    renderQueue();
+                });
+                searchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        searchInput.value = '';
+                        searchQuery = '';
+                        if (searchClearBtn) searchClearBtn.classList.remove('visible');
+                        renderQueue();
+                    }
+                });
+            }
+            if (searchClearBtn) {
+                searchClearBtn.addEventListener('click', () => {
+                    if (searchInput) {
+                        searchInput.value = '';
+                        searchQuery = '';
+                        searchInput.focus();
+                    }
+                    searchClearBtn.classList.remove('visible');
+                    renderQueue();
+                });
+            }
+
+            // Refresh
+            document.getElementById('btnManualRefresh').addEventListener('click', () => {
+                loadTickets();
+                if (activeTicketId) loadActiveTicket(activeTicketId);
+            });
+
+            // Status select in dialogue
+            document.getElementById('activeStatusSelect').addEventListener('change', async (e) => {
+                if (!activeTicketId) return;
+                const newStatus = e.target.value;
+                await updateTicketStatus(activeTicketId, newStatus);
+            });
+
+            // Quick resolve
+            document.getElementById('btnQuickResolve').addEventListener('click', async () => {
+                if (!activeTicketId) return;
+                await updateTicketStatus(activeTicketId, 'resolved');
+            });
+
+            // Download logs
+            document.getElementById('btnDownloadLogs').addEventListener('click', () => {
+                if (!activeTicketId) return;
+                if (activeTicketData?.ticket?.logs_archive_size > 0) {
+                    window.location.href = `/api/v1/admin/tickets/${activeTicketId}/archive`;
+                }
+            });
+
+            // Inspector Toggle
+            const inspectorPane = document.querySelector('.pane-inspector');
+            const btnToggleInspector = document.getElementById('btnToggleInspector');
+            if (btnToggleInspector && inspectorPane) {
+                const savedCollapsed = localStorage.getItem('warlink_admin_inspector_collapsed') === '1';
+                if (savedCollapsed) {
+                    inspectorPane.classList.add('collapsed');
+                    btnToggleInspector.classList.add('active');
+                }
+                btnToggleInspector.addEventListener('click', () => {
+                    inspectorPane.classList.toggle('collapsed');
+                    const isCollapsed = inspectorPane.classList.contains('collapsed');
+                    btnToggleInspector.classList.toggle('active', isCollapsed);
+                    localStorage.setItem('warlink_admin_inspector_collapsed', isCollapsed ? '1' : '0');
+                });
+            }
+
+            // Canned response selection
+            document.getElementById('cannedSelect').addEventListener('change', (e) => {
+                const body = e.target.value;
+                if (!body) return;
+                const ta = document.getElementById('replyTextarea');
+                if (ta.value.trim() !== '') {
+                    ta.value += '\n\n' + body;
+                } else {
+                    ta.value = body;
+                }
+                ta.focus();
+            });
+
+            document.getElementById('btnClearReply').addEventListener('click', () => {
+                document.getElementById('replyTextarea').value = '';
+                document.getElementById('cannedSelect').value = '';
+            });
+
+            // Send reply
+            document.getElementById('btnSendReply').addEventListener('click', sendAdminReply);
+
+            // Hotkey Ctrl+Enter
+            document.getElementById('replyTextarea').addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    e.preventDefault();
+                    sendAdminReply();
+                }
+            });
+
+            // Copy account in active dialogue header
+            document.getElementById('activeTicketAcc').addEventListener('click', () => {
+                const acc = activeTicketData?.ticket?.account_number || '';
+                if (!acc) return;
+                navigator.clipboard.writeText(acc);
+                const textEl = document.getElementById('activeTicketAccText');
+                if (textEl) {
+                    const orig = textEl.textContent;
+                    textEl.textContent = 'Скопировано!';
+                    setTimeout(() => textEl.textContent = orig, 1200);
+                }
+            });
+
+            // Copy account in Inspector
+            const inspAccountEl = document.getElementById('inspAccount');
+            if (inspAccountEl) {
+                inspAccountEl.addEventListener('click', () => {
+                    const acc = activeTicketData?.ticket?.account_number || '';
+                    if (!acc || acc === '—') return;
+                    navigator.clipboard.writeText(acc);
+                    const orig = inspAccountEl.textContent;
+                    inspAccountEl.textContent = 'Скопировано!';
+                    setTimeout(() => inspAccountEl.textContent = orig, 1200);
+                });
+            }
+
+            // Copy device GUID in Inspector
+            const inspDeviceEl = document.getElementById('inspDevice');
+            if (inspDeviceEl) {
+                inspDeviceEl.addEventListener('click', () => {
+                    const dev = activeTicketData?.ticket?.device_id || '';
+                    if (!dev || dev === '—') return;
+                    navigator.clipboard.writeText(dev);
+                    const orig = inspDeviceEl.textContent;
+                    inspDeviceEl.textContent = 'Скопировано!';
+                    setTimeout(() => inspDeviceEl.textContent = orig, 1200);
+                });
+            }
+
+            // Directus jump
+            document.getElementById('btnDirectusJump').addEventListener('click', () => {
+                if (!activeTicketId) return;
+                window.open(`https://warlink-hub.duckdns.org:8055/admin/content/support_tickets/${activeTicketId}`, '_blank');
+            });
+
+            // Route override
+            document.getElementById('inspRouteOverrideSelect').addEventListener('change', async (e) => {
+                if (!activeTicketId) return;
+                const newRoute = e.target.value;
+                const fbEl = document.getElementById('inspActionFeedback');
+                try {
+                    const resp = await fetch(`/api/v1/admin/tickets/${activeTicketId}/route-override`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ route: newRoute })
+                    });
+                    if (resp.ok) {
+                        if (fbEl) {
+                            fbEl.textContent = 'Маршрут обновлен';
+                            fbEl.style.color = 'var(--accent-orange)';
+                            fbEl.style.display = 'block';
+                            setTimeout(() => { fbEl.style.display = 'none'; }, 2000);
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to set route override:', err);
+                }
+            });
+
+            // Kick session
+            document.getElementById('btnKickSession').addEventListener('click', async () => {
+                if (!activeTicketId) return;
+                const acc = activeTicketData?.ticket?.account_number || '';
+                if (!confirm(`Принудительно сбросить активную сессию игрока ${acc || ''}?`)) return;
+                const fbEl = document.getElementById('inspActionFeedback');
+                try {
+                    const resp = await fetch(`/api/v1/admin/tickets/${activeTicketId}/kick`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (fbEl) {
+                            fbEl.textContent = `Сессия сброшена (отключено: ${data.kicked_count || 0})`;
+                            fbEl.style.color = '#ffb800';
+                            fbEl.style.display = 'block';
+                            setTimeout(() => { fbEl.style.display = 'none'; }, 3000);
+                        }
+                        setTimeout(() => loadActiveTicket(activeTicketId, true), 1000);
+                    }
+                } catch (err) {
+                    console.error('Failed to kick session:', err);
+                }
+            });
+
+            // Ban user
+            document.getElementById('btnBanUser').addEventListener('click', async () => {
+                if (!activeTicketId) return;
+                const t = activeTicketData?.ticket;
+                if (!t) return;
+                const fbEl = document.getElementById('inspActionFeedback');
+                if (t.is_banned) {
+                    if (!confirm(`Разблокировать аккаунт ${t.account_number}?`)) return;
+                    try {
+                        const resp = await fetch(`/api/v1/admin/tickets/${activeTicketId}/ban`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ unban: true })
+                        });
+                        if (resp.ok) {
+                            if (fbEl) {
+                                fbEl.textContent = 'Блокировка снята';
+                                fbEl.style.color = '#3fb950';
+                                fbEl.style.display = 'block';
+                                setTimeout(() => { fbEl.style.display = 'none'; }, 2500);
+                            }
+                            loadActiveTicket(activeTicketId, true);
+                        }
+                    } catch (err) {
+                        console.error('Failed to unban user:', err);
+                    }
+                    return;
+                }
+
+                const reason = prompt('Причина блокировки:', 'Нарушение регламента сервиса');
+                if (!reason) return;
+                const duration = prompt('Срок блокировки (1h, 24h, perm):', '24h');
+                if (!duration) return;
+
+                try {
+                    const resp = await fetch(`/api/v1/admin/tickets/${activeTicketId}/ban`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reason, duration, unban: false })
+                    });
+                    if (resp.ok) {
+                        if (fbEl) {
+                            fbEl.textContent = 'Пользователь заблокирован';
+                            fbEl.style.color = 'var(--accent-red)';
+                            fbEl.style.display = 'block';
+                            setTimeout(() => { fbEl.style.display = 'none'; }, 3000);
+                        }
+                        loadActiveTicket(activeTicketId, true);
+                    }
+                } catch (err) {
+                    console.error('Failed to ban user:', err);
+                }
+            });
+
+            // Log Modal Controls
+            document.getElementById('btnCloseModal').addEventListener('click', () => {
+                document.getElementById('logModal').classList.remove('open');
+            });
+            document.getElementById('logModal').addEventListener('click', (e) => {
+                if (e.target.id === 'logModal') document.getElementById('logModal').classList.remove('open');
+            });
+            document.getElementById('btnCopyLog').addEventListener('click', () => {
+                const text = document.getElementById('logTerminalContent').innerText;
+                navigator.clipboard.writeText(text);
+                const btn = document.getElementById('btnCopyLog');
+                btn.textContent = 'Скопировано!';
+                setTimeout(() => btn.textContent = 'Скопировать', 1200);
+            });
+
+            // Log Search Grep
+            const logFilterInput = document.getElementById('logFilterInput');
+            const logFilterClear = document.getElementById('logFilterClear');
+            if (logFilterInput) {
+                logFilterInput.addEventListener('input', (e) => {
+                    currentLogQuery = e.target.value.toLowerCase().trim();
+                    if (logFilterClear) logFilterClear.classList.toggle('visible', currentLogQuery.length > 0);
+                    applyLogFilters();
+                });
+            }
+            if (logFilterClear) {
+                logFilterClear.addEventListener('click', () => {
+                    if (logFilterInput) logFilterInput.value = '';
+                    currentLogQuery = '';
+                    logFilterClear.classList.remove('visible');
+                    if (logFilterInput) logFilterInput.focus();
+                    applyLogFilters();
+                });
+            }
+
+            // Log Level Filters
+            document.querySelectorAll('.log-lvl-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.log-lvl-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    currentLogLevel = btn.getAttribute('data-lvl');
+                    applyLogFilters();
+                });
+            });
+
+            // Global Escape Key to close modal
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    const logModal = document.getElementById('logModal');
+                    if (logModal && logModal.classList.contains('open')) {
+                        logModal.classList.remove('open');
+                    }
+                }
+            });
+        }
+
+        function startPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = setInterval(() => {
+                loadTickets(true);
+                if (activeTicketId) loadActiveTicket(activeTicketId, true);
+            }, 4000);
+        }
+
+        async function loadCannedResponses() {
+            try {
+                const resp = await fetch('/api/v1/admin/tickets/canned');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data && data.canned) {
+                        cannedResponses = data.canned;
+                        const sel = document.getElementById('cannedSelect');
+                        sel.innerHTML = '<option value="">Выбрать готовый шаблон ответа...</option>';
+                        cannedResponses.forEach(c => {
+                            const opt = document.createElement('option');
+                            opt.value = c.body;
+                            opt.textContent = `[${c.shortcut}] ${c.title}`;
+                            sel.appendChild(opt);
+                        });
+                    }
+                }
+            } catch (e) {
+                console.warn('Failed to load canned responses:', e);
+            }
+        }
+
+        async function loadTickets(isSilent = false) {
+            try {
+                const resp = await fetch('/api/v1/admin/tickets?limit=100');
+                if (resp.status === 401 || resp.status === 403) {
+                    showLogin();
+                    return;
+                }
+                if (!resp.ok) return;
+
+                const data = await resp.json();
+                if (data && data.success) {
+                    tickets = data.tickets || [];
+                    counts = data.counts || { new: 0, in_progress: 0, resolved: 0, closed: 0, total: 0 };
+                    updateHeaderCounts();
+                    renderQueue();
+                    
+                    // If no active ticket selected and tickets exist, select first
+                    if (!activeTicketId && tickets.length > 0) {
+                        selectTicket(tickets[0].id);
+                    }
+                }
+            } catch (e) {
+                console.error('Error fetching tickets:', e);
+            }
+        }
+
+        function updateHeaderCounts() {
+            const onlineCount = counts.online !== undefined ? counts.online : tickets.filter(t => t.is_online).length;
+            const statOnlineEl = document.getElementById('statOnline');
+            if (statOnlineEl) statOnlineEl.textContent = onlineCount;
+
+            document.getElementById('statNew').textContent = counts.new || 0;
+            document.getElementById('statProgress').textContent = counts.in_progress || 0;
+            document.getElementById('statResolved').textContent = counts.resolved || 0;
+            document.getElementById('statTotal').textContent = counts.total || 0;
+
+            document.getElementById('tabBadgeAll').textContent = counts.total || 0;
+            document.getElementById('tabBadgeNew').textContent = counts.new || 0;
+            document.getElementById('tabBadgeProgress').textContent = counts.in_progress || 0;
+            const badgeOnlineEl = document.getElementById('tabBadgeOnline');
+            if (badgeOnlineEl) badgeOnlineEl.textContent = onlineCount;
+            document.getElementById('tabBadgeResolved').textContent = counts.resolved || 0;
+        }
+
+        function renderQueue() {
+            const listEl = document.getElementById('queueList');
+            if (!listEl) return;
+
+            let filtered = tickets;
+            if (activeFilter === 'online') {
+                filtered = filtered.filter(t => t.is_online);
+            } else if (activeFilter !== 'all') {
+                filtered = filtered.filter(t => t.status === activeFilter);
+            }
+
+            if (searchQuery) {
+                filtered = filtered.filter(t => 
+                    String(t.id).includes(searchQuery) ||
+                    (t.account_number && t.account_number.toLowerCase().includes(searchQuery)) ||
+                    (t.user_comment && t.user_comment.toLowerCase().includes(searchQuery)) ||
+                    (t.last_message && t.last_message.toLowerCase().includes(searchQuery))
+                );
+            }
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = `
+                    <div style="padding: 30px 10px; text-align: center; color: var(--text-muted); font-size: 12px;">
+                        Нет обращений по выбранному фильтру
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            for (const t of filtered) {
+                const isSelected = t.id === activeTicketId;
+                const catClass = t.category || 'other';
+                const catLabel = categoryLabels[t.category] || t.category || 'Обращение';
+                const timeStr = formatDateFull(t.created_at);
+                const snippet = t.last_message || t.user_comment || 'Нет сообщений';
+                const needsReply = t.needs_reply;
+                const msgCount = t.message_count || 1;
+
+                const isOnline = t.is_online;
+                const det = t.online_details;
+                let onlineBadge = '';
+                if (isOnline) {
+                    const tooltip = det ? `${det.game || 'В игре'} • ${det.connected_node || 'В сети'} (${det.connected_duration || ''})` : 'Пользователь сейчас в сети';
+                    onlineBadge = `
+                        <span class="online-pill online" title="${escapeHtml(tooltip)}">
+                            <span class="online-dot"></span>
+                            <span>В сети</span>
+                        </span>
+                    `;
+                } else {
+                    onlineBadge = `
+                        <span class="online-pill offline" title="Пользователь офлайн">
+                            <span class="online-dot"></span>
+                            <span>Офлайн</span>
+                        </span>
+                    `;
+                }
+
+                html += `
+                    <div class="ticket-card ${isSelected ? 'selected' : ''}" onclick="selectTicket(${t.id})">
+                        <div class="ticket-card-header">
+                            <span class="ticket-num">#TK-${String(t.id).padStart(4, '0')}</span>
+                            <span class="ticket-time">${escapeHtml(timeStr)}</span>
+                        </div>
+                        <div class="ticket-meta">
+                            <span class="cat-tag ${escapeHtml(catClass)}">${escapeHtml(catLabel)}</span>
+                            <span class="ticket-acc">${escapeHtml(t.account_number || '—')}</span>
+                            ${onlineBadge}
+                        </div>
+                        <div class="ticket-preview">${escapeHtml(snippet)}</div>
+                        <div class="ticket-card-footer">
+                            <span class="status-pill ${escapeHtml(t.status)}">${getStatusLabel(t.status)}</span>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span class="msg-count-tag">${msgCount} сообщ.</span>
+                                ${needsReply ? '<span class="dot-unread" title="Требует ответа"></span>' : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            listEl.innerHTML = html;
+        }
+
+        function getStatusLabel(st) {
+            switch (st) {
+                case 'new': return 'Новый';
+                case 'in_progress': return 'В работе';
+                case 'resolved': return 'Решен';
+                case 'closed': return 'В архиве';
+                default: return st;
+            }
+        }
+
+        async function selectTicket(id) {
+            activeTicketId = id;
+            renderQueue();
+            await loadActiveTicket(id);
+        }
+
+        async function loadActiveTicket(id, isSilent = false) {
+            try {
+                const resp = await fetch(`/api/v1/admin/tickets/${id}`);
+                if (!resp.ok) return;
+
+                const data = await resp.json();
+                if (data && data.success && data.ticket) {
+                    activeTicketData = data;
+                    renderDialogue(data, isSilent);
+                    renderInspector(data);
+                }
+            } catch (e) {
+                console.error(`Failed to load ticket #${id}:`, e);
+            }
+        }
+
+        function renderDialogue(data, isSilent = false) {
+            document.getElementById('emptyDialogue').style.display = 'none';
+            const activeEl = document.getElementById('activeDialogue');
+            activeEl.style.display = 'flex';
+
+            const t = data.ticket;
+            const messages = data.messages || [];
+
+            // Header info
+            document.getElementById('activeTicketId').textContent = `#TK-${String(t.id).padStart(4, '0')}`;
+            const accTextEl = document.getElementById('activeTicketAccText');
+            if (accTextEl) {
+                accTextEl.textContent = t.account_number || '—';
+            } else {
+                document.getElementById('activeTicketAcc').textContent = t.account_number || '—';
+            }
+            
+            const catEl = document.getElementById('activeTicketCat');
+            catEl.className = `cat-tag ${t.category || 'other'}`;
+            catEl.textContent = categoryLabels[t.category] || t.category || 'Обращение';
+
+            // Logs download button state
+            const btnLogs = document.getElementById('btnDownloadLogs');
+            if (btnLogs) {
+                if (t.logs_archive_size > 0) {
+                    btnLogs.disabled = false;
+                    btnLogs.style.opacity = '1';
+                    btnLogs.style.cursor = 'pointer';
+                    btnLogs.title = 'Скачать диагностический архив (.tar.gz)';
+                } else {
+                    btnLogs.disabled = true;
+                    btnLogs.style.opacity = '0.4';
+                    btnLogs.style.cursor = 'not-allowed';
+                    btnLogs.title = 'Архив логов не прикреплен к тикету';
+                }
+            }
+
+            // Online badge in active dialogue
+            const activeOnlinePill = document.getElementById('activeOnlinePill');
+            const activeOnlineText = document.getElementById('activeOnlineText');
+            if (activeOnlinePill && activeOnlineText) {
+                if (t.is_online) {
+                    activeOnlinePill.className = 'online-pill online';
+                    const det = t.online_details;
+                    let txt = 'В сети';
+                    if (det && det.game) txt += ` • ${det.game}`;
+                    activeOnlineText.textContent = txt;
+                    activeOnlinePill.title = det ? `${det.connected_node || ''} (${det.connected_duration || ''})` : 'Пользователь сейчас в сети';
+                } else {
+                    activeOnlinePill.className = 'online-pill offline';
+                    activeOnlineText.textContent = 'Офлайн';
+                    const lastSeen = (t.online_details && t.online_details.last_seen) ? ` • Был: ${formatDateFull(t.online_details.last_seen)}` : '';
+                    activeOnlinePill.title = `Пользователь офлайн${lastSeen}`;
+                }
+            }
+
+            document.getElementById('activeStatusSelect').value = t.status;
+
+            // Stream
+            const streamEl = document.getElementById('dialogueStream');
+            const wasAtBottom = (streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight) < 50;
+
+            let html = '';
+            for (const m of messages) {
+                const timeStr = formatDateFull(m.created_at);
+                if (m.sender_type === 'system') {
+                    const isLogs = m.attachment_type === 'logs_archive';
+                    html += `
+                        <div class="msg-row system">
+                            <div class="sys-card">
+                                <div class="sys-card-icon">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="4 17 10 11 4 5"></polyline>
+                                        <line x1="12" y1="19" x2="20" y2="19"></line>
+                                    </svg>
+                                </div>
+                                <div class="sys-card-content">
+                                    <div class="sys-card-title">${isLogs ? 'ДИАГНОСТИКА WARLINK' : 'СИСТЕМА'}</div>
+                                    <div>${formatMessageContent(m.message)}</div>
+                                    ${isLogs ? `
+                                        <div class="sys-card-actions">
+                                            <button class="sys-card-btn" onclick="openFileViewer('warlink.log')">
+                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                                                <span>Просмотреть warlink.log</span>
+                                            </button>
+                                            <button class="sys-card-btn" onclick="window.location.href='/api/v1/admin/tickets/${t.id}/archive'">
+                                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                                <span>Скачать .tar.gz</span>
+                                            </button>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                                <span class="msg-time">${escapeHtml(timeStr)}</span>
+                            </div>
+                        </div>
+                    `;
+                } else if (m.sender_type === 'admin') {
+                    html += `
+                        <div class="msg-row admin">
+                            <div class="msg-header">
+                                <span class="msg-author">${escapeHtml(m.sender_name || 'Max (Разработчик)')}</span>
+                                <span class="msg-time">${escapeHtml(timeStr)}</span>
+                            </div>
+                            <div class="msg-bubble">${formatMessageContent(m.message)}</div>
+                            <div class="msg-footer">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                <span>Доставлено в клиент</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="msg-row user">
+                            <div class="msg-header">
+                                <span class="msg-author">Игрок #${escapeHtml(t.account_number || 'Пользователь')}</span>
+                                <span class="msg-time">${escapeHtml(timeStr)}</span>
+                            </div>
+                            <div class="msg-bubble">${formatMessageContent(m.message)}</div>
+                        </div>
+                    `;
+                }
+            }
+
+            streamEl.innerHTML = html;
+
+            // Scroll if was near bottom or not silent
+            if (!isSilent || wasAtBottom) {
+                streamEl.scrollTop = streamEl.scrollHeight;
+            }
+        }
+
+        function renderInspector(data) {
+            const t = data.ticket;
+            const files = data.files || [];
+
+            document.getElementById('inspAccount').textContent = t.account_number || '—';
+
+            // Online status in inspector
+            const isOnline = t.is_online;
+            const det = t.online_details;
+
+            const statusValEl = document.getElementById('inspOnlineStatus');
+            if (statusValEl) {
+                statusValEl.innerHTML = isOnline ? 
+                    `<span class="online-pill online"><span class="online-dot"></span><span>В сети</span></span>` :
+                    `<span class="online-pill offline"><span class="online-dot"></span><span>Офлайн</span></span>`;
+            }
+
+            const onlineDetailsWrap = document.getElementById('inspOnlineDetailsWrap');
+            const offlineWrap = document.getElementById('inspOfflineWrap');
+
+            if (isOnline && det) {
+                if (onlineDetailsWrap) onlineDetailsWrap.style.display = 'flex';
+                if (offlineWrap) offlineWrap.style.display = 'none';
+                
+                const nodeEl = document.getElementById('inspRouteNode');
+                if (nodeEl) nodeEl.textContent = det.connected_node || '—';
+                const gameEl = document.getElementById('inspGame');
+                if (gameEl) gameEl.textContent = det.game || '—';
+                const durEl = document.getElementById('inspDuration');
+                if (durEl) durEl.textContent = det.connected_duration || '—';
+            } else {
+                if (onlineDetailsWrap) onlineDetailsWrap.style.display = 'none';
+                if (offlineWrap) {
+                    offlineWrap.style.display = 'block';
+                    const lastSeenText = (det && det.last_seen) ? formatDateFull(det.last_seen) : 'Не зафиксировано';
+                    const lastSeenEl = document.getElementById('inspLastSeen');
+                    if (lastSeenEl) lastSeenEl.textContent = lastSeenText;
+                }
+            }
+
+            document.getElementById('inspVersion').textContent = t.app_version || 'v2.1.9';
+            document.getElementById('inspDevice').textContent = t.device_id || '—';
+            document.getElementById('inspDevice').title = t.device_id || '';
+            document.getElementById('inspCreated').textContent = formatDateFull(t.created_at);
+
+            document.getElementById('inspArchiveSize').textContent = formatBytes(t.logs_archive_size);
+            document.getElementById('inspFileCount').textContent = `${files.length} файл(ов)`;
+
+            const fileListEl = document.getElementById('inspFileList');
+            if (files.length === 0) {
+                fileListEl.innerHTML = '<span style="color: var(--text-muted); font-size: 11px;">Архив пуст или не прикреплен</span>';
+            } else {
+                let html = '';
+                for (const f of files) {
+                    html += `
+                        <div class="file-item">
+                            <div>
+                                <div class="file-name">${escapeHtml(f.name)}</div>
+                                <div class="file-size">${formatBytes(f.size)}</div>
+                            </div>
+                            <button class="file-view-btn" onclick="openFileViewer('${escapeHtml(f.name)}')">Открыть</button>
+                        </div>
+                    `;
+                }
+                fileListEl.innerHTML = html;
+            }
+
+            // Session operations
+            const routeSel = document.getElementById('inspRouteOverrideSelect');
+            if (routeSel) {
+                routeSel.value = t.route_override || 'auto';
+            }
+            const banBtnText = document.getElementById('btnBanUserText');
+            const banBtn = document.getElementById('btnBanUser');
+            if (banBtnText && banBtn) {
+                if (t.is_banned) {
+                    banBtnText.textContent = 'Разбанить';
+                    banBtn.style.color = '#3fb950';
+                    banBtn.style.borderColor = 'rgba(63, 185, 80, 0.4)';
+                    banBtn.title = 'Пользователь заблокирован. Нажмите, чтобы снять блокировку.';
+                } else {
+                    banBtnText.textContent = 'Бан (Ban)';
+                    banBtn.style.color = 'var(--accent-red)';
+                    banBtn.style.borderColor = 'rgba(248, 81, 73, 0.3)';
+                    banBtn.title = 'Блокировка аккаунта/устройства';
+                }
+            }
+            const fbEl = document.getElementById('inspActionFeedback');
+            if (fbEl) fbEl.style.display = 'none';
+        }
+
+        async function updateTicketStatus(id, newStatus) {
+            try {
+                const resp = await fetch(`/api/v1/admin/tickets/${id}/status`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (resp.ok) {
+                    loadTickets();
+                    loadActiveTicket(id);
+                }
+            } catch (e) {
+                console.error('Failed to update status:', e);
+            }
+        }
+
+        async function sendAdminReply() {
+            if (!activeTicketId) return;
+            const ta = document.getElementById('replyTextarea');
+            const message = ta.value.trim();
+            if (!message) return;
+
+            const sendDepeche = document.getElementById('chkSendDepeche').checked;
+            const severity = document.getElementById('selectSeverity').value || 'update';
+            const btn = document.getElementById('btnSendReply');
+            btn.disabled = true;
+
+            try {
+                const payload = {
+                    title: `Ответ разработчика WarLink (#TK-${String(activeTicketId).padStart(4, '0')})`,
+                    message: message,
+                    severity: severity,
+                    action_label: "Открыть диалог",
+                    action_url: "#view-support",
+                    status: "in_progress"
+                };
+
+                const resp = await fetch(`/api/v1/admin/tickets/${activeTicketId}/reply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (resp.ok) {
+                    ta.value = '';
+                    document.getElementById('cannedSelect').value = '';
+                    await loadActiveTicket(activeTicketId);
+                    loadTickets();
+                } else {
+                    alert('Ошибка отправки ответа');
+                }
+            } catch (e) {
+                console.error('Failed to send reply:', e);
+                alert('Сетевая ошибка при отправке');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function openFileViewer(fileName) {
+            if (!activeTicketId) return;
+            document.getElementById('logModalTitle').textContent = `${fileName} — #TK-${String(activeTicketId).padStart(4, '0')}`;
+            document.getElementById('logTerminalContent').textContent = 'Загрузка содержимого файла...';
+            document.getElementById('logLinesCount').textContent = '...';
+            
+            // Reset filters
+            rawLogContent = '';
+            currentLogLevel = 'all';
+            currentLogQuery = '';
+            const filterInput = document.getElementById('logFilterInput');
+            if (filterInput) filterInput.value = '';
+            const filterClear = document.getElementById('logFilterClear');
+            if (filterClear) filterClear.classList.remove('visible');
+            document.querySelectorAll('.log-lvl-btn').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-lvl') === 'all');
+            });
+
+            document.getElementById('logModal').classList.add('open');
+
+            try {
+                const resp = await fetch(`/api/v1/admin/tickets/${activeTicketId}/file?name=${encodeURIComponent(fileName)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data && data.content) {
+                        rawLogContent = data.content;
+                        applyLogFilters();
+                    } else {
+                        document.getElementById('logTerminalContent').textContent = 'Файл пуст';
+                        document.getElementById('logLinesCount').textContent = '0 строк';
+                    }
+                } else {
+                    document.getElementById('logTerminalContent').textContent = 'Не удалось извлечь файл из архива';
+                    document.getElementById('logLinesCount').textContent = '0 строк';
+                }
+            } catch (e) {
+                document.getElementById('logTerminalContent').textContent = 'Ошибка загрузки файла: ' + e.message;
+                document.getElementById('logLinesCount').textContent = 'Ошибка';
+            }
+        }
+
+        function applyLogFilters() {
+            if (!rawLogContent) {
+                document.getElementById('logTerminalContent').textContent = 'Файл пуст';
+                document.getElementById('logLinesCount').textContent = '0 строк';
+                return;
+            }
+
+            const lines = rawLogContent.split('\n');
+            let matchedLines = [];
+
+            for (let line of lines) {
+                // Check query grep
+                if (currentLogQuery && !line.toLowerCase().includes(currentLogQuery)) {
+                    continue;
+                }
+
+                const isWarn = line.includes('[WARN]') || line.includes('warning') || line.includes('WARNING');
+                const isErr = line.includes('[ERROR]') || line.includes('error') || line.includes('FATAL') || line.includes('panic');
+
+                // Check level filter
+                if (currentLogLevel === 'err' && !isErr) continue;
+                if (currentLogLevel === 'warn' && !isWarn && !isErr) continue;
+
+                matchedLines.push({ line, isWarn, isErr, isInfo: line.includes('[INFO]') });
+            }
+
+            document.getElementById('logLinesCount').textContent = `${matchedLines.length} из ${lines.length} строк`;
+
+            if (matchedLines.length === 0) {
+                document.getElementById('logTerminalContent').innerHTML = '<span style="color: var(--text-muted);">Ни одной строки не найдено по заданным фильтрам</span>';
+                return;
+            }
+
+            let formatted = '';
+            for (let item of matchedLines) {
+                let cls = '';
+                if (item.isErr) {
+                    cls = 'line-err';
+                } else if (item.isWarn) {
+                    cls = 'line-warn';
+                } else if (item.isInfo) {
+                    cls = 'line-info';
+                }
+                const safe = escapeHtml(item.line);
+                if (cls) {
+                    formatted += `<span class="${cls}">${safe}</span>\n`;
+                } else {
+                    formatted += `${safe}\n`;
+                }
+            }
+            document.getElementById('logTerminalContent').innerHTML = formatted;
+        }
+    </script>
+</body>
+</html>

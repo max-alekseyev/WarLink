@@ -1,0 +1,67 @@
+<!-- MODAL: Network & Driver Troubleshooter (Dark Cloudflare Utility) -->
+<div id="modal-troubleshooter" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card" style="width: 540px; max-width: 95vw; max-height: 85vh; display: flex; flex-direction: column;" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                </svg>
+                <span class="modal-title font-mono" style="font-weight: 700; letter-spacing: 0.04em;">ДИАГНОСТИКА СЕТИ // TROUBLESHOOTER</span>
+            </div>
+            <button class="btn-icon" onclick="closeTroubleshooterModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+
+        <!-- Body -->
+        <div class="modal-body" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px;">
+            <!-- Overall Status Banner -->
+            <div id="tb-status-banner" class="info-card" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-left: 3px solid var(--border-base);">
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <span id="tb-banner-title" class="font-mono" style="font-size: 12px; font-weight: 700; color: var(--text-bright);">Проверка сетевого стека...</span>
+                    <span id="tb-banner-sub" style="font-size: 11px; color: var(--text-muted);">Тестирование WinDivert, Wintun, DNS и игровых шлюзов</span>
+                </div>
+                <button id="btn-tb-recheck" class="btn btn-secondary btn-sm font-mono" onclick="runTroubleshooterDiagnostics()">
+                    <span>Повторить</span>
+                </button>
+            </div>
+
+            <!-- Checks List -->
+            <div id="tb-checks-list" style="display: flex; flex-direction: column; gap: 6px;">
+                <!-- Loading Skeletons -->
+                <div class="info-card skeleton-card" style="height: 38px;">
+                    <div class="skeleton" style="width: 140px; height: 12px;"></div>
+                </div>
+                <div class="info-card skeleton-card" style="height: 38px;">
+                    <div class="skeleton" style="width: 180px; height: 12px;"></div>
+                </div>
+                <div class="info-card skeleton-card" style="height: 38px;">
+                    <div class="skeleton" style="width: 160px; height: 12px;"></div>
+                </div>
+            </div>
+
+            <!-- Remediation Feedback Box (shown during or after fix) -->
+            <div id="tb-remediation-box" class="info-card" style="display: none; background: #161616; border-left: 3px solid #ffb800; padding: 10px 12px;">
+                <div class="font-mono" style="font-size: 11px; font-weight: 700; color: #ffb800; margin-bottom: 4px;">РЕЗУЛЬТАТ ИСПРАВЛЕНИЯ:</div>
+                <ul id="tb-remediation-list" style="margin: 0; padding-left: 18px; font-size: 11px; color: var(--text); line-height: 1.5;"></ul>
+            </div>
+        </div>
+
+        <!-- Footer Actions -->
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-top: 1px solid var(--border-base); background: #141414;">
+            <div style="display: flex; gap: 8px;">
+                <button id="btn-tb-fix" class="btn btn-primary btn-sm font-mono" onclick="applyTroubleshooterFix()" style="display: none;">
+                    <span>Исправить в 1 клик</span>
+                </button>
+                <button id="btn-tb-copy" class="btn btn-secondary btn-sm font-mono" onclick="copyTroubleshooterReport()" title="Скопировать текстовый отчет в буфер обмена">
+                    <span>Скопировать отчет</span>
+                </button>
+                <button id="btn-tb-send-ticket" class="btn btn-secondary btn-sm font-mono" onclick="sendTroubleshooterToTicket()" style="display: none;" title="Прикрепить отчет к текущему обращению в поддержку">
+                    <span>В тикет</span>
+                </button>
+            </div>
+            <button class="btn btn-secondary btn-sm font-mono" onclick="closeTroubleshooterModal()">Закрыть</button>
+        </div>
+    </div>
+</div>

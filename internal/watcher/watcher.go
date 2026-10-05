@@ -312,15 +312,8 @@ func ResolveGameProcessNames(gameID, steamAppID, title, exePath string, cached [
 		}
 	}
 
-	// 4. Built-in alias lookup by title
+	// 4. Fallback title base (e.g. "wardogs.exe")
 	normTitle := NormalizeGameToken(title)
-	if aliases, ok := BuiltinAliases[normTitle]; ok {
-		for _, a := range aliases {
-			targets[strings.ToLower(a)] = true
-		}
-	}
-
-	// 5. Fallback title base (e.g. "wardogs.exe")
 	if normTitle != "" {
 		targets[normTitle+".exe"] = true
 	}

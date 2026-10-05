@@ -44,7 +44,7 @@ func TestGenerateConfig(t *testing.T) {
 	hasDomainRule := false
 	hasDirectRule := false
 	for _, r := range parsed.Route.Rules {
-		if r.Outbound == "hy2-stockholm" {
+		if r.Outbound == "hy2-gateway" {
 			for _, p := range r.ProcessName {
 				if p == "WardogsClient-Win64-Shipping.exe" {
 					hasGameRule = true
@@ -70,7 +70,7 @@ func TestGenerateConfig(t *testing.T) {
 	hasMatchPortsTunnel := false
 	hasSteamDomainsDirect := false
 	for _, r := range parsed.Route.Rules {
-		if r.Outbound == "hy2-stockholm" {
+		if r.Outbound == "hy2-gateway" {
 			for _, pr := range r.PortRange {
 				if pr == "4000:4500" {
 					hasMatchPortsTunnel = true
@@ -94,7 +94,7 @@ func TestGenerateConfig(t *testing.T) {
 		t.Errorf("Expected direct route for Steam SDR UDP 27000:27200")
 	}
 	if !hasMatchPortsTunnel {
-		t.Errorf("Expected hy2-stockholm tunnel route for WARDOGS match servers UDP 4000:4500")
+		t.Errorf("Expected hy2-gateway tunnel route for WARDOGS match servers UDP 4000:4500")
 	}
 	if !hasSteamDomainsDirect {
 		t.Errorf("Expected direct route for Steam domains")
@@ -137,7 +137,7 @@ func TestGenerateConfig(t *testing.T) {
 	hasDiscordSignalingInHy2 := false
 	hasDiscordUDPDirectRule := false
 	for _, r := range parsed.Route.Rules {
-		if r.Outbound == "hy2-stockholm" {
+		if r.Outbound == "hy2-gateway" {
 			for _, d := range r.DomainSuffix {
 				if d == "discord.media" || d == "gateway.discord.gg" {
 					hasDiscordSignalingInHy2 = true
@@ -146,17 +146,17 @@ func TestGenerateConfig(t *testing.T) {
 		}
 		if r.Outbound == "direct" {
 			for _, pr := range r.PortRange {
-				if pr == "50000:50100" {
+				if pr == "50000:65535" {
 					hasDiscordUDPDirectRule = true
 				}
 			}
 		}
 	}
 	if hasDiscordSignalingInHy2 {
-		t.Errorf("Discord signaling domains must NOT route through hy2-stockholm tunnel (Flowseal-equivalent local bypass)")
+		t.Errorf("Discord signaling domains must NOT route through hy2-gateway tunnel (Flowseal-equivalent local bypass)")
 	}
 	if !hasDiscordUDPDirectRule {
-		t.Errorf("Expected Discord voice UDP ports 50000:50100 to route direct")
+		t.Errorf("Expected Discord voice UDP ports 50000:65535 to route direct")
 	}
 
 	if !hasGameRule {
@@ -174,12 +174,12 @@ func TestGenerateConfig(t *testing.T) {
 
 	hasHysteria2 := false
 	for _, o := range parsed.Outbounds {
-		if o.Type == "hysteria2" && o.Tag == "hy2-stockholm" && (o.Server == DefaultServerIP || o.Server == MoscowIngressIP) {
+		if o.Type == "hysteria2" && o.Tag == "hy2-gateway" && (o.Server == DefaultServerIP || o.Server == MoscowIngressIP) {
 			hasHysteria2 = true
 		}
 	}
 	if !hasHysteria2 {
-		t.Errorf("Expected hy2-stockholm Hysteria 2 outbound")
+		t.Errorf("Expected hy2-gateway Hysteria 2 outbound")
 	}
 
 	if parsed.Experimental == nil || parsed.Experimental.CacheFile == nil || !parsed.Experimental.CacheFile.Enabled {
@@ -298,8 +298,8 @@ func TestGenerateConfigHysteria2Outbound(t *testing.T) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("Failed to unmarshal generated json: %v", err)
 	}
-	if parsed.Outbounds[0].Type != "hysteria2" || parsed.Outbounds[0].Tag != "hy2-stockholm" {
-		t.Errorf("Expected hysteria2 outbound with tag hy2-stockholm, got %+v", parsed.Outbounds[0])
+	if parsed.Outbounds[0].Type != "hysteria2" || parsed.Outbounds[0].Tag != "hy2-gateway" {
+		t.Errorf("Expected hysteria2 outbound with tag hy2-gateway, got %+v", parsed.Outbounds[0])
 	}
 }
 
@@ -520,8 +520,8 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 	if tun.Stack != "mixed" {
 		t.Errorf("expected stack: mixed, got %s", tun.Stack)
 	}
-	if tun.MTU != 1380 {
-		t.Errorf("expected MTU: 1380, got %d", tun.MTU)
+	if tun.MTU != 1320 {
+		t.Errorf("expected MTU: 1320, got %d", tun.MTU)
 	}
 
 	// 2. Check Outbound Hysteria 2
@@ -529,8 +529,8 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 		t.Fatal("expected at least 1 outbound")
 	}
 	hy2 := parsed.Outbounds[0]
-	if hy2.Tag != "hy2-stockholm" {
-		t.Errorf("expected hy2-stockholm outbound, got %s", hy2.Tag)
+	if hy2.Tag != "hy2-gateway" {
+		t.Errorf("expected hy2-gateway outbound, got %s", hy2.Tag)
 	}
 	if hy2.HopInterval != "" {
 		t.Errorf("expected disabled HopInterval during matches, got %s", hy2.HopInterval)
@@ -550,7 +550,7 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 			foundSniff = true
 		}
 		for _, c := range r.IPCIDR {
-			if c == "198.18.0.0/15" && r.Outbound == "hy2-stockholm" {
+			if c == "198.18.0.0/15" && r.Outbound == "hy2-gateway" {
 				foundFakeIPPool = true
 			}
 		}
@@ -560,15 +560,15 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 			}
 		}
 		for _, pr := range r.PortRange {
-			if pr == "4000:4500" && r.Outbound == "hy2-stockholm" {
+			if pr == "4000:4500" && r.Outbound == "hy2-gateway" {
 				foundMatchUDP = true
 			}
 		}
 		for _, p := range r.ProcessName {
-			if p == "WardogsClient-Win64-Shipping.exe" && r.Outbound == "hy2-stockholm" {
+			if p == "WardogsClient-Win64-Shipping.exe" && r.Outbound == "hy2-gateway" {
 				foundWardogsProcess = true
 			}
-			if p == "WardogsLauncher-Shipping.exe" && r.Outbound == "hy2-stockholm" {
+			if p == "WardogsLauncher-Shipping.exe" && r.Outbound == "hy2-gateway" {
 				foundLauncherTunnel = true
 			}
 			if p == "EasyAntiCheat.exe" && r.Outbound == "direct" {
@@ -581,10 +581,10 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 		t.Errorf("expected sniff rule in route rules")
 	}
 	if !foundFakeIPPool {
-		t.Errorf("expected 198.18.0.0/15 FakeIP pool routed to hy2-stockholm")
+		t.Errorf("expected 198.18.0.0/15 FakeIP pool routed to hy2-gateway")
 	}
 	if !foundLauncherTunnel {
-		t.Errorf("expected WardogsLauncher-Shipping.exe routed to hy2-stockholm tunnel")
+		t.Errorf("expected WardogsLauncher-Shipping.exe routed to hy2-gateway tunnel")
 	}
 	if !foundAntiCheatDirect {
 		t.Errorf("expected EasyAntiCheat.exe routed to direct for real IPs")
@@ -604,10 +604,10 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 		t.Errorf("expected DynamoDB region probe domains to resolve via dns-local")
 	}
 	if !foundMatchUDP {
-		t.Errorf("expected match UDP ports 4000:4500 routed to hy2-stockholm")
+		t.Errorf("expected match UDP ports 4000:4500 routed to hy2-gateway")
 	}
 	if !foundWardogsProcess {
-		t.Errorf("expected WardogsClient-Win64-Shipping.exe routed to hy2-stockholm")
+		t.Errorf("expected WardogsClient-Win64-Shipping.exe routed to hy2-gateway")
 	}
 }
 

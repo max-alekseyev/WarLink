@@ -414,7 +414,7 @@ func TestProcessRoutingPriority(t *testing.T) {
 	directDomainsRuleIdx := -1
 
 	for idx, r := range parsed.Route.Rules {
-		if r.Outbound == "hy2-stockholm" && len(r.ProcessName) > 0 {
+		if r.Outbound == "hy2-gateway" && len(r.ProcessName) > 0 {
 			for _, p := range r.ProcessName {
 				if p == "DungeonCrawler.exe" || p == "PioneerGame.exe" {
 					processRuleIdx = idx
@@ -436,7 +436,7 @@ func TestProcessRoutingPriority(t *testing.T) {
 	}
 
 	if processRuleIdx == -1 {
-		t.Fatalf("expected allProcesses route rule to hy2-stockholm, none found")
+		t.Fatalf("expected allProcesses route rule to hy2-gateway, none found")
 	}
 	if port80RuleIdx != -1 && processRuleIdx > port80RuleIdx {
 		t.Errorf("game process route rule (idx %d) must precede port 80 rule (idx %d)", processRuleIdx, port80RuleIdx)

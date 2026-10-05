@@ -1,3 +1,25 @@
+window.WarLinkFlags = {
+    flags: {},
+    async fetch() {
+        try {
+            const res = await fetch('/api/features');
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.flags) {
+                    this.flags = data.flags;
+                    window.dispatchEvent(new CustomEvent('warlink:flags_updated', { detail: this.flags }));
+                }
+            }
+        } catch (e) {}
+    },
+    isEnabled(name) {
+        return !!(this.flags[name] && this.flags[name].enabled);
+    },
+    getPayload(name) {
+        return (this.flags[name] && this.flags[name].payload) || {};
+    }
+};
+
 let isConnected = false;
 let isBusy = false;
 let isDownloadingDeps = false;
@@ -14,11 +36,66 @@ const defaultGames = [
         is_default: true,
         autolaunch: true,
         launch_count: 0
+    },
+    {
+        id: 'arc_raiders',
+        title: 'ARC Raiders',
+        steam_app_id: '1808500',
+        icon_url: 'arc_raiders_icon.png',
+        last_played: 1789653525,
+        is_default: true,
+        autolaunch: true,
+        launch_count: 0
+    },
+    {
+        id: 'dark_and_darker',
+        title: 'Dark and Darker',
+        steam_app_id: '2016590',
+        icon_url: 'dark_and_darker_icon.png',
+        last_played: 1789653425,
+        is_default: true,
+        autolaunch: true,
+        launch_count: 0
     }
 ];
-let cachedGames = defaultGames;
+
+function loadCachedShowcaseGames() {
+    try {
+        const raw = localStorage.getItem('warlink_showcase_games');
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                const existingIds = new Set(parsed.map(g => g.id));
+                const list = [...parsed];
+                for (const defG of defaultGames) {
+                    if (!existingIds.has(defG.id)) {
+                        list.push(defG);
+                    }
+                }
+                return list.map(g => {
+                    if (g.id === 'wardogs' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'wardogs_icon.png';
+                    if (g.id === 'arc_raiders' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'arc_raiders_icon.png';
+                    if (g.id === 'dark_and_darker' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'dark_and_darker_icon.png';
+                    return g;
+                });
+            }
+        }
+    } catch (e) {}
+    return defaultGames;
+}
+
+function loadCachedStatus() {
+    try {
+        const raw = localStorage.getItem('warlink_status_cache');
+        if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return null;
+}
+
+let cachedGames = loadCachedShowcaseGames();
 let launchingGameId = null;
 let lastShowcaseStateKey = '';
+let lastSavedStatusKey = '';
 let isVotingEnabled = true;
 let isDonateEnabled = true;
 
@@ -30,29 +107,54 @@ const GAME_ICON_FALLBACK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="cur
     <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
 </svg>`;
 
-// --- View Partials Loader ---
-async function loadPartials() {
-    const mounts = document.querySelectorAll('[data-partial]');
-    const vParam = encodeURIComponent(window.WARLINK_VERSION || Date.now());
-    await Promise.all(Array.from(mounts).map(async (el) => {
-        const url = el.getAttribute('data-partial');
-        try {
-            const resp = await fetch(`${url}?v=${vParam}`, { cache: 'no-store' });
-            if (resp.ok) {
-                const html = await resp.text();
-                el.outerHTML = html;
-            }
-        } catch (e) {
-            console.error('Failed loading partial:', url, e);
-        }
-    }));
-
+// --- Route Dispatcher ---
+function applyInitialRoute() {
     const urlParams = new URLSearchParams(window.location.search);
     const initialView = urlParams.get('view');
     if (initialView) {
         switchView(initialView);
     }
 }
+
+// --- Automated Crash Telemetry (Zero Overhead) ---
+let lastReportedCrashTime = 0;
+let lastReportedCrashSig = '';
+
+function reportClientCrash(errorType, message, stack) {
+    const now = Date.now();
+    const sig = `${errorType}:${message}`;
+    if (sig === lastReportedCrashSig && (now - lastReportedCrashTime) < 180000) {
+        return; // Suppress duplicate error spam within 3 minutes
+    }
+    lastReportedCrashSig = sig;
+    lastReportedCrashTime = now;
+
+    const payload = {
+        error_type: errorType || 'js_uncaught',
+        message: String(message || 'Unknown error').slice(0, 1000),
+        stack_trace: String(stack || '').slice(0, 4000),
+        context: {
+            is_connected: isConnected,
+            selected_game_id: selectedGameId,
+            free_internet: freeInternetEnabled
+        }
+    };
+
+    fetch('/api/telemetry/crash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    }).catch(() => {});
+}
+
+window.addEventListener('error', (event) => {
+    reportClientCrash('js_uncaught', event.message, event.error ? event.error.stack : `${event.filename}:${event.lineno}:${event.colno}`);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    reportClientCrash('js_unhandled_rejection', reason ? (reason.message || String(reason)) : 'Unhandled Promise Rejection', reason ? reason.stack : '');
+});
 
 // --- Skeletons & Shimmer Generators (Zero Layout Shift) ---
 function getNotificationsSkeletonHtml(count = 2) {
@@ -98,7 +200,7 @@ function handleClose(e) {
 }
 
 function switchView(targetViewId) {
-    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account', 'view-progression', 'view-support'];
+    const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account', 'view-progression', 'view-support', 'view-gold-market'];
     const showcase = document.getElementById('view-showcase');
     const targetEl = targetViewId ? document.getElementById(targetViewId) : null;
     const isAlreadyOpen = targetEl && targetEl.classList.contains('active');
@@ -139,6 +241,7 @@ function switchView(targetViewId) {
         if (nextActiveId === 'view-notifications' && typeof fetchNotifications === 'function') fetchNotifications();
         if (nextActiveId === 'view-progression' && window.ProgressionController) window.ProgressionController.onOpen();
         if (nextActiveId === 'view-support' && typeof openSupportChat === 'function') openSupportChat();
+        if (nextActiveId === 'view-gold-market' && typeof openGoldMarket === 'function') openGoldMarket();
     }
 
     updateTitlebarActiveState(nextActiveId);
@@ -150,6 +253,7 @@ function updateTitlebarActiveState(activeViewId) {
         'view-sponsors': 'btn-sponsors-toggle',
         'view-notifications': 'btn-notif-toggle',
         'view-progression': 'btn-progression-toggle',
+        'view-gold-market': 'btn-gold-market-toggle',
         'view-support': 'btn-support-toggle',
         'view-details': 'btn-settings-toggle'
     };
@@ -159,6 +263,11 @@ function updateTitlebarActiveState(activeViewId) {
             btn.classList.toggle('is-active', vId === activeViewId);
         }
     }
+}
+
+function toggleGoldMarket(e) {
+    if (e) e.stopPropagation();
+    switchView('view-gold-market');
 }
 
 function toggleSupportChat(e) {
@@ -176,9 +285,6 @@ function toggleDetails(e) {
     switchView('view-details');
 }
 
-function closeDetails() {
-    switchView(null);
-}
 
 function togglePrivacyInfo(e) {
     if (e) e.stopPropagation();
@@ -285,6 +391,12 @@ function renderShowcase(games, activeId) {
     }
     lastShowcaseStateKey = stateKey;
 
+    try {
+        if (typeof localStorage !== 'undefined' && sorted.length > 0) {
+            localStorage.setItem('warlink_showcase_games', JSON.stringify(sorted));
+        }
+    } catch (e) {}
+
     let html = '';
 
     sorted.forEach(g => {
@@ -293,7 +405,11 @@ function renderShowcase(games, activeId) {
         const isLaunching = (launchingGameId === g.id) || (isBusy && !isConnected && isSelected);
 
         let iconHtml = '';
-        const iconSrc = g.icon_url || (g.id === 'wardogs' ? 'wardogs_icon.png' : '');
+        let iconSrc = g.icon_url;
+        if (g.id === 'wardogs' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'wardogs_icon.png';
+        if (g.id === 'arc_raiders' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'arc_raiders_icon.png';
+        if (g.id === 'dark_and_darker' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'dark_and_darker_icon.png';
+        if (!iconSrc && g.id === 'wardogs') iconSrc = 'wardogs_icon.png';
         if (iconSrc) {
             iconHtml = `
                 <img src="${escapeHtml(iconSrc)}" class="shortcut-icon-img" alt="${escapeHtml(g.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
@@ -348,14 +464,14 @@ function renderShowcase(games, activeId) {
     // Add Shortcut Tile (if voting is enabled)
     if (isVotingEnabled) {
         html += `
-            <div class="game-shortcut add-shortcut" onclick="openAddGameModal()" title="Добавить игру">
+            <div class="game-shortcut add-shortcut" id="btn-add-game" onclick="openAddGameModal()" title="Предложить или проголосовать за новую игру">
                 <div class="add-shortcut-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M5 12h14" />
                         <path d="M12 5v14" />
                     </svg>
                 </div>
-                <div class="shortcut-title">Добавить</div>
+                <span class="shortcut-title">Предложить</span>
             </div>
         `;
     }
@@ -373,14 +489,6 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
-// Backward-compatibility aliases for static HTML markup
-function onGameCardClick(gameId) {
-    onGameClick(gameId);
-}
-
-function handleGameContextMenu(e, gameId) {
-    showGameContextMenu(e, gameId, gameId === 'wardogs');
-}
 
 // 1-Click Game Action (One action, one screen)
 function onGameClick(gameId) {
@@ -784,36 +892,47 @@ function updateUI(data) {
             gwDot.title = 'Подключение к шлюзу...';
         } else if (data.gateway_ping && data.gateway_ping > 1) {
             gwDot.classList.add('is-online');
-            gwDot.title = 'Шлюз Стокгольм онлайн';
+            gwDot.title = 'Игровой шлюз (' + (data.gateway_badge || 'Онлайн') + ') активен';
         } else {
             gwDot.classList.add('is-offline');
             gwDot.title = 'Шлюз недоступен';
         }
     }
 
-    // Update Stockholm Gateway footer metrics
+    // Update Gateway footer metrics
     const gwPingEl = document.getElementById('gw-ping');
     const gwSlotsEl = document.getElementById('gw-slots');
     const gwDaysEl = document.getElementById('gw-days');
     const btnDonateText = document.getElementById('btn-donate-text');
     if (gwPingEl) {
-        if (data.ping_label) {
+        if (data.ping_label && data.ping_label !== '— мс' && data.ping_label !== '—') {
             gwPingEl.textContent = data.ping_label;
+            if (data.gateway_ping && data.gateway_ping > 1) {
+                gwPingEl.title = `Пинг ПК -> Шлюз (${data.gateway_badge || 'Игровой'}): ${data.gateway_ping} мс`;
+            }
         } else if (data.gateway_ping && data.gateway_ping > 1) {
             gwPingEl.textContent = data.gateway_ping + ' мс';
+            gwPingEl.title = `Пинг ПК -> Шлюз (${data.gateway_badge || 'Игровой'}): ${data.gateway_ping} мс`;
         } else {
-            gwPingEl.textContent = '— мс';
-        }
-        if (data.gateway_ping && data.gateway_ping > 1) {
-            gwPingEl.title = `Пинг ПК -> Шлюз Стокгольм: ${data.gateway_ping} мс`;
+            if (!gwPingEl.querySelector('.skeleton')) {
+                gwPingEl.innerHTML = '<span class="skeleton" style="width: 36px; height: 10px;"></span>';
+            }
+            gwPingEl.title = 'Измерение сетевой задержки...';
         }
     }
     if (gwSlotsEl) {
-        const slots = data.gateway_slots || '—';
-        gwSlotsEl.textContent = slots;
-        const isFull = slots.includes('50/50') || slots.includes('60/60') || (data.gateway_full === true);
-        gwSlotsEl.classList.toggle('slots-full', isFull);
-        gwSlotsEl.title = data.gateway_slots_tooltip || 'Активные слоты шлюза Стокгольм';
+        const slots = data.gateway_slots;
+        if (slots && slots !== '—' && slots !== '—/—') {
+            gwSlotsEl.textContent = slots;
+            const isFull = slots.includes('50/50') || slots.includes('60/60') || (data.gateway_full === true);
+            gwSlotsEl.classList.toggle('slots-full', isFull);
+            gwSlotsEl.title = data.gateway_slots_tooltip || 'Активные слоты игрового шлюза';
+        } else {
+            if (!gwSlotsEl.querySelector('.skeleton')) {
+                gwSlotsEl.innerHTML = '<span class="skeleton" style="width: 30px; height: 10px;"></span>';
+            }
+            gwSlotsEl.title = 'Получение статуса слотов шлюза...';
+        }
     }
 
     // Sync Account and Profile UI
@@ -846,8 +965,12 @@ function updateUI(data) {
     if (gwDaysEl) {
         if (data.gateway_days !== undefined && data.gateway_days > 0) {
             gwDaysEl.textContent = data.gateway_days + ' дн.';
+            gwDaysEl.title = `Оплачено дней работы шлюза: ${data.gateway_days}`;
         } else {
-            gwDaysEl.textContent = '— дн.';
+            if (!gwDaysEl.querySelector('.skeleton')) {
+                gwDaysEl.innerHTML = '<span class="skeleton" style="width: 38px; height: 10px;"></span>';
+            }
+            gwDaysEl.title = 'Получение срока аренды шлюза...';
         }
     }
     const gwTitleEl = document.getElementById('gw-title') || document.querySelector('.gateway-title');
@@ -922,6 +1045,16 @@ function updateUI(data) {
     if (circularRow) {
         circularRow.style.display = data.circular_active ? 'flex' : 'none';
     }
+
+    try {
+        if (typeof localStorage !== 'undefined' && data) {
+            const statusKey = `${data.is_connected}_${data.is_busy}_${data.free_internet}_${data.selected_game_id}_${data.last_error}_${data.gateway_ping}_${data.gateway_slots}_${data.october_pool_rub}`;
+            if (statusKey !== lastSavedStatusKey) {
+                lastSavedStatusKey = statusKey;
+                localStorage.setItem('warlink_status_cache', JSON.stringify(data));
+            }
+        }
+    } catch(e) {}
 }
 
 async function toggleConnect() {
@@ -999,9 +1132,24 @@ async function onNetworkRouteModeChange(mode) {
 
 // --- Quick Gateway Route Popover & Routing Feedback ---
 let currentRouteModes = [
-    { id: 'direct_moscow', title: 'Москва', desc: 'Прямое подключение по России (пинг ~15-25 мс)', badge: 'Москва' },
-    { id: 'direct_frankfurt', title: 'Франкфурт', desc: 'Прямое европейское подключение (пинг ~40-50 мс)', badge: 'Франкфурт' },
-    { id: 'transit', title: 'Москва → Франкфурт', desc: 'Транзитный коридор через Москву во Франкфурт (~50-60 мс)', badge: 'Мск → Франкфурт' }
+    {
+        id: 'direct_moscow',
+        title: 'Москва',
+        region: 'RU-DIRECT',
+        iconSvg: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="server-node-icon"><rect x="2" y="3" width="20" height="5" rx="1"/><rect x="2" y="10" width="20" height="5" rx="1"/><rect x="2" y="17" width="20" height="5" rx="1"/><circle cx="6" cy="5.5" r="1" fill="currentColor"/><circle cx="6" cy="12.5" r="1" fill="currentColor"/><circle cx="6" cy="19.5" r="1" fill="currentColor"/></svg>`
+    },
+    {
+        id: 'direct_frankfurt',
+        title: 'Франкфурт',
+        region: 'EU-DIRECT',
+        iconSvg: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="server-node-icon"><circle cx="12" cy="12" r="9"/><path d="M12 3a14.5 14.5 0 0 0 0 18"/><path d="M12 3a14.5 14.5 0 0 1 0 18"/><line x1="3" y1="12" x2="21" y2="12"/></svg>`
+    },
+    {
+        id: 'transit',
+        title: 'Москва → Франкфурт',
+        region: 'TRANSIT',
+        iconSvg: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="server-node-icon"><rect x="2" y="4" width="7" height="6" rx="1"/><rect x="15" y="14" width="7" height="6" rx="1"/><path d="M9 7h4a3 3 0 0 1 3 3v4"/><polyline points="14 12 16 14 18 12"/></svg>`
+    }
 ];
 
 async function toggleGatewayRoutePopover(e) {
@@ -1044,11 +1192,22 @@ async function loadAndRenderGatewayRoutePopover() {
 
     listEl.innerHTML = currentRouteModes.map(m => `
         <button type="button" class="route-popover-item ${m.id === activeMode ? 'active' : ''}" onclick="selectRouteModeFromPopover('${m.id}')">
-            <div class="popover-item-header">
-                <span class="popover-item-title">${m.title}</span>
-                <span class="popover-item-badge">${m.badge}</span>
+            <div class="route-item-left">
+                <div class="route-node-icon ${m.id}">
+                    ${m.iconSvg}
+                </div>
+                <div class="route-node-meta">
+                    <span class="route-node-name">${m.title}</span>
+                    <span class="route-region-tag font-mono">${m.region}</span>
+                </div>
             </div>
-            <div class="popover-item-desc">${m.desc}</div>
+            <div class="route-item-right">
+                <div class="route-check-indicator">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                </div>
+            </div>
         </button>
     `).join('');
 }
@@ -1327,13 +1486,6 @@ function nextFeedbackStep() {
     }
 }
 
-async function activateCurrentFeedbackRoute() {
-    const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
-    if (typeof onNetworkRouteModeChange === 'function') {
-        await onNetworkRouteModeChange(step.mode);
-        renderFeedbackCurrentStep();
-    }
-}
 
 function onStepStatusSelect(status) {
     const step = FEEDBACK_STEPS[currentFeedbackStepIndex];
@@ -1483,10 +1635,6 @@ async function resetAutoHosts() {
     }
 }
 
-async function donateServer(e) {
-    if (e) e.stopPropagation();
-    openDonateModal(e);
-}
 
 // --- In-App Notifications Center ---
 let cachedNotifications = [];
@@ -1504,9 +1652,6 @@ function toggleNotifications(e) {
     switchView('view-notifications');
 }
 
-function closeNotifications() {
-    switchView(null);
-}
 
 async function fetchNotifications() {
     if (typeof UIStore !== 'undefined' && typeof UIStore.requestSWR === 'function') {
@@ -1817,23 +1962,146 @@ document.addEventListener('click', (e) => {
     }
 }, true);
 
+// Real-time SSE Hub Connection (0ms Push Updates for Tickets, Notifications, and Status)
+function initLiveEventStream() {
+    if (typeof EventSource === 'undefined') return;
+
+    let eventSource = null;
+    let reconnectTimer = null;
+
+    function connect() {
+        if (eventSource) {
+            try { eventSource.close(); } catch(e) {}
+            eventSource = null;
+        }
+
+        try {
+            eventSource = new EventSource('/api/events');
+
+            eventSource.addEventListener('ticket_message', (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (window.onLiveTicketMessage) {
+                        window.onLiveTicketMessage(msg);
+                    }
+                } catch(err) {}
+            });
+
+            eventSource.addEventListener('ticket_updated', (e) => {
+                try {
+                    const tId = e.data;
+                    if (window.onLiveTicketUpdated) {
+                        window.onLiveTicketUpdated(tId);
+                    }
+                } catch(err) {}
+            });
+
+            eventSource.addEventListener('notification', (e) => {
+                try {
+                    const notif = JSON.parse(e.data);
+                    if (notif && notif.id) {
+                        if (!seenNotifIds.has(notif.id)) {
+                            seenNotifIds.add(notif.id);
+                            showToast(notif.title + ': ' + notif.message);
+                            if (window.WarLinkAudio && typeof window.WarLinkAudio.playNotification === 'function') {
+                                window.WarLinkAudio.playNotification(notif.severity);
+                            }
+                            const badge = document.getElementById('notif-badge');
+                            if (badge) {
+                                const cur = parseInt(badge.textContent || '0', 10) || 0;
+                                badge.textContent = cur + 1;
+                                badge.style.display = 'block';
+                            }
+                        }
+                    }
+                } catch(err) {}
+            });
+
+            eventSource.addEventListener('slots', (e) => {
+                try {
+                    const s = JSON.parse(e.data);
+                    if (s && s.gateway_slots) {
+                        const gwSlotsEl = document.getElementById('gw-slots');
+                        if (gwSlotsEl) gwSlotsEl.textContent = s.gateway_slots;
+                    }
+                } catch(err) {}
+            });
+
+            eventSource.addEventListener('flags:updated', () => {
+                if (window.WarLinkFlags && typeof window.WarLinkFlags.fetch === 'function') {
+                    window.WarLinkFlags.fetch();
+                }
+            });
+
+            eventSource.onerror = () => {
+                try { eventSource.close(); } catch(e) {}
+                eventSource = null;
+                if (!reconnectTimer) {
+                    reconnectTimer = setTimeout(() => {
+                        reconnectTimer = null;
+                        connect();
+                    }, 5000);
+                }
+            };
+        } catch(err) {
+            console.warn('Failed to start SSE stream:', err);
+        }
+    }
+
+    connect();
+}
+
 // Initial boot
 document.addEventListener('DOMContentLoaded', async () => {
-    // Render default state immediately before revealing window to eliminate layout shifts
+    // 1. Immediately hydrate last known non-network status before reveal
+    const cachedStatus = loadCachedStatus();
+    if (cachedStatus) {
+        const nonNetworkStatus = { ...cachedStatus };
+        delete nonNetworkStatus.ping_label;
+        delete nonNetworkStatus.gateway_ping;
+        delete nonNetworkStatus.total_ping;
+        delete nonNetworkStatus.ping_ms;
+        delete nonNetworkStatus.gateway_slots;
+        delete nonNetworkStatus.gateway_days;
+        updateUI(nonNetworkStatus);
+    }
+
+    // 2. Render default state immediately before revealing window to eliminate layout shifts
     renderShowcase(cachedGames, selectedGameId);
-    await loadPartials();
+    applyInitialRoute();
+
+    // 3. Hydrate sub-views from persistent cache before window is revealed to ensure Zero-CLS
+    if (typeof window.initAccountCache === 'function') {
+        window.initAccountCache();
+    }
+    if (window.ProgressionController && typeof window.ProgressionController.init === 'function') {
+        window.ProgressionController.init();
+    }
+    if (typeof window.initSupportCache === 'function') {
+        window.initSupportCache();
+    }
+
+    // 4. Reveal window IMMEDIATELY (instant display, zero startup latency)
     if (typeof window.revealWindow === 'function') {
         window.revealWindow();
     }
-    if (typeof UIStore !== 'undefined' && typeof UIStore.prefetchAll === 'function') {
-        UIStore.prefetchAll();
-    }
+
+    // 5. Query initial status, notifications, feature flags and start live event stream
     fetchStatus();
     fetchNotifications();
     checkAnnouncements();
-    if (typeof fetchAccountProfile === 'function') {
-        fetchAccountProfile();
+    if (window.WarLinkFlags && typeof window.WarLinkFlags.fetch === 'function') {
+        window.WarLinkFlags.fetch();
     }
+    initLiveEventStream();
+
+    // 6. Stagger background prefetch after window is visible to prevent thread contention
+    setTimeout(() => {
+        if (typeof UIStore !== 'undefined' && typeof UIStore.prefetchAll === 'function') {
+            UIStore.prefetchAll();
+        }
+    }, 2500);
+
     setInterval(fetchStatus, 1500);
     setInterval(fetchNotifications, 10000);
 });

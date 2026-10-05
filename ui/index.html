@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.2.0</span>
+                <span class="brand-version">v2.2.1</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Complex Mode (DPI) -->
@@ -54,6 +54,14 @@
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="7 11 12 6 17 11"/>
                         <polyline points="7 18 12 13 17 18"/>
+                    </svg>
+                </button>
+                <button id="btn-gold-market-toggle" class="win-btn win-icon-btn" onclick="toggleGoldMarket(event)" title="Золотообмен">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
+                        <path d="M12 6v2"/>
+                        <path d="M12 16v2"/>
                     </svg>
                 </button>
                 <button id="btn-sponsors-toggle" class="win-btn win-icon-btn" onclick="toggleSponsors(event)" title="Доска почёта спонсоров">
@@ -104,11 +112,23 @@
                             </div>
                             <span class="shortcut-title" title="WARDOGS">WARDOGS</span>
                         </div>
+                        <div class="game-shortcut" data-game-id="arc_raiders" onclick="onGameClick('arc_raiders')" oncontextmenu="showGameContextMenu(event, 'arc_raiders', true)">
+                            <div class="shortcut-icon-wrapper">
+                                <img class="shortcut-icon-img" src="arc_raiders_icon.png" alt="ARC Raiders" draggable="false">
+                            </div>
+                            <span class="shortcut-title" title="ARC Raiders">ARC Raiders</span>
+                        </div>
+                        <div class="game-shortcut" data-game-id="dark_and_darker" onclick="onGameClick('dark_and_darker')" oncontextmenu="showGameContextMenu(event, 'dark_and_darker', true)">
+                            <div class="shortcut-icon-wrapper">
+                                <img class="shortcut-icon-img" src="dark_and_darker_icon.png" alt="Dark and Darker" draggable="false">
+                            </div>
+                            <span class="shortcut-title" title="Dark and Darker">Dark and Darker</span>
+                        </div>
                         <div class="game-shortcut add-shortcut" id="btn-add-game" onclick="openAddGameModal()" title="Предложить или проголосовать за новую игру">
-                            <div class="shortcut-icon-wrapper add-icon-wrap">
-                                <svg class="add-icon-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                            <div class="add-shortcut-btn">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M5 12h14" />
+                                    <path d="M12 5v14" />
                                 </svg>
                             </div>
                             <span class="shortcut-title">Предложить</span>
@@ -118,17 +138,1875 @@
             </div>
 
             <!-- Mount points for decomposed views and modals -->
-            <div data-partial="views/progression-view.html"></div>
-            <div data-partial="views/settings-view.html"></div>
-            <div data-partial="views/notifications-view.html"></div>
-            <div data-partial="views/sponsors-view.html"></div>
-            <div data-partial="views/account-view.html"></div>
-            <div data-partial="views/support-view.html"></div>
-            <div data-partial="views/add-game-modal.html"></div>
-            <div data-partial="views/donate-modal.html"></div>
-            <div data-partial="views/dossier-modal.html"></div>
-            <div data-partial="views/bug-report-modal.html"></div>
-            <div data-partial="views/routing-feedback-modal.html"></div>
+            <!-- Inlined view: progression-view.html -->
+<div id="view-progression" class="details-view">
+    <!-- Header: Title without slashes, Reset Button, Import Button, Close Button -->
+    <div class="details-header">
+        <div class="details-header-left">
+            <span class="details-title font-mono">УРОВЕНЬ WARDOGS</span>
+        </div>
+        <div class="details-header-right">
+            <button id="btn-prog-help" class="btn-prog-action font-mono" onclick="ProgressionController.toggleGuide()" title="Инструкция по использованию">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                <span>Справка</span>
+            </button>
+            <input type="file" id="prog-file-input" accept="image/*" style="display: none;" onchange="ProgressionController.onFileSelected(event)">
+            <button id="btn-prog-reset" class="btn-prog-action font-mono" onclick="ProgressionController.resetAll()" title="Сбросить весь прогресс до 0">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                </svg>
+                <span>Сбросить</span>
+            </button>
+            <button id="btn-prog-import" class="btn-prog-action font-mono" onclick="ProgressionController.triggerImport()" title="Вставить скриншот из буфера (Ctrl+V) или выбрать файл">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                </svg>
+                <span>Импорт (Ctrl+V)</span>
+            </button>
+            <button id="btn-prog-share" class="btn-prog-action font-mono" onclick="ProgressionController.openShareModal()" title="Сгенерировать карточку «Уровень WARDOGS» с QR-кодом">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="18" cy="5" r="3"></circle>
+                    <circle cx="6" cy="12" r="3"></circle>
+                    <circle cx="18" cy="19" r="3"></circle>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                </svg>
+                <span>Поделиться</span>
+            </button>
+            <button class="details-close" onclick="toggleProgression(event)">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- DropZone Overlay for Drag & Drop -->
+    <div id="prog-dropzone" class="prog-dropzone" style="display: none;">
+        <div class="prog-dropzone-box">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span class="prog-dropzone-title">Перетащите скриншот экрана «РАЗБЛОКИРОВАТЬ»</span>
+            <span class="prog-dropzone-sub font-mono">1080p • 1440p • 4K • 720p • 21:9 Ultrawide</span>
+        </div>
+    </div>
+
+    <!-- Main Scrollable Body -->
+    <div class="details-content prog-content-scroll" ondragover="ProgressionController.onDragOver(event)" ondragleave="ProgressionController.onDragLeave(event)" ondrop="ProgressionController.onDrop(event)">
+        <!-- Section 1: MetaForge-Style Main Widget Card -->
+        <div class="prog-metaforge-card">
+            <!-- Top Career Row -->
+            <div class="prog-career-row">
+                <div class="prog-career-crest-wrap">
+                    <img id="prog-career-badge-img" class="prog-career-badge-img" src="assets/career/1.webp" alt="Значок карьеры" onerror="this.src='wardogs_icon.png'">
+                </div>
+                <div class="prog-career-info-wrap">
+                    <span id="prog-career-val" class="prog-career-big-num font-mono">0</span>
+                    <div class="prog-career-next-text font-mono">
+                        <span class="prog-next-label">Следующая награда: </span>
+                        <span id="prog-career-next-name" class="prog-career-next-name">—</span>
+                        <span class="prog-text-sep">|</span>
+                        <span id="prog-career-next-lvl" class="prog-gold-lvl">—</span>
+                        <span class="prog-text-sep">|</span>
+                        <span id="prog-career-next-price" class="prog-grey-price">—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6 Circular Role Dials Row -->
+            <div class="prog-dials-row">
+                <!-- 1. Assault -->
+                <div class="prog-dial-column" data-role="assault">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-assault" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-assault" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/assault.webp" alt="Штурмовик">
+                            <span id="prog-lvl-assault" class="prog-dial-number font-mono">0</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('assault', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('assault', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ШТУРМОВИК</span>
+                        <span id="prog-dial-name-assault" class="prog-dial-item-name font-mono" title="—">—</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-assault" class="prog-gold-lvl">—</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-assault">—</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 2. Medic -->
+                <div class="prog-dial-column" data-role="medic">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-medic" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-medic" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/medic.webp" alt="Медик">
+                            <span id="prog-lvl-medic" class="prog-dial-number font-mono">0</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('medic', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('medic', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">МЕДИК</span>
+                        <span id="prog-dial-name-medic" class="prog-dial-item-name font-mono" title="—">—</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-medic" class="prog-gold-lvl">—</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-medic">—</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 3. Recon -->
+                <div class="prog-dial-column" data-role="recon">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-recon" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-recon" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/recon.webp" alt="Разведчик">
+                            <span id="prog-lvl-recon" class="prog-dial-number font-mono">0</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('recon', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('recon', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">РАЗВЕДЧИК</span>
+                        <span id="prog-dial-name-recon" class="prog-dial-item-name font-mono" title="—">—</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-recon" class="prog-gold-lvl">—</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-recon">—</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 4. Support -->
+                <div class="prog-dial-column" data-role="support">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-support" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-support" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/support.webp" alt="Поддержка">
+                            <span id="prog-lvl-support" class="prog-dial-number font-mono">0</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('support', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('support', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ПОДДЕРЖКА</span>
+                        <span id="prog-dial-name-support" class="prog-dial-item-name font-mono" title="—">—</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-support" class="prog-gold-lvl">—</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-support">—</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 5. Driver -->
+                <div class="prog-dial-column" data-role="driver">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-driver" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-driver" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/driver.webp" alt="Водитель">
+                            <span id="prog-lvl-driver" class="prog-dial-number font-mono">0</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('driver', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('driver', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ВОДИТЕЛЬ</span>
+                        <span id="prog-dial-name-driver" class="prog-dial-item-name font-mono" title="—">—</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-driver" class="prog-gold-lvl">—</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-driver">—</span>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- 6. Pilot -->
+                <div class="prog-dial-column" data-role="pilot">
+                    <div class="prog-dial-circle-wrap">
+                        <svg class="prog-dial-svg" viewBox="0 0 90 90">
+                            <circle class="prog-dial-track" cx="45" cy="45" r="37"/>
+                            <circle id="prog-dial-arc-pilot" class="prog-dial-fill" cx="45" cy="45" r="37"/>
+                        </svg>
+                        <div id="prog-dial-dot-pilot" class="prog-dial-dot"></div>
+
+                        <div class="prog-dial-inner">
+                            <img class="prog-dial-role-img" src="assets/roles/pilot.webp" alt="Пилот">
+                            <span id="prog-lvl-pilot" class="prog-dial-number font-mono">0</span>
+                            <div class="prog-dial-steppers">
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('pilot', 1)" title="Повысить">&#9650;</button>
+                                <button class="prog-dial-step-btn" onclick="ProgressionController.stepRole('pilot', -1)" title="Понизить">&#9660;</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="prog-dial-meta">
+                        <span class="prog-dial-role-title font-mono">ПИЛОТ</span>
+                        <span id="prog-dial-name-pilot" class="prog-dial-item-name font-mono" title="—">—</span>
+                        <span class="prog-dial-req font-mono">
+                            <span id="prog-dial-lvl-pilot" class="prog-gold-lvl">—</span>
+                            <span class="prog-text-sep">|</span>
+                            <span id="prog-dial-xp-pilot">—</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: Active Target Roadmap Banner (Visible when target is active) -->
+        <div id="prog-target-banner" class="prog-target-banner" style="display: none;">
+            <div class="prog-target-left">
+                <div class="prog-target-icon-wrap">
+                    <img id="prog-target-img" class="prog-target-img" src="wardogs_icon.png" alt="Цель" onerror="this.src='wardogs_icon.png'">
+                </div>
+                <div class="prog-target-meta">
+                    <div class="prog-target-title-row">
+                        <span class="prog-target-badge font-mono">ЦЕЛЬ</span>
+                        <span id="prog-target-name" class="prog-target-name font-mono">M4A1</span>
+                        <span id="prog-target-cat" class="prog-target-cat font-mono">Штурм. винтовка</span>
+                    </div>
+                    <div class="prog-target-req-row font-mono">
+                        <span id="prog-target-role-lbl" class="prog-target-gold">ШТУРМОВИК</span>
+                        <span class="prog-text-sep">•</span>
+                        <span>Требуется: <strong id="prog-target-req-lvl" class="prog-gold-lvl">Ур. 20</strong></span>
+                        <span class="prog-text-sep">•</span>
+                        <span id="prog-target-remaining">Осталось: 9 ур.</span>
+                    </div>
+                    <div class="prog-target-finance-row font-mono">
+                        <span class="prog-finance-label">Цена цели:</span>
+                        <strong id="prog-target-price" class="prog-green-price">$10,000</strong>
+                        <span class="prog-text-sep">•</span>
+                        <span class="prog-finance-label">Бюджет ветки:</span>
+                        <strong id="prog-target-path-budget" class="prog-gold-price">$27,500</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="prog-target-right">
+                <div class="prog-target-progress-row font-mono">
+                    <span id="prog-target-cur-status">11 / 20</span>
+                    <span id="prog-target-pct">55%</span>
+                </div>
+                <div class="prog-target-bar-track">
+                    <div id="prog-target-bar-fill" class="prog-target-bar-fill" style="width: 55%;"></div>
+                </div>
+                <button class="btn-prog-target-cancel font-mono" onclick="ProgressionController.toggleWishlist('', event)" title="Снять цель">
+                    Снять цель
+                </button>
+            </div>
+        </div>
+
+        <!-- Section 3: Catalog of Unlocks in Table Format -->
+        <div class="prog-section-header">
+            <div class="prog-catalog-header-left">
+                <span class="prog-section-title font-mono">КАТАЛОГ РАЗБЛОКИРОВОК</span>
+                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(58 наград)</span>
+            </div>
+            <div class="prog-catalog-filter-row">
+                <label class="prog-hide-unlocked-label font-mono">
+                    <input type="checkbox" id="check-prog-hide-unlocked" onchange="ProgressionController.toggleHideUnlocked(this.checked)">
+                    <span class="prog-checkbox-box">
+                        <svg class="prog-checkbox-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </span>
+                    <span class="prog-checkbox-text">Скрыть открытое</span>
+                </label>
+                <input type="text" id="prog-search-input" class="prog-search-input font-mono" placeholder="Поиск оружия, модуля, патрона..." oninput="ProgressionController.onSearchInput(event)">
+            </div>
+        </div>
+
+        <!-- Role Filter Tabs: 1. Карьера, 2. Штурмовик, 3. Медик, 4. Разведчик, 5. Поддержка, 6. Водитель, 7. Пилот -->
+        <div class="prog-filter-tabs">
+            <button class="prog-tab-btn active" data-filter="career" onclick="ProgressionController.setFilter('career')">Карьера</button>
+            <button class="prog-tab-btn" data-filter="assault" onclick="ProgressionController.setFilter('assault')">Штурмовик</button>
+            <button class="prog-tab-btn" data-filter="medic" onclick="ProgressionController.setFilter('medic')">Медик</button>
+            <button class="prog-tab-btn" data-filter="recon" onclick="ProgressionController.setFilter('recon')">Разведчик</button>
+            <button class="prog-tab-btn" data-filter="support" onclick="ProgressionController.setFilter('support')">Поддержка</button>
+            <button class="prog-tab-btn" data-filter="driver" onclick="ProgressionController.setFilter('driver')">Водитель</button>
+            <button class="prog-tab-btn" data-filter="pilot" onclick="ProgressionController.setFilter('pilot')">Пилот</button>
+        </div>
+
+        <!-- Catalog Items Table: Lock, Level, Reward, Category, Price, Target -->
+        <div class="prog-table-container">
+            <table class="prog-table font-mono">
+                <thead>
+                    <tr>
+                        <th class="th-lock" title="Разблокировка предмета"></th>
+                        <th class="th-lvl">УР.</th>
+                        <th class="th-item">НАГРАДА</th>
+                        <th class="th-cat">КАТЕГОРИЯ</th>
+                        <th class="th-price">ЦЕНА</th>
+                        <th class="th-target">ЦЕЛЬ</th>
+                    </tr>
+                </thead>
+                <tbody id="prog-catalog-tbody">
+                    <!-- Dynamic rows rendered by progression.js -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Инструкция (поверх всего окна приложения) -->
+<div id="prog-guide-modal" class="modal-backdrop" style="display: none;" onclick="if (event.target === this) ProgressionController.dismissGuide()">
+    <div class="modal-card prog-guide-modal-card" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span class="modal-title font-mono">ИНСТРУКЦИЯ</span>
+            <button class="btn-icon" onclick="ProgressionController.dismissGuide()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        
+        <div class="prog-modal-body">
+            <div class="prog-guide-steps-vertical">
+                <!-- 1 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">1</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">АВТОМАТИЧЕСКАЯ СИНХРОНИЗАЦИЯ ИЛИ СКРИНШОТ</div>
+                        <div class="prog-step-text">
+                            <strong>Steam F12 (Автоматически):</strong> в матче или меню игры откройте вкладку <strong>«Разблокировать»</strong> (или Tab) и нажмите <strong>F12</strong> в Steam. WarLink автоматически считает уровни классов и карьеры.
+                        </div>
+                        <div class="prog-step-callout">
+                            <strong>Ручной снимок:</strong> сделайте полный снимок экрана (PrintScreen или Win+Shift+S во весь экран). Не обрезайте края.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">2</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">ИМПОРТ В ПРИЛОЖЕНИЕ</div>
+                        <div class="prog-step-text">
+                            Нажмите <strong>Ctrl+V</strong> в окне программы, перетащите файл мышью (Drag & Drop) или нажмите кнопку <strong>«Импорт»</strong>.
+                        </div>
+                        <div class="prog-step-callout">
+                            <strong>Калибровка:</strong> значение уровня можно также настроить вручную стрелочками <strong>&#9650; / &#9660;</strong> прямо на циферблатах классов.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">3</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">ВЫБОР ЦЕЛИ И БЮДЖЕТ ВЕТКИ</div>
+                        <div class="prog-step-text">
+                            В каталоге наград нажмите на <strong>иконку прицела</strong> у желаемого оружия или модуля, чтобы закрепить персональную цель.
+                        </div>
+                        <div class="prog-step-callout">
+                            Интерфейс рассчитает оставшиеся уровни, цену цели ($) и суммарный бюджет на покупку промежуточных наград всей ветки.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4 -->
+                <div class="prog-guide-step-row">
+                    <div class="prog-step-badge font-mono">4</div>
+                    <div class="prog-step-info">
+                        <div class="prog-step-header font-mono">КАРТОЧКА ДЛЯ ДРУЗЕЙ И DISCORD</div>
+                        <div class="prog-step-text">
+                            Нажмите кнопку со стрелкой <strong>«Поделиться»</strong> в верхней панели — сгенерируется карточка прогресса в высоком разрешении для отправки в Discord, Telegram и Steam.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="prog-guide-footer-btn">
+            <button class="btn btn-action font-mono" onclick="ProgressionController.dismissGuide()">
+                <span>ПОНЯТНО</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Карточка прогресса WARDOGS для шеринга -->
+<div id="prog-share-modal" class="modal-backdrop" style="display: none;" onclick="if (event.target === this) ProgressionController.closeShareModal()">
+    <div class="modal-card prog-share-modal-card" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <span class="modal-title font-mono">КАРТОЧКА ПРОГРЕССИИ // ПОДЕЛИТЬСЯ</span>
+            <button class="btn-icon" onclick="ProgressionController.closeShareModal()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        
+        <div class="prog-share-modal-body">
+            <div class="prog-share-preview-wrap">
+                <canvas id="prog-share-canvas" width="1200" height="675" class="prog-share-canvas"></canvas>
+            </div>
+            <div class="prog-share-hint font-mono">
+                Изображение для публикации в Discord, Telegram и Steam со встроенным QR-кодом
+            </div>
+        </div>
+
+        <div class="prog-share-footer">
+            <button id="btn-prog-copy-card" class="btn btn-primary font-mono" onclick="ProgressionController.copyShareCard()" title="Скопировать изображение в буфер обмена">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>Скопировать</span>
+            </button>
+            <button id="btn-prog-save-card" class="btn btn-secondary font-mono" onclick="ProgressionController.saveShareCard()" title="Сохранить файл на диск">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Сохранить PNG</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: settings-view.html -->
+<!-- VIEW: Settings Panel (Progressive Disclosure) -->
+<div id="view-details" class="details-view">
+    <div class="details-header">
+        <span class="details-title">Параметры маршрутизации</span>
+        <button class="details-close" onclick="toggleDetails(event)">Закрыть</button>
+    </div>
+
+    <div class="details-content">
+        <div class="setting-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">МАРШРУТИЗАЦИЯ И СЕТЬ</span>
+                <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
+            </div>
+            <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
+                <div class="privacy-info-text">
+                    WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
+                </div>
+            </div>
+            <div class="setting-row" style="margin-top: 6px;">
+                <span class="setting-label">Выбор маршрута:</span>
+                <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
+                    <option value="direct_moscow">Москва (Транзит, РФ)</option>
+                    <option value="direct_frankfurt">Франкфурт (Европа)</option>
+                    <option value="transit">Москва → Франкфурт</option>
+                </select>
+            </div>
+            <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                <span class="info-label">Описание:</span>
+                <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
+            </div>
+            <div class="setting-info-row" style="margin-top: 6px;">
+                <span class="info-label">Сетевой фильтр:</span>
+                <span class="info-value">WinDivert (Автономный режим)</span>
+            </div>
+            <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                <span class="info-label">Кэш авто-доменов:</span>
+                <span style="display: flex; gap: 8px; align-items: center;">
+                    <span id="auto-hosts-count" class="info-value">0</span>
+                    <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
+                </span>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">ПРИВЯЗАННЫЕ УСТРОЙСТВА</span>
+                <button id="btn-settings-reset-devices" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие ПК</button>
+            </div>
+            <div class="setting-info-row">
+                <span class="info-label">Текущий ПК:</span>
+                <span class="info-value font-mono" style="color: var(--accent); font-weight:600;">активен</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                Отвязывает все старые сессии и лишние компьютеры от вашего аккаунта (лимит: 2 ПК на аккаунт).
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
+            <div class="setting-row" style="margin-top: 6px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="checkbox" id="check-sound-effects" checked onchange="onToggleSoundEffects(this.checked)" style="accent-color: var(--action); cursor:pointer;">
+                    <span style="font-size: 11px; color: var(--text);">Звуковые сигналы депеш и системных отказов</span>
+                </label>
+                <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                    Тактические аудио-сигналы при поступлении уведомлений и ошибках сети.
+                </div>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
+                <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                    </svg>
+                    Мастер диагностики сети
+                </button>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
+                <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: notifications-view.html -->
+<!-- VIEW: In-App Notifications Center -->
+<div id="view-notifications" class="details-view">
+    <div class="details-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="details-title">Центр уведомлений</span>
+            <span id="notif-count-tag" class="votes-badge">0</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn-link" style="font-size: 11px; color: var(--text-muted); cursor: pointer;" onclick="markAllNotificationsRead()">Прочитать все</button>
+            <button class="details-close" onclick="toggleNotifications(event)">Закрыть</button>
+        </div>
+    </div>
+    <div class="details-content" id="notifications-list">
+        <div class="notification-card skeleton-card">
+            <div class="notif-header">
+                <div class="notif-title-row">
+                    <div class="skeleton" style="width: 52px; height: 16px; border-radius: 2px;"></div>
+                    <div class="skeleton" style="width: 140px; height: 12px;"></div>
+                </div>
+                <div class="skeleton" style="width: 48px; height: 10px;"></div>
+            </div>
+            <div class="skeleton" style="width: 90%; height: 11px; margin-top: 4px;"></div>
+            <div class="skeleton" style="width: 60%; height: 11px; margin-top: 2px;"></div>
+        </div>
+        <div class="notification-card skeleton-card">
+            <div class="notif-header">
+                <div class="notif-title-row">
+                    <div class="skeleton" style="width: 52px; height: 16px; border-radius: 2px;"></div>
+                    <div class="skeleton" style="width: 110px; height: 12px;"></div>
+                </div>
+                <div class="skeleton" style="width: 48px; height: 10px;"></div>
+            </div>
+            <div class="skeleton" style="width: 85%; height: 11px; margin-top: 4px;"></div>
+            <div class="skeleton" style="width: 45%; height: 11px; margin-top: 2px;"></div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: sponsors-view.html -->
+<!-- VIEW: Sponsors Hall of Fame Page -->
+<div id="view-sponsors" class="details-view">
+    <div class="details-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="details-title">Доска почёта спонсоров</span>
+            <span id="sponsors-count-badge" class="votes-badge">0</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <button type="button" class="btn-author-donate" onclick="openDonateModalWithTab('boosty', event)">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <span>Донат автору</span>
+            </button>
+            <button class="details-close" onclick="toggleSponsors(event)">Закрыть</button>
+        </div>
+    </div>
+    <div class="details-content">
+        <!-- Ultra-compact Infrastructure Goal Strip (Variant A: 34px height) -->
+        <div class="community-goal-box compact-goal-strip">
+            <div class="compact-strip-left font-mono">
+                <div class="compact-node-item covered" id="goal-node-infra" title="Обслуживание инфраструктуры кластера: Стокгольм + Москва + Франкфурт (13 € / мес)">
+                    <div class="compact-flags">
+                        <!-- Швеция (Стокгольм Master) -->
+                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
+                            <rect width="16" height="11" rx="1" fill="#005293"/>
+                            <rect x="5" width="2" height="11" fill="#FFCD00"/>
+                            <rect y="4.5" width="16" height="2" fill="#FFCD00"/>
+                        </svg>
+                        <!-- Россия (Москва Ingress Edge) -->
+                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
+                            <rect width="16" height="3.67" rx="1" fill="#FFFFFF"/>
+                            <rect y="3.67" width="16" height="3.67" fill="#0039A6"/>
+                            <rect y="7.33" width="16" height="3.67" rx="1" fill="#D52B1E"/>
+                        </svg>
+                        <!-- Германия (Франкфурт Gaming Edge) -->
+                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
+                            <rect width="16" height="3.67" rx="1" fill="#202020"/>
+                            <rect y="3.67" width="16" height="3.67" fill="#DD1111"/>
+                            <rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>
+                        </svg>
+                    </div>
+                    <span class="compact-node-title">Инфраструктура кластера (13 € / мес):</span>
+                    <div class="compact-mini-bar" style="width: 50px;">
+                        <div id="infra-progress-fill" class="compact-mini-fill" style="width: 100%;"></div>
+                    </div>
+                    <span id="infra-progress-pct" class="compact-node-pct">100%</span>
+                </div>
+            </div>
+
+            <div class="compact-strip-right font-mono">
+                <span id="goal-timer-wrap" class="compact-period-label">
+                    <span id="goal-timer-label" style="display:none;"></span>
+                    <span id="goal-timer-countdown">Октябрь 2026</span>
+                </span>
+                <button type="button" class="btn-compact-donate" onclick="openDonateModalWithTab('server', event)">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    <span>Поддержать шлюз</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Filter Tabs -->
+        <div class="sponsors-nav-tabs">
+            <button id="tab-sponsors-all" class="sponsor-tab-btn active" onclick="switchSponsorCategory('all')">Зал славы</button>
+            <button id="tab-sponsors-month" class="sponsor-tab-btn" onclick="switchSponsorCategory('month')">Герои месяца</button>
+            <button id="tab-sponsors-new" class="sponsor-tab-btn" onclick="switchSponsorCategory('new')">Новые защитники</button>
+        </div>
+
+        <div id="sponsors-grid" class="sponsors-grid">
+            <div class="sponsor-card skeleton-card">
+                <div class="skeleton skeleton-circle" style="width: 36px; height: 36px; flex-shrink: 0;"></div>
+                <div class="sponsor-card-info" style="gap: 6px;">
+                    <div class="skeleton" style="width: 100px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 140px; height: 10px;"></div>
+                </div>
+            </div>
+            <div class="sponsor-card skeleton-card">
+                <div class="skeleton skeleton-circle" style="width: 36px; height: 36px; flex-shrink: 0;"></div>
+                <div class="sponsor-card-info" style="gap: 6px;">
+                    <div class="skeleton" style="width: 120px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 110px; height: 10px;"></div>
+                </div>
+            </div>
+            <div class="sponsor-card skeleton-card">
+                <div class="skeleton skeleton-circle" style="width: 36px; height: 36px; flex-shrink: 0;"></div>
+                <div class="sponsor-card-info" style="gap: 6px;">
+                    <div class="skeleton" style="width: 90px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 130px; height: 10px;"></div>
+                </div>
+            </div>
+            <div class="sponsor-card skeleton-card">
+                <div class="skeleton skeleton-circle" style="width: 36px; height: 36px; flex-shrink: 0;"></div>
+                <div class="sponsor-card-info" style="gap: 6px;">
+                    <div class="skeleton" style="width: 110px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 125px; height: 10px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: account-view.html -->
+<!-- VIEW: Dedicated Account Settings Page (Modern 2026 Tabbed Layout) -->
+<div id="view-account" class="details-view">
+    <div class="details-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="details-title">Профиль и аккаунт</span>
+            <div class="profile-tier-badge" id="profile-tier-badge"><span>Боец WarLink</span></div>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; text-decoration: none;" onclick="openMyDossier()" title="Посмотреть боевое досье оператора">Моё досье</button>
+            <button class="details-close" onclick="toggleAccount(event)">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- Hero Identity Card -->
+    <div class="profile-hero-card">
+        <div class="profile-avatar-wrap" onclick="triggerAvatarUpload()" title="Нажмите, чтобы загрузить аватарку">
+            <img id="profile-avatar-img" src="" alt="" class="profile-avatar" style="display:none;">
+            <div id="profile-avatar-placeholder" class="profile-avatar-placeholder">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                </svg>
+            </div>
+            <div class="profile-avatar-hover-hint">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <input type="file" id="input-avatar-file" accept="image/png,image/jpeg,image/webp" style="display:none;" onchange="handleAvatarFileSelected(event)">
+        </div>
+
+        <div class="profile-hero-info">
+            <div class="profile-hero-top">
+                <span id="hero-display-nickname" class="profile-hero-nick">Боец</span>
+                <span id="hero-tier-tag" class="profile-hero-badge">Боец WarLink</span>
+            </div>
+            <div class="profile-hero-sub">
+                <span class="info-label" style="font-size:11px;">Аккаунт:</span>
+                <span id="val-account-number" class="info-value font-mono" style="letter-spacing: 0.5px; min-width: 140px; display: inline-block;">—</span>
+                <button class="btn-copy-code" onclick="copyAccountNumber()" title="Скопировать номер аккаунта">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Segmented Navigation Tabs -->
+    <div class="account-nav-tabs">
+        <button id="tab-btn-profile" class="acc-tab-btn active" onclick="switchAccountTab('profile')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Персонализация
+        </button>
+        <button id="tab-btn-discord" class="acc-tab-btn" onclick="switchAccountTab('discord')">
+            <svg width="14" height="11" viewBox="0 0 126.644 96" fill="currentColor"><path d="M81.15,0c-1.2376,2.1973-2.3489,4.4704-3.3591,6.794-9.5975-1.4396-19.3718-1.4396-28.9945,0-.985-2.3236-2.1216-4.5967-3.3591-6.794-9.0166,1.5407-17.8059,4.2431-26.1405,8.0568C2.779,32.5304-1.6914,56.3725.5312,79.8863c9.6732,7.1476,20.5083,12.603,32.0505,16.0884,2.6014-3.4854,4.8998-7.1981,6.8698-11.0623-3.738-1.3891-7.3497-3.1318-10.8098-5.1523.9092-.6567,1.7932-1.3386,2.6519-1.9953,20.281,9.547,43.7696,9.547,64.0758,0,.8587.7072,1.7427,1.3891,2.6519,1.9953-3.4601,2.0457-7.0718,3.7632-10.835,5.1776,1.97,3.8642,4.2683,7.5769,6.8698,11.0623,11.5419-3.4854,22.3769-8.9156,32.0509-16.0631,2.626-27.2771-4.496-50.9172-18.817-71.8548C98.9811,4.2684,90.1918,1.5659,81.1752.0505l-.0252-.0505ZM42.2802,65.4144c-6.2383,0-11.4159-5.6575-11.4159-12.6535s4.9755-12.6788,11.3907-12.6788,11.5169,5.708,11.4159,12.6788c-.101,6.9708-5.026,12.6535-11.3907,12.6535ZM84.3576,65.4144c-6.2637,0-11.3907-5.6575-11.3907-12.6535s4.9755-12.6788,11.3907-12.6788,11.4917,5.708,11.3906,12.6788c-.101,6.9708-5.026,12.6535-11.3906,12.6535Z"/></svg>
+            Discord & Связка
+            <span id="tab-discord-dot" class="tab-indicator-dot" style="display:none;"></span>
+        </button>
+        <button id="tab-btn-security" class="acc-tab-btn" onclick="switchAccountTab('security')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+            Устройства & ПК
+        </button>
+        <button id="tab-btn-billing" class="acc-tab-btn" onclick="switchAccountTab('billing')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+            Поддержка шлюза
+        </button>
+    </div>
+
+    <div class="details-content" style="padding-top: 10px;">
+        <!-- TAB 1: Персонализация -->
+        <div id="acc-panel-profile" class="acc-tab-panel active">
+            <div class="setting-group" style="margin-bottom: 10px;">
+                <span class="setting-group-title">ИГРОВОЙ ПОЗЫВНОЙ</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <input type="text" id="input-nickname" class="form-input form-input-sm" placeholder="Никнейм игрока" maxlength="20" style="flex: 1;">
+                    <button id="btn-save-nickname" class="btn btn-secondary btn-sm" onclick="saveNickname()">Сохранить</button>
+                </div>
+                <div class="profile-acc-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                    Отображается на Доске почёта спонсоров и в игровом сообществе
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">НАСТРОЙКА ДОСЬЕ ОПЕРАТОРА</span>
+                    <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openMyDossier()" title="Открыть предварительный просмотр боевого досье">Открыть досье</button>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Профиль Steam (ссылка или SteamID64):</span>
+                    <div style="margin-top:4px;">
+                        <input type="text" id="input-dossier-steam" class="form-input form-input-sm font-mono" placeholder="https://steamcommunity.com/id/... или SteamID64" maxlength="120">
+                    </div>
+                </div>
+                <div class="setting-row" style="margin-top: 8px;">
+                    <span class="setting-label">Статус / девиз в досье:</span>
+                    <div style="margin-top:4px;">
+                        <input type="text" id="input-dossier-motto" class="form-input form-input-sm" placeholder="Ваш статус или описание в досье" maxlength="100">
+                    </div>
+                </div>
+                <div style="margin-top: 8px; display: flex; justify-content: flex-end;">
+                    <button id="btn-save-dossier" class="btn btn-secondary btn-sm" onclick="saveDossierSettings()">Сохранить данные досье</button>
+                </div>
+                <div class="setting-row" style="margin-top: 10px; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                        <input type="checkbox" id="check-dossier-hide-amount" onchange="toggleHideDonationAmount(this.checked)" style="accent-color: var(--action); cursor:pointer;">
+                        <span style="font-size: 11px; color: var(--text);">Скрыть сумму поддержки в досье (засекретить гриф)</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: Discord & Связка -->
+        <div id="acc-panel-discord" class="acc-tab-panel" style="display:none;">
+            <!-- Unlinked State Card -->
+            <div id="discord-card-unlinked" class="discord-card">
+                <div class="discord-card-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <svg width="20" height="15" viewBox="0 0 126.644 96" fill="#5865F2"><path d="M81.15,0c-1.2376,2.1973-2.3489,4.4704-3.3591,6.794-9.5975-1.4396-19.3718-1.4396-28.9945,0-.985-2.3236-2.1216-4.5967-3.3591-6.794-9.0166,1.5407-17.8059,4.2431-26.1405,8.0568C2.779,32.5304-1.6914,56.3725.5312,79.8863c9.6732,7.1476,20.5083,12.603,32.0505,16.0884,2.6014-3.4854,4.8998-7.1981,6.8698-11.0623-3.738-1.3891-7.3497-3.1318-10.8098-5.1523.9092-.6567,1.7932-1.3386,2.6519-1.9953,20.281,9.547,43.7696,9.547,64.0758,0,.8587.7072,1.7427,1.3891,2.6519,1.9953-3.4601,2.0457-7.0718,3.7632-10.835,5.1776,1.97,3.8642,4.2683,7.5769,6.8698,11.0623,11.5419-3.4854,22.3769-8.9156,32.0509-16.0631,2.626-27.2771-4.496-50.9172-18.817-71.8548C98.9811,4.2684,90.1918,1.5659,81.1752.0505l-.0252-.0505ZM42.2802,65.4144c-6.2383,0-11.4159-5.6575-11.4159-12.6535s4.9755-12.6788,11.3907-12.6788,11.5169,5.708,11.4159,12.6788c-.101,6.9708-5.026,12.6535-11.3907,12.6535ZM84.3576,65.4144c-6.2637,0-11.3907-5.6575-11.3907-12.6535s4.9755-12.6788,11.3907-12.6788,11.4917,5.708,11.3906,12.6788c-.101,6.9708-5.026,12.6535-11.3906,12.6535Z"/></svg>
+                        <span class="setting-group-title" style="margin-bottom:0; font-size:12px;">СИНХРОНИЗАЦИЯ С DISCORD</span>
+                    </div>
+                    <span class="badge-status-neutral">Не привязан</span>
+                </div>
+                <div class="discord-card-body">
+                    <div style="font-size:11px; color:var(--text-muted); line-height:1.5;">
+                        Привяжите ваш Discord для автоматического получения ролей уровня WARDOGS, классовых ролей, статуса спонсора и ответов по баг-репортам.
+                    </div>
+
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:12px;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <button id="btn-discord-link-code" class="btn btn-secondary btn-sm" onclick="requestDiscordLinkCode()">Получить код для Discord</button>
+                            <button class="btn btn-secondary btn-sm" style="display:inline-flex; align-items:center; gap:5px;" onclick="openDiscordCommunity()" title="Перейти на официальный сервер WarLink">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                                Наш Discord-сервер
+                            </button>
+                        </div>
+
+                        <div id="discord-link-code-result" class="discord-code-box" style="display:none;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:11px; color:var(--text-muted);">Код привязки:</span>
+                                <span id="val-discord-code" class="discord-code-val font-mono" onclick="copyDiscordCode()" title="Нажмите, чтобы скопировать код">------</span>
+                                <button class="btn-copy-code" onclick="copyDiscordCode()" title="Скопировать код в буфер">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                </button>
+                                <span id="val-discord-expires" style="font-size:10px; color:var(--text-muted);">(15 мин)</span>
+                            </div>
+                            <div style="font-size:10px; color:var(--text-muted); margin-top:4px;">
+                                Код автоматически скопирован. Перейдите в канал <strong>#привязка-warlink</strong> на сервере и нажмите кнопку «Привязать».
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Linked State Card -->
+            <div id="discord-card-linked" class="discord-card" style="display:none;">
+                <div class="discord-card-header">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <svg width="20" height="15" viewBox="0 0 126.644 96" fill="#5865F2"><path d="M81.15,0c-1.2376,2.1973-2.3489,4.4704-3.3591,6.794-9.5975-1.4396-19.3718-1.4396-28.9945,0-.985-2.3236-2.1216-4.5967-3.3591-6.794-9.0166,1.5407-17.8059,4.2431-26.1405,8.0568C2.779,32.5304-1.6914,56.3725.5312,79.8863c9.6732,7.1476,20.5083,12.603,32.0505,16.0884,2.6014-3.4854,4.8998-7.1981,6.8698-11.0623-3.738-1.3891-7.3497-3.1318-10.8098-5.1523.9092-.6567,1.7932-1.3386,2.6519-1.9953,20.281,9.547,43.7696,9.547,64.0758,0,.8587.7072,1.7427,1.3891,2.6519,1.9953-3.4601,2.0457-7.0718,3.7632-10.835,5.1776,1.97,3.8642,4.2683,7.5769,6.8698,11.0623,11.5419-3.4854,22.3769-8.9156,32.0509-16.0631,2.626-27.2771-4.496-50.9172-18.817-71.8548C98.9811,4.2684,90.1918,1.5659,81.1752.0505l-.0252-.0505ZM42.2802,65.4144c-6.2383,0-11.4159-5.6575-11.4159-12.6535s4.9755-12.6788,11.3907-12.6788,11.5169,5.708,11.4159,12.6788c-.101,6.9708-5.026,12.6535-11.3907,12.6535ZM84.3576,65.4144c-6.2637,0-11.3907-5.6575-11.3907-12.6535s4.9755-12.6788,11.3907-12.6788,11.4917,5.708,11.3906,12.6788c-.101,6.9708-5.026,12.6535-11.3906,12.6535Z"/></svg>
+                        <span class="setting-group-title" style="margin-bottom:0; font-size:12px;">DISCORD ПРИВЯЗАН</span>
+                    </div>
+                    <span class="badge-status-active">
+                        <span class="live-status-dot"></span>
+                        Подключен
+                    </span>
+                </div>
+                <div class="discord-card-body">
+                    <div class="discord-linked-row">
+                        <span class="info-label">Пользователь:</span>
+                        <span id="discord-linked-tag" class="info-value font-mono" style="color:var(--text-bright); font-weight:600;">@username</span>
+                    </div>
+                    <div class="discord-linked-row" style="margin-top:6px;">
+                        <span class="info-label">Синхронизация:</span>
+                        <span class="info-value" style="font-size:11px; color:var(--action);">Автоматически при обновлении прогрессии</span>
+                    </div>
+                    <div class="discord-roles-badges" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;">
+                        <span class="role-pill">Боец WarLink</span>
+                        <span id="role-pill-sponsor" class="role-pill role-pill-sponsor" style="display:none;">Спонсор WarLink</span>
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; border-top:1px solid var(--border-subtle); padding-top:10px;">
+                        <button class="btn btn-secondary btn-sm" onclick="openDiscordCommunity()" style="display:inline-flex; align-items:center; gap:5px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+                            Открыть Discord
+                        </button>
+                        <button class="btn-link" style="font-size:11px; color:var(--text-muted); cursor:pointer;" onclick="unlinkDiscordAccount()">Отвязать Discord</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: Устройства & ПК -->
+        <div id="acc-panel-security" class="acc-tab-panel" style="display:none;">
+            <div class="setting-group" style="margin-bottom: 10px;">
+                <span class="setting-group-title">АКТИВНЫЕ СЕССИИ И ДАННЫЕ</span>
+                <div class="setting-info-row">
+                    <span class="info-label">Дата регистрации:</span>
+                    <span id="val-account-created" class="info-value font-mono"><span class="skeleton" style="width: 80px; height: 11px;"></span></span>
+                </div>
+                <div class="setting-info-row" style="margin-top: 6px;">
+                    <span class="info-label">Привязанные ПК:</span>
+                    <span style="display:flex; align-items:center; gap:8px;">
+                        <span id="val-account-devices" class="info-value font-mono"><span class="skeleton" style="width: 35px; height: 11px;"></span></span>
+                        <button id="btn-reset-devices" class="btn-link" style="font-size: 11px; cursor: pointer; color: var(--action);" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие</button>
+                    </span>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <span class="setting-group-title">ПЕРЕНОС АККАУНТА НА ДРУГОЙ ПК</span>
+                <div class="setting-row">
+                    <span class="setting-label">Привязать 16-значный номер основного аккаунта:</span>
+                    <div style="display:flex; gap:6px; margin-top:4px;">
+                        <input type="text" id="input-link-account" class="form-input form-input-sm font-mono" placeholder="XXXX-XXXX-XXXX-XXXX" maxlength="19">
+                        <button class="btn btn-secondary btn-sm" onclick="linkAccountNumber()">Привязать</button>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                        Введите номер вашего основного ПК для синхронизации спонсорского статуса и досье.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: Поддержка шлюза -->
+        <div id="acc-panel-billing" class="acc-tab-panel" style="display:none;">
+            <div class="setting-group" style="margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">СТАТУС ПОДДЕРЖКИ</span>
+                    <div class="account-donate-links" style="display: flex; align-items: center; gap: 8px;">
+                        <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openDonateModal(event)">Поддержать сервер</button>
+                        <span style="color: #444; font-size: 10px;">·</span>
+                        <button class="btn-link" style="font-size: 11px; color: #ff8a50; cursor: pointer;" onclick="openDonateModalWithTab('boosty', event)">Донат на Boosty</button>
+                    </div>
+                </div>
+                <div class="setting-info-row">
+                    <span class="info-label">Срок действия спонсорства:</span>
+                    <span id="val-account-sponsor-until" class="info-value"><span class="skeleton" style="width: 90px; height: 11px;"></span></span>
+                </div>
+                <div class="setting-info-row" style="margin-top: 6px;">
+                    <span class="info-label">Всего поддержано:</span>
+                    <span id="val-account-total-donated" class="info-value font-mono" style="color: var(--action); font-weight: 600;"><span class="skeleton" style="width: 45px; height: 11px;"></span></span>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <span class="setting-group-title">ИСТОРИЯ ВЗНОСОВ</span>
+                <div id="account-donations-list" class="account-donations-list" style="margin-top: 6px;">
+                    <div class="donation-row skeleton-card">
+                        <div class="donation-left" style="gap: 8px;">
+                            <div class="skeleton" style="width: 70px; height: 11px;"></div>
+                            <div class="skeleton" style="width: 45px; height: 11px;"></div>
+                        </div>
+                        <div class="skeleton" style="width: 62px; height: 16px; border-radius: 2px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: gold-market-view.html -->
+<!-- VIEW: Gold Bar Market (ЗОЛОТООБМЕН WARDOGS) -->
+<div id="view-gold-market" class="details-view">
+    <div class="details-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="details-title font-mono">ЗОЛОТООБМЕН</span>
+            <span class="votes-badge" style="font-size: 10px; color: var(--text-muted); background: #181818; border: 1px solid #282828;">Сброс в 03:00 МСК</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <button class="btn-link" style="font-size: 11px; color: var(--text-muted); cursor: pointer;" onclick="refreshGoldMarket(event)">Обновить</button>
+            <button class="details-close" onclick="toggleGoldMarket(event)">Закрыть</button>
+        </div>
+    </div>
+    
+    <div class="details-content" style="display: flex; flex-direction: column; gap: 10px; padding: 0 4px 10px 4px; overflow-y: auto;">
+        
+        <!-- Top Stats Row (5 Cards) -->
+        <div class="gold-stats-row">
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ТЕКУЩИЙ КУРС</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-current">$ —</div>
+                <div class="gold-stat-sub font-mono" id="gold-stat-reset-date">За 1 слиток</div>
+            </div>
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ЗА 7 ДНЕЙ</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-7d">—</div>
+                <div class="gold-stat-sub">Динамика недели</div>
+            </div>
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ЗА 30 ДНЕЙ</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-30d">—</div>
+                <div class="gold-stat-sub">Динамика месяца</div>
+            </div>
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ЗА ВСЕ ВРЕМЯ</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-all">—</div>
+                <div class="gold-stat-sub">Общий тренд</div>
+            </div>
+            <div class="gold-stat-card" id="gold-buy-zone-card">
+                <div class="gold-stat-label">ЗОНА ПОКУПКИ</div>
+                <div class="gold-stat-val font-mono" style="color: #FF5E1F;">$166k – 200k</div>
+                <div class="gold-stat-sub" id="gold-stat-signal">Ожидание спада</div>
+            </div>
+        </div>
+
+        <!-- Notification Banner if in buy zone -->
+        <div id="gold-alert-banner" class="gold-alert-banner" style="display: none;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span id="gold-alert-banner-text">Слиток золота подешевел! Отличный момент для покупки.</span>
+        </div>
+
+        <!-- Chart Container -->
+        <div class="gold-chart-box">
+            <div class="gold-chart-header">
+                <div class="gold-chart-header-left">
+                    <span class="gold-chart-title font-mono">Стоимость слитка золота</span>
+                    <div id="gold-pinned-badge" class="gold-pinned-badge font-mono" style="display: none;">
+                        <span id="gold-pinned-date"></span>
+                        <b id="gold-pinned-price"></b>
+                        <span id="gold-pinned-pct"></span>
+                        <button type="button" class="gold-unpin-btn" onclick="unpinGoldPoint(event)" title="Сбросить метку">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="gold-timeframe-selector">
+                    <button class="gold-tf-btn" data-tf="7d" onclick="setGoldTimeframe('7d')">7Д</button>
+                    <button class="gold-tf-btn" data-tf="30d" onclick="setGoldTimeframe('30d')">30Д</button>
+                    <button class="gold-tf-btn active" data-tf="90d" onclick="setGoldTimeframe('90d')">90Д</button>
+                    <button class="gold-tf-btn" data-tf="all" onclick="setGoldTimeframe('all')">Все</button>
+                </div>
+            </div>
+            <div class="gold-canvas-wrap" id="gold-canvas-wrap">
+                <canvas id="gold-market-canvas" width="620" height="180"></canvas>
+                <!-- Floating Hover Tooltip -->
+                <div id="gold-chart-tooltip" class="gold-chart-tooltip" style="display: none;">
+                    <div class="gold-tt-date font-mono" id="gold-tt-date"></div>
+                    <div class="gold-tt-price font-mono" id="gold-tt-price"></div>
+                    <div class="gold-tt-change font-mono" id="gold-tt-change"></div>
+                </div>
+            </div>
+            <div class="gold-chart-footer font-mono">
+                <span>Мин: <b id="gold-stat-min">$166 000</b></span>
+                <span class="gold-legend-avg"><span class="gold-legend-dash-avg"></span> Средняя цена за период</span>
+                <span>Макс: <b id="gold-stat-max">—</b></span>
+            </div>
+        </div>
+
+        <!-- Converter Block -->
+        <div class="gold-converter-box">
+            <div class="gold-converter-header font-mono">КАЛЬКУЛЯТОР КОНВЕРТАЦИИ В ИГРОВУЮ ВАЛЮТУ ($)</div>
+            <div class="gold-converter-inputs">
+                <div class="gold-conv-group">
+                    <label class="gold-conv-label font-mono">Слитки золота</label>
+                    <div class="gold-input-wrap">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+                            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+                        </svg>
+                        <input type="number" id="gold-calc-bars" min="1" step="1" value="1" oninput="calculateGoldToCash()">
+                    </div>
+                </div>
+
+                <div class="gold-conv-eq">=</div>
+
+                <div class="gold-conv-group">
+                    <label class="gold-conv-label font-mono">Игровая валюта ($)</label>
+                    <div class="gold-input-wrap">
+                        <span class="gold-input-curr font-mono">$</span>
+                        <input type="text" id="gold-calc-cash" oninput="calculateCashToBars()">
+                    </div>
+                </div>
+            </div>
+            <div class="gold-converter-hint font-mono" id="gold-calc-hint">
+                1 слиток = $ — по текущему курсу рынка WARDOGS
+            </div>
+        </div>
+
+    </div>
+</div>
+
+            <!-- Inlined view: support-view.html -->
+<!-- VIEW: Conversational Support & Ticket Thread (Dark Cloudflare Utility) -->
+<div id="view-support" class="details-view">
+    <!-- Support Header Bar -->
+    <div class="details-header support-header-bar">
+        <div class="support-header-left">
+            <button class="btn-icon" id="btn-support-back" onclick="onSupportBackClick(event)" title="Назад" style="display: none; padding: 2px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <span class="details-title" id="support-main-title">ПОДДЕРЖКА</span>
+            <span id="support-ticket-id" class="support-ticket-tag font-mono">Новая тема</span>
+            <span id="support-status-badge" class="support-status-pill badge-status-neutral" style="display: none;">Загрузка...</span>
+        </div>
+        <div class="support-header-right">
+            <button id="btn-support-history-toggle" class="btn-link support-hdr-btn" onclick="toggleSupportHistoryView()" title="История всех обращений">История</button>
+            <button id="btn-support-new-topic" class="btn-link support-hdr-btn is-action" onclick="startNewSupportTopic()" title="Начать новую тему обращения">+ Новое</button>
+            <button class="details-close" onclick="switchView(null)">Закрыть</button>
+        </div>
+    </div>
+
+    <!-- PANE 1: Chat Stream Pane -->
+    <div id="support-chat-pane" class="support-pane" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+        <!-- Quick Actions Bar (Contextual chips) -->
+        <div class="support-quick-bar" id="support-quick-bar">
+            <button id="btn-quick-send-logs" class="btn-quick-chip" onclick="sendFreshSupportLogs()" title="Собрать и отправить актуальные логи клиента и игры">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <span>Отправить свежие логи</span>
+            </button>
+
+            <button id="btn-quick-ping" class="btn-quick-chip" onclick="sendSupportPingTest()" title="Проверить задержку до игровых серверов и прикрепить к диалогу">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                <span>Тест шлюза</span>
+            </button>
+
+            <button id="btn-quick-troubleshoot" class="btn-quick-chip" onclick="openTroubleshooterModal(event)" title="Запустить мастер автодиагностики сети, драйверов и шлюзов">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                </svg>
+                <span>Диагностика сети</span>
+            </button>
+
+            <button id="btn-quick-resolve" class="btn-quick-chip" onclick="resolveSupportTicket()" title="Подтвердить успешное решение инцидента" style="display: none;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <span>Вопрос решен</span>
+            </button>
+
+            <span id="support-action-feedback" class="font-mono support-feedback" style="display: none;"></span>
+        </div>
+
+        <!-- Chat Message Stream -->
+        <div id="support-chat-stream" class="support-chat-stream">
+            <div class="support-welcome-card">
+                <div class="support-welcome-title">Связь с разработчиком WarLink</div>
+                <div class="support-welcome-desc">
+                    Опишите проблему, вылет игры, задержку или вопрос по сервису.
+                    Для вашего вопроса будет открыта отдельная тема диалога.
+                </div>
+                <div class="support-preset-chips">
+                    <button class="support-chip" onclick="setPresetCategory('game_crash', 'Вылет из матча WARDOGS')">Вылет игры WARDOGS</button>
+                    <button class="support-chip" onclick="setPresetCategory('gateway_conn', 'Ошибка подключения к шлюзу')">Ошибка шлюза</button>
+                    <button class="support-chip" onclick="setPresetCategory('high_ping', 'Высокий пинг / потеря пакетов')">Высокий пинг</button>
+                    <button class="support-chip" onclick="setPresetCategory('discord_dpi', 'Сбой работы Discord')">Проблема с Discord</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Archived Banner (shown when viewing closed/resolved ticket) -->
+        <div id="support-archived-banner" class="support-archived-banner" style="display: none;">
+            <span>Обращение отмечено как решенное и находится в архиве.</span>
+            <button class="btn-link" style="color: var(--action); cursor: pointer; text-decoration: underline;" onclick="startNewSupportTopic()">Создать новое обращение</button>
+        </div>
+
+        <!-- Chat Input Bar -->
+        <div class="support-input-bar" id="support-input-bar">
+            <div style="flex: 1; position: relative;">
+                <textarea id="support-input-message" class="support-input-textarea font-sans" rows="1" placeholder="Напишите сообщение разработчику... (Enter для отправки, Shift+Enter — перенос)" onkeydown="onSupportInputKeyDown(event)"></textarea>
+            </div>
+            <button id="btn-support-send" class="btn btn-primary support-btn-send" onclick="sendSupportMessage()" title="Отправить сообщение">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m22 2-7 20-4-9-9-4Z"/>
+                    <path d="M22 2 11 13"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- PANE 2: History & Archive Pane -->
+    <div id="support-history-pane" class="support-pane" style="display: none; flex-direction: column; flex: 1; min-height: 0;">
+        <div class="support-history-header">
+            <span class="support-history-title font-mono">ВАШИ ОБРАЩЕНИЯ В ПОДДЕРЖКУ</span>
+            <span id="support-history-count" class="font-mono text-muted" style="font-size: 11px;">0 тикетов</span>
+        </div>
+        <div id="support-history-list" class="support-history-list">
+            <div class="support-history-card skeleton-card">
+                <div class="history-card-header">
+                    <div class="history-card-left" style="gap: 8px;">
+                        <div class="skeleton" style="width: 55px; height: 14px;"></div>
+                        <div class="skeleton" style="width: 110px; height: 14px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 45px; height: 14px;"></div>
+                </div>
+                <div class="skeleton" style="width: 85%; height: 12px; margin-top: 8px;"></div>
+                <div class="skeleton" style="width: 60%; height: 12px; margin-top: 4px;"></div>
+                <div class="history-card-footer" style="margin-top: 8px;">
+                    <div class="skeleton" style="width: 65px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 70px; height: 12px;"></div>
+                </div>
+            </div>
+            <div class="support-history-card skeleton-card">
+                <div class="history-card-header">
+                    <div class="history-card-left" style="gap: 8px;">
+                        <div class="skeleton" style="width: 55px; height: 14px;"></div>
+                        <div class="skeleton" style="width: 130px; height: 14px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 45px; height: 14px;"></div>
+                </div>
+                <div class="skeleton" style="width: 75%; height: 12px; margin-top: 8px;"></div>
+                <div class="skeleton" style="width: 45%; height: 12px; margin-top: 4px;"></div>
+                <div class="history-card-footer" style="margin-top: 8px;">
+                    <div class="skeleton" style="width: 65px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 70px; height: 12px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: add-game-modal.html -->
+<!-- MODAL: Community Game Voting & Suggestions -->
+<div id="modal-add-game" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="modal-title">Голосование за новые игры</span>
+                <span id="user-votes-badge" class="votes-badge">Голоса: 0 из 3</span>
+                <span id="user-vote-power-badge" class="badge-vote-power">Сила: x1</span>
+            </div>
+            <button class="btn-icon" onclick="closeAddGameModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        <div class="modal-body" style="padding-bottom: 8px;">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label class="form-label">Предложить игру (каталог Steam):</label>
+                <div class="vote-input-wrap">
+                    <input type="text" id="vote-search-input" class="form-input" placeholder="Введите название игры" oninput="onVoteSearchInput(this.value)" autocomplete="off">
+                    <div id="vote-autocomplete" class="vote-autocomplete" style="display: none;"></div>
+                </div>
+                <div id="vote-selected-preview" class="vote-selected-preview" style="display: none;">
+                    <div class="vote-selected-left">
+                        <img id="vote-selected-img" class="vote-selected-icon" src="" alt="">
+                        <span id="vote-selected-title" class="vote-selected-title"></span>
+                    </div>
+                    <button id="btn-submit-propose" class="btn btn-primary btn-sm" onclick="submitProposedGame()">Предложить (+1 голос)</button>
+                </div>
+            </div>
+            <div class="vote-section-divider"></div>
+            <div class="vote-list-header">
+                <span>Топ игр сообщества (цель: 50 голосов)</span>
+                <span id="vote-list-status" style="font-size: 10px; color: var(--text-muted);"></span>
+            </div>
+            <div id="vote-games-list" class="vote-games-list">
+                <div class="vote-game-card skeleton-card">
+                    <div class="vote-card-main">
+                        <div class="skeleton" style="width: 32px; height: 32px; border-radius: 2px; flex-shrink: 0;"></div>
+                        <div class="vote-card-info" style="gap: 6px;">
+                            <div class="vote-card-topline">
+                                <div class="skeleton" style="width: 120px; height: 12px;"></div>
+                                <div class="skeleton" style="width: 40px; height: 10px;"></div>
+                            </div>
+                            <div class="skeleton" style="width: 100%; height: 3px; border-radius: 1px;"></div>
+                        </div>
+                    </div>
+                    <div class="skeleton" style="width: 72px; height: 24px; border-radius: 2px; flex-shrink: 0;"></div>
+                </div>
+                <div class="vote-game-card skeleton-card">
+                    <div class="vote-card-main">
+                        <div class="skeleton" style="width: 32px; height: 32px; border-radius: 2px; flex-shrink: 0;"></div>
+                        <div class="vote-card-info" style="gap: 6px;">
+                            <div class="vote-card-topline">
+                                <div class="skeleton" style="width: 100px; height: 12px;"></div>
+                                <div class="skeleton" style="width: 40px; height: 10px;"></div>
+                            </div>
+                            <div class="skeleton" style="width: 100%; height: 3px; border-radius: 1px;"></div>
+                        </div>
+                    </div>
+                    <div class="skeleton" style="width: 72px; height: 24px; border-radius: 2px; flex-shrink: 0;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: donate-modal.html -->
+<!-- MODAL: Custom SBP & Multi-Method Donation & Boosty -->
+<div id="modal-donate-custom" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card donate-modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <span class="modal-title font-mono" style="font-weight: 700; letter-spacing: 0.04em;">ПОДДЕРЖКА // WARLINK</span>
+            </div>
+            <button class="btn-icon" onclick="closeDonateModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+        <!-- Navigation Tabs (Static, outside scrollable body) -->
+        <div class="donate-nav-tabs">
+            <button type="button" id="tab-donate-boosty" class="donate-tab-btn tab-boosty-active active" onclick="switchDonateTab('boosty')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <span>АВТОРУ (BOOSTY)</span>
+            </button>
+            <button type="button" id="tab-donate-server" class="donate-tab-btn" onclick="switchDonateTab('server')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                <span>СЕРВЕР (СБП)</span>
+            </button>
+            <button type="button" id="tab-donate-crypto" class="donate-tab-btn" onclick="switchDonateTab('crypto')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v12M9 10h6M9 14h6"/>
+                </svg>
+                <span>USDT (TRC20)</span>
+            </button>
+        </div>
+        <div class="modal-body">
+            <!-- TAB 1: Автору на Boosty (Default & Prominent) -->
+            <div id="donate-panel-boosty" class="boosty-panel">
+                <!-- 1. Special Project BF6 -->
+                <div class="boosty-spec-box">
+                    <div class="boosty-spec-header">
+                        <div class="boosty-spec-title-wrap">
+                            <span class="boosty-spec-badge font-mono">СПЕЦПРОЕКТ</span>
+                            <span class="boosty-spec-title">Battlefield 6 в WarLink</span>
+                        </div>
+                        <div class="boosty-spec-price font-mono">
+                            <span id="donate-bf6-target" class="price-active">1 600 ₽</span>
+                            <span class="price-old">3 200 ₽</span>
+                        </div>
+                    </div>
+                    <div class="boosty-spec-desc">
+                        Сбор на копию игры для снятия сетевых дампов и настройки.
+                    </div>
+                    <div class="boosty-bar-wrap">
+                        <div class="boosty-bar-track">
+                            <div id="donate-bf6-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                        </div>
+                        <span id="donate-bf6-text" class="boosty-bar-pct font-mono">0% (0 / 1 600 ₽)</span>
+                    </div>
+                    <div class="boosty-spec-btns font-mono">
+                        <button type="button" class="btn-boosty-action" onclick="openBoostyLink('https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link')">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            <span>Поддержать сбор на BF6</span>
+                        </button>
+                        <button type="button" class="btn-steam-action" onclick="openSteamLink('https://steamcommunity.com/id/MaksimPaladin/')">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.811c0 .052.005.105.005.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 14.819C1.903 20.099 6.702 24 12.021 24c6.627 0 12-5.373 12-12s-5.373-12-12.042-12zm4.463 11.891c-1.638 0-2.969-1.332-2.969-2.97 0-1.638 1.331-2.97 2.969-2.97 1.637 0 2.969 1.332 2.969 2.97 0 1.638-1.332 2.97-2.969 2.97zm-7.616 5.867c-1.023 0-1.854-.83-1.854-1.854 0-.46.168-.881.449-1.209l3.076 1.272c-.104.996-.902 1.791-1.671 1.791z"/></svg>
+                            <span>Подарить в Steam</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 2. Main Goal + One-Time Donate -->
+                <div class="boosty-main-goal-box">
+                    <div class="boosty-goal-top">
+                        <div class="boosty-goal-info">
+                            <span class="badge-dim font-mono">ЦЕЛЬ АВТОРА</span>
+                            <span id="boosty-goal-title" class="boosty-goal-name">WarLink | Поддержка дальнейшей разработки</span>
+                        </div>
+                        <span id="boosty-goal-target" class="boosty-goal-target font-mono">100 000 ₽</span>
+                    </div>
+                    <div class="boosty-goal-bottom">
+                        <div class="boosty-bar-wrap" style="flex: 1;">
+                            <div class="boosty-bar-track">
+                                <div id="boosty-goal-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                            </div>
+                            <span id="boosty-goal-text" class="boosty-bar-pct font-mono">0% (0 / 100 000 ₽)</span>
+                        </div>
+                        <button type="button" class="btn-boosty-donate-now font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            <span>ЗАДОНАТИТЬ</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 3. Subscriptions Row -->
+                <div class="boosty-subs-wrap">
+                    <div class="boosty-subs-label font-mono">ЕЖЕМЕСЯЧНЫЕ ПОДПИСКИ НА РАЗРАБОТКУ:</div>
+                    <div class="boosty-subs-row font-mono">
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Рекрут</span>
+                            <span class="sub-card-cost">100 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Оперативник</span>
+                            <span class="sub-card-cost">500 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Ветеран</span>
+                            <span class="sub-card-cost">1 000 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link')">
+                            <span class="sub-card-rank">Генерал</span>
+                            <span class="sub-card-cost">5 000 ₽<span class="sub-per">/мес</span></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Footer Note -->
+                <div class="boosty-footer-hint font-mono">
+                    Благодарю за поддержку! Донат на Boosty идет напрямую автору.
+                </div>
+            </div>
+
+            <!-- TAB 2: Серверный шлюз (СБП, Карты) -->
+            <div id="donate-panel-server" style="display: none;">
+                <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 2px; line-height: 1.3;">
+                    Софинансирование серверной инфраструктуры сообщества.
+                </div>
+                <div class="donate-perks-box">
+                    <div class="donate-perk-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>100 ₽ = 30 дней активного статуса «Спонсор»</span>
+                    </div>
+                    <div class="donate-perk-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Выделенный слот шлюза без очередей</span>
+                    </div>
+                    <div class="donate-perk-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Никнейм и аватарка на Доске почёта спонсоров</span>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 4px;">
+                    <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Способ оплаты:</label>
+                    <div class="donate-method-row">
+                        <button type="button" class="method-chip active" id="chip-method-sbp" onclick="selectDonateMethod('sbp')">
+                            <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect width="6" height="6" x="3" y="3" rx="1"/>
+                                <rect width="6" height="6" x="15" y="3" rx="1"/>
+                                <rect width="6" height="6" x="3" y="15" rx="1"/>
+                                <path d="M15 15h2v2h-2zM19 15h2v2h-2zM15 19h2v2h-2zM19 19h2v2h-2z"/>
+                            </svg>
+                            <span>СБП (QR-код)</span>
+                        </button>
+                        <button type="button" class="method-chip" id="chip-method-card" onclick="selectDonateMethod('card')">
+                            <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect width="20" height="14" x="2" y="5" rx="2"/>
+                                <line x1="2" x2="22" y1="10" y2="10"/>
+                            </svg>
+                            <span>Банковская карта РФ</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 4px;">
+                    <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Сумма пожертвования:</label>
+                    <div id="donate-presets-container" class="donate-preset-row">
+                        <button type="button" class="preset-chip active" onclick="selectDonatePreset(100)">100 ₽</button>
+                        <button type="button" class="preset-chip" onclick="selectDonatePreset(200)">200 ₽</button>
+                        <button type="button" class="preset-chip" onclick="selectDonatePreset(500)">500 ₽</button>
+                        <button type="button" class="preset-chip" onclick="selectDonatePreset(1000)">1000 ₽</button>
+                    </div>
+                    <div class="donate-input-wrap">
+                        <input type="number" id="input-donate-custom" class="form-input donate-custom-input" min="100" max="50000" step="50" value="100" oninput="onCustomDonateInput(this.value)">
+                        <span class="donate-currency-badge">₽</span>
+                    </div>
+                    <div id="donate-method-hint" style="font-size: 9px; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">
+                        Комиссия 1% • Моментальная оплата по QR-коду СБП через любое банковское приложение
+                    </div>
+                </div>
+
+                <div id="donate-calc-summary" class="donate-calc-summary">
+                    Статус «Спонсор» на 30 дней
+                </div>
+
+                <div style="margin-top: 6px;">
+                    <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 28px; font-size: 11px;" onclick="submitCustomDonation()">
+                        Поддержать сервер
+                    </button>
+                </div>
+            </div>
+
+            <!-- TAB 3: USDT (TRC20) Crypto Donate -->
+            <div id="donate-panel-crypto" class="crypto-panel" style="display: none;">
+                <div class="crypto-network-header font-mono">
+                    <span class="crypto-network-badge">TRON NETWORK (TRC20)</span>
+                    <span class="crypto-token-badge">Tether USD (USDT)</span>
+                </div>
+
+                <div class="crypto-qr-card">
+                    <div id="crypto-qr-container"></div>
+                </div>
+
+                <div class="crypto-addr-box font-mono">
+                    <label class="crypto-addr-label">Адрес кошелька TRC20 для пополнения:</label>
+                    <div class="crypto-addr-row">
+                        <input type="text" id="input-crypto-addr" class="crypto-addr-input" value="TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM" readonly onclick="this.select()">
+                        <button type="button" id="btn-copy-crypto-addr" class="btn-copy-crypto" onclick="copyCryptoAddress()">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            <span>Скопировать</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="crypto-warning-box font-mono">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span>Отправляйте только USDT через сеть TRC20 (Tron). Перевод других токенов или отправка через иные сети приведет к безвозвратной потере средств.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: dossier-modal.html -->
+<!-- MODAL: Sponsor Tactical Inspection Dossier Document -->
+<div id="modal-sponsor-dossier" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="dossier-modal-window" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <button class="modal-close-btn" onclick="closeSponsorDossier()" title="Закрыть досье">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+            </svg>
+        </button>
+        <div class="svg-dossier-wrapper" id="dossier-svg-container"></div>
+    </div>
+</div>
+
+            <!-- Inlined view: bug-report-modal.html -->
+<!-- MODAL: Bug Report & Diagnostics Submission (Dark Cloudflare Inspired Utility) -->
+<div id="modal-bug-report" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card bug-report-modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <!-- Modal Header -->
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                <span class="modal-title">Отчет о проблеме</span>
+                <span id="br-account-badge" class="br-account-tag font-mono">#Оператор</span>
+            </div>
+            <button class="btn-icon" onclick="closeBugReportModal()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18"/>
+                    <path d="m6 6 12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Form Body State -->
+        <div id="br-form-container" class="modal-body br-body">
+            <!-- Cooldown notice banner (anti-spam) -->
+            <div id="br-cooldown-banner" class="br-cooldown-banner" style="display: none;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <span id="br-cooldown-text">Повторная отправка отчета доступна через 03:00</span>
+            </div>
+
+            <!-- Problem Category Selection -->
+            <div class="form-group">
+                <label class="form-label" for="br-category-select">Категория инцидента:</label>
+                <div class="br-select-wrapper">
+                    <select id="br-category-select" class="form-select br-select" onchange="onBugReportCategoryChange(this.value)">
+                        <option value="game_crash">Сбой в игре WARDOGS / Вылет из матча</option>
+                        <option value="discord_dpi">Не работает Discord / Комплексный режим</option>
+                        <option value="gateway_conn">Ошибка подключения к шлюзу</option>
+                        <option value="high_ping">Высокий пинг / потеря пакетов</option>
+                        <option value="other">Другое</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- User Comment Textarea -->
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label class="form-label" for="br-comment-input">Описание ситуации:</label>
+                    <span id="br-char-counter" class="br-char-counter font-mono">0 / 500</span>
+                </div>
+                <textarea id="br-comment-input" class="form-textarea br-textarea" maxlength="500" rows="4" placeholder="Опишите, что произошло (например: потеряно соединение со шлюзом через 10 минут после старта раунда)..." oninput="onBugReportCommentInput(this.value)"></textarea>
+                <div id="br-comment-error" class="br-field-error" style="display: none;"></div>
+            </div>
+
+            <!-- Diagnostic Attachment Block -->
+            <div class="br-diag-block">
+                <div class="br-diag-header">
+                    <label class="br-checkbox-label">
+                        <input type="checkbox" id="br-attach-logs" checked onchange="onToggleAttachLogs(this.checked)">
+                        <span class="br-checkbox-text">Прикрепить диагностический лог</span>
+                    </label>
+                    <button type="button" id="btn-toggle-log-preview" class="btn-link br-preview-btn" onclick="toggleBugReportLogPreview()">
+                        <span id="br-preview-btn-text">Посмотреть лог</span>
+                        <svg id="br-preview-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Collapsible Log Inspector -->
+                <div id="br-log-preview-container" class="br-log-preview-container" style="display: none;">
+                    <div class="br-log-preview-header">
+                        <span class="br-log-meta-title">Деперсонализированный снимок системы</span>
+                        <span class="font-mono text-muted" style="font-size: 9px;">UTF-8 / Sanitized</span>
+                    </div>
+                    <pre id="br-log-preview-content" class="br-log-pre font-mono">Загрузка диагностического контекста...</pre>
+                </div>
+            </div>
+
+
+
+            <!-- Action Buttons -->
+            <div class="br-actions-row">
+                <button type="button" class="btn btn-secondary br-btn-cancel" onclick="closeBugReportModal()">Отмена</button>
+                <button type="button" id="btn-submit-bug-report" class="btn btn-primary br-btn-submit" onclick="submitBugReport()">
+                    <span id="br-submit-spinner" class="br-spinner" style="display: none;">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="spin-icon">
+                            <line x1="12" y1="2" x2="12" y2="6"/>
+                            <line x1="12" y1="18" x2="12" y2="22"/>
+                            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/>
+                            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/>
+                            <line x1="2" y1="12" x2="6" y2="12"/>
+                            <line x1="18" y1="12" x2="22" y2="12"/>
+                            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/>
+                            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>
+                        </svg>
+                    </span>
+                    <span id="br-submit-label">Отправить отчет</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Success State Container -->
+        <div id="br-success-container" class="modal-body br-success-body" style="display: none;">
+            <div class="br-success-icon-wrap">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                    <polyline points="9 12 11 14 15 10"/>
+                </svg>
+            </div>
+            <div class="br-success-title">Отчет успешно доставлен администратору</div>
+            <div class="br-success-text">
+                Ответ и рекомендации поступят депешей в ваш Центр уведомлений.
+            </div>
+
+            <div class="br-ticket-receipt">
+                <div class="br-receipt-row">
+                    <span class="br-receipt-label">Идентификатор тикета:</span>
+                    <span id="br-ticket-id" class="br-receipt-value font-mono">#TK-0000</span>
+                </div>
+                <div class="br-receipt-row">
+                    <span class="br-receipt-label">Время фиксации:</span>
+                    <span id="br-ticket-time" class="br-receipt-value font-mono">—</span>
+                </div>
+                <div class="br-receipt-row">
+                    <span class="br-receipt-label">Статус обработки:</span>
+                    <span class="br-receipt-value br-receipt-status">Принят в диспетчерскую</span>
+                </div>
+            </div>
+
+            <div style="margin-top: 14px; width: 100%;">
+                <button type="button" class="btn btn-secondary" style="width: 100%; justify-content: center; height: 32px;" onclick="closeBugReportModal()">
+                    Закрыть
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: routing-feedback-modal.html -->
+<!-- MODAL: Multi-Step Routing & Ping Feedback (Dark Cloudflare Inspired Utility) -->
+<div id="modal-routing-feedback" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card rf-modal-card" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="modal-header rf-header">
+            <div class="rf-header-left">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                    <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                    <line x1="6" y1="6" x2="6.01" y2="6"/>
+                    <line x1="6" y1="18" x2="6.01" y2="18"/>
+                </svg>
+                <span class="modal-title rf-title">ТЕСТ МАРШРУТОВ И ПИНГА</span>
+                <span id="rf-step-badge" class="rf-sub-badge font-mono">ШАГ 1 ИЗ 3</span>
+            </div>
+            <button class="btn-icon" onclick="closeRoutingFeedbackModal()" title="Закрыть">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 6 6 18"/>
+                    <path d="m6 6 12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Step Indicator Tabs -->
+        <div class="rf-step-nav">
+            <button type="button" class="rf-step-tab active" id="rf-tab-step-0" onclick="goToFeedbackStep(0)">
+                <span class="rf-tab-num" id="rf-tab-check-0">1</span>
+                <span class="rf-tab-label">Москва</span>
+            </button>
+            <button type="button" class="rf-step-tab" id="rf-tab-step-1" onclick="goToFeedbackStep(1)">
+                <span class="rf-tab-num" id="rf-tab-check-1">2</span>
+                <span class="rf-tab-label">Франкфурт</span>
+            </button>
+            <button type="button" class="rf-step-tab" id="rf-tab-step-2" onclick="goToFeedbackStep(2)">
+                <span class="rf-tab-num" id="rf-tab-check-2">3</span>
+                <span class="rf-tab-label">Транзит</span>
+            </button>
+        </div>
+
+        <!-- Form Body State -->
+        <div id="rf-form-container" class="rf-body">
+            <!-- Status Selection -->
+            <div class="rf-field-group">
+                <div class="rf-field-header">
+                    <label class="rf-label">Статус подключения на выбранном маршруте *</label>
+                    <span id="rf-status-error" class="rf-field-warn" style="display:none;">Выберите статус</span>
+                </div>
+                <div class="rf-status-row">
+                    <button type="button" class="rf-status-pill" data-status="works_great" onclick="onStepStatusSelect('works_great')">
+                        <span class="status-dot dot-green"></span>
+                        <span>Работает отлично</span>
+                    </button>
+                    <button type="button" class="rf-status-pill" data-status="has_issues" onclick="onStepStatusSelect('has_issues')">
+                        <span class="status-dot dot-yellow"></span>
+                        <span>Есть проблемы / лаги</span>
+                    </button>
+                    <button type="button" class="rf-status-pill" data-status="cant_connect" onclick="onStepStatusSelect('cant_connect')">
+                        <span class="status-dot dot-red"></span>
+                        <span>Не подключается</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Metrics Grid -->
+            <div class="rf-metrics-grid">
+                <div class="rf-field-group">
+                    <label class="rf-label" for="rf-step-ping">Пинг в игре *</label>
+                    <div class="rf-input-wrap">
+                        <input type="number" id="rf-step-ping" class="rf-input font-mono" placeholder="22" min="1" max="999" oninput="onStepPingInput(this.value)">
+                        <span class="rf-unit font-mono">мс</span>
+                    </div>
+                </div>
+
+                <div class="rf-field-group">
+                    <label class="rf-label" for="rf-step-match">Качество матча</label>
+                    <select id="rf-step-match" class="rf-select" onchange="onStepMatchChange(this.value)">
+                        <option value="perfect">Идеально (без фризов)</option>
+                        <option value="microstutter">Микрофризы / телепорты</option>
+                        <option value="disconnected">Выкинуло из матча</option>
+                    </select>
+                </div>
+
+                <div class="rf-field-group">
+                    <label class="rf-label" for="rf-step-discord">Голос в Discord</label>
+                    <select id="rf-step-discord" class="rf-select" onchange="onStepDiscordChange(this.value)">
+                        <option value="clean">Чистый звук</option>
+                        <option value="robovoice">Робовойс / задержка</option>
+                        <option value="no_connection">Не подключается</option>
+                        <option value="not_used">Не использую</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Comment -->
+            <div class="rf-field-group">
+                <div class="rf-field-header">
+                    <label class="rf-label" for="rf-step-comment">Заметки по этому маршруту (опционально)</label>
+                    <span id="rf-step-counter" class="rf-counter font-mono">0 / 300</span>
+                </div>
+                <textarea id="rf-step-comment" class="rf-textarea" maxlength="300" rows="2" placeholder="Ощущения от игры, регистрация урона, стабильность..." oninput="onStepCommentInput(this.value)"></textarea>
+            </div>
+
+            <!-- Footer Navigation -->
+            <div class="rf-footer">
+                <div class="rf-footer-left">
+                    <span id="rf-progress-summary" class="rf-progress-text font-mono">Заполнено: 0 / 3</span>
+                    <button type="button" class="rf-reset-link" onclick="resetFeedbackDraft()">Сбросить</button>
+                </div>
+                <div class="rf-actions">
+                    <button type="button" id="btn-rf-prev" class="btn btn-secondary rf-btn-action" onclick="prevFeedbackStep()" style="display:none;">
+                        Назад
+                    </button>
+                    <button type="button" id="btn-rf-next" class="btn btn-primary rf-btn-action" onclick="nextFeedbackStep()">
+                        Далее
+                    </button>
+                    <button type="button" id="btn-rf-submit" class="btn btn-primary rf-btn-action" onclick="submitMultiRouteFeedback()" style="display:none;">
+                        <span id="rf-btn-text">Отправить отчет</span>
+                        <span id="rf-btn-spinner" class="spinner" style="display: none; width: 12px; height: 12px;"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Success Screen -->
+        <div id="rf-success-container" class="rf-success-body" style="display: none;">
+            <div class="rf-success-badge">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+            </div>
+            <div class="rf-success-title">Все 3 маршрута протестированы!</div>
+            <div class="rf-success-desc">
+                Огромное спасибо за полный тест Москвы, Франкфурта и Транзита. Твой фидбек поможет откалибровать сеть и сделать подключение максимально быстрым.
+            </div>
+            <button type="button" class="btn btn-secondary" style="width: 120px; justify-content: center; height: 28px;" onclick="closeRoutingFeedbackModal()">
+                Готово
+            </button>
+        </div>
+    </div>
+</div>
+
+            <!-- Inlined view: troubleshooter-modal.html -->
+<!-- MODAL: Network & Driver Troubleshooter (Dark Cloudflare Utility) -->
+<div id="modal-troubleshooter" class="modal-backdrop" style="display: none;" onmousedown="onModalBackdropMouseDown(event)" onclick="onModalBackdropClick(event)">
+    <div class="modal-card" style="width: 540px; max-width: 95vw; max-height: 85vh; display: flex; flex-direction: column;" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+        <!-- Header -->
+        <div class="modal-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                </svg>
+                <span class="modal-title font-mono" style="font-weight: 700; letter-spacing: 0.04em;">ДИАГНОСТИКА СЕТИ // TROUBLESHOOTER</span>
+            </div>
+            <button class="btn-icon" onclick="closeTroubleshooterModal()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+        </div>
+
+        <!-- Body -->
+        <div class="modal-body" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px;">
+            <!-- Overall Status Banner -->
+            <div id="tb-status-banner" class="info-card" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-left: 3px solid var(--border-base);">
+                <div style="display: flex; flex-direction: column; gap: 2px;">
+                    <span id="tb-banner-title" class="font-mono" style="font-size: 12px; font-weight: 700; color: var(--text-bright);">Проверка сетевого стека...</span>
+                    <span id="tb-banner-sub" style="font-size: 11px; color: var(--text-muted);">Тестирование WinDivert, Wintun, DNS и игровых шлюзов</span>
+                </div>
+                <button id="btn-tb-recheck" class="btn btn-secondary btn-sm font-mono" onclick="runTroubleshooterDiagnostics()">
+                    <span>Повторить</span>
+                </button>
+            </div>
+
+            <!-- Checks List -->
+            <div id="tb-checks-list" style="display: flex; flex-direction: column; gap: 6px;">
+                <!-- Loading Skeletons -->
+                <div class="info-card skeleton-card" style="height: 38px;">
+                    <div class="skeleton" style="width: 140px; height: 12px;"></div>
+                </div>
+                <div class="info-card skeleton-card" style="height: 38px;">
+                    <div class="skeleton" style="width: 180px; height: 12px;"></div>
+                </div>
+                <div class="info-card skeleton-card" style="height: 38px;">
+                    <div class="skeleton" style="width: 160px; height: 12px;"></div>
+                </div>
+            </div>
+
+            <!-- Remediation Feedback Box (shown during or after fix) -->
+            <div id="tb-remediation-box" class="info-card" style="display: none; background: #161616; border-left: 3px solid #ffb800; padding: 10px 12px;">
+                <div class="font-mono" style="font-size: 11px; font-weight: 700; color: #ffb800; margin-bottom: 4px;">РЕЗУЛЬТАТ ИСПРАВЛЕНИЯ:</div>
+                <ul id="tb-remediation-list" style="margin: 0; padding-left: 18px; font-size: 11px; color: var(--text); line-height: 1.5;"></ul>
+            </div>
+        </div>
+
+        <!-- Footer Actions -->
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-top: 1px solid var(--border-base); background: #141414;">
+            <div style="display: flex; gap: 8px;">
+                <button id="btn-tb-fix" class="btn btn-primary btn-sm font-mono" onclick="applyTroubleshooterFix()" style="display: none;">
+                    <span>Исправить в 1 клик</span>
+                </button>
+                <button id="btn-tb-copy" class="btn btn-secondary btn-sm font-mono" onclick="copyTroubleshooterReport()" title="Скопировать текстовый отчет в буфер обмена">
+                    <span>Скопировать отчет</span>
+                </button>
+                <button id="btn-tb-send-ticket" class="btn btn-secondary btn-sm font-mono" onclick="sendTroubleshooterToTicket()" style="display: none;" title="Прикрепить отчет к текущему обращению в поддержку">
+                    <span>В тикет</span>
+                </button>
+            </div>
+            <button class="btn btn-secondary btn-sm font-mono" onclick="closeTroubleshooterModal()">Закрыть</button>
+        </div>
+    </div>
+</div>
+
 
             <!-- VIEW: Blocking Auto-Updater Overlay -->
             <div id="view-update-overlay" class="update-overlay" style="display: none;">
@@ -153,7 +2031,13 @@
         <!-- Quick Route Selector Popover (Bottom Left) -->
         <div id="gateway-route-popover" class="gateway-route-popover" style="display: none;" onclick="event.stopPropagation()">
             <div class="route-popover-header">
-                <span class="route-popover-title">МАРШРУТ ПОДКЛЮЧЕНИЯ</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M12 2v7m0 6v7m-7-10H2m15 0h5"/>
+                    </svg>
+                    <span class="route-popover-title">МАРШРУТ ПОДКЛЮЧЕНИЯ</span>
+                </div>
                 <button type="button" class="route-popover-close" onclick="closeGatewayRoutePopover(event)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
@@ -250,5 +2134,7 @@
     <script src="js/progression.js"></script>
     <script src="js/bug-report.js"></script>
     <script src="js/support.js"></script>
+    <script src="js/troubleshooter.js"></script>
+    <script src="js/gold-market.js"></script>
 </body>
 </html>

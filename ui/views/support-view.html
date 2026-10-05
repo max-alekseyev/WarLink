@@ -7,8 +7,8 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
             <span class="details-title" id="support-main-title">ПОДДЕРЖКА</span>
-            <span id="support-ticket-id" class="support-ticket-tag font-mono">#—</span>
-            <span id="support-status-badge" class="support-status-pill badge-status-neutral">Загрузка...</span>
+            <span id="support-ticket-id" class="support-ticket-tag font-mono">Новая тема</span>
+            <span id="support-status-badge" class="support-status-pill badge-status-neutral" style="display: none;">Загрузка...</span>
         </div>
         <div class="support-header-right">
             <button id="btn-support-history-toggle" class="btn-link support-hdr-btn" onclick="toggleSupportHistoryView()" title="История всех обращений">История</button>
@@ -30,14 +30,21 @@
                 <span>Отправить свежие логи</span>
             </button>
 
-            <button id="btn-quick-ping" class="btn-quick-chip" onclick="sendSupportPingTest()" title="Проверить задержку до шлюза Стокгольм и прикрепить к диалогу">
+            <button id="btn-quick-ping" class="btn-quick-chip" onclick="sendSupportPingTest()" title="Проверить задержку до игровых серверов и прикрепить к диалогу">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
                 </svg>
                 <span>Тест шлюза</span>
             </button>
 
-            <button id="btn-quick-resolve" class="btn-quick-chip" onclick="resolveSupportTicket()" title="Подтвердить успешное решение инцидента">
+            <button id="btn-quick-troubleshoot" class="btn-quick-chip" onclick="openTroubleshooterModal(event)" title="Запустить мастер автодиагностики сети, драйверов и шлюзов">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                </svg>
+                <span>Диагностика сети</span>
+            </button>
+
+            <button id="btn-quick-resolve" class="btn-quick-chip" onclick="resolveSupportTicket()" title="Подтвердить успешное решение инцидента" style="display: none;">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="20 6 9 17 4 12"/>
                 </svg>
@@ -49,8 +56,18 @@
 
         <!-- Chat Message Stream -->
         <div id="support-chat-stream" class="support-chat-stream">
-            <div id="support-chat-loading" class="support-chat-empty">
-                <span class="font-mono text-muted" style="font-size: 11px;">Синхронизация истории диалога...</span>
+            <div class="support-welcome-card">
+                <div class="support-welcome-title">Связь с разработчиком WarLink</div>
+                <div class="support-welcome-desc">
+                    Опишите проблему, вылет игры, задержку или вопрос по сервису.
+                    Для вашего вопроса будет открыта отдельная тема диалога.
+                </div>
+                <div class="support-preset-chips">
+                    <button class="support-chip" onclick="setPresetCategory('game_crash', 'Вылет из матча WARDOGS')">Вылет игры WARDOGS</button>
+                    <button class="support-chip" onclick="setPresetCategory('gateway_conn', 'Ошибка подключения к шлюзу')">Ошибка шлюза</button>
+                    <button class="support-chip" onclick="setPresetCategory('high_ping', 'Высокий пинг / потеря пакетов')">Высокий пинг</button>
+                    <button class="support-chip" onclick="setPresetCategory('discord_dpi', 'Сбой работы Discord')">Проблема с Discord</button>
+                </div>
             </div>
         </div>
 
@@ -81,8 +98,35 @@
             <span id="support-history-count" class="font-mono text-muted" style="font-size: 11px;">0 тикетов</span>
         </div>
         <div id="support-history-list" class="support-history-list">
-            <div class="support-chat-empty">
-                <span class="font-mono text-muted" style="font-size: 11px;">Загрузка списка обращений...</span>
+            <div class="support-history-card skeleton-card">
+                <div class="history-card-header">
+                    <div class="history-card-left" style="gap: 8px;">
+                        <div class="skeleton" style="width: 55px; height: 14px;"></div>
+                        <div class="skeleton" style="width: 110px; height: 14px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 45px; height: 14px;"></div>
+                </div>
+                <div class="skeleton" style="width: 85%; height: 12px; margin-top: 8px;"></div>
+                <div class="skeleton" style="width: 60%; height: 12px; margin-top: 4px;"></div>
+                <div class="history-card-footer" style="margin-top: 8px;">
+                    <div class="skeleton" style="width: 65px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 70px; height: 12px;"></div>
+                </div>
+            </div>
+            <div class="support-history-card skeleton-card">
+                <div class="history-card-header">
+                    <div class="history-card-left" style="gap: 8px;">
+                        <div class="skeleton" style="width: 55px; height: 14px;"></div>
+                        <div class="skeleton" style="width: 130px; height: 14px;"></div>
+                    </div>
+                    <div class="skeleton" style="width: 45px; height: 14px;"></div>
+                </div>
+                <div class="skeleton" style="width: 75%; height: 12px; margin-top: 8px;"></div>
+                <div class="skeleton" style="width: 45%; height: 12px; margin-top: 4px;"></div>
+                <div class="history-card-footer" style="margin-top: 8px;">
+                    <div class="skeleton" style="width: 65px; height: 12px;"></div>
+                    <div class="skeleton" style="width: 70px; height: 12px;"></div>
+                </div>
             </div>
         </div>
     </div>

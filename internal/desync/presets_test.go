@@ -45,8 +45,8 @@ func TestBuildFilteredArgs(t *testing.T) {
 	if strings.Contains(joinedGame, "list-google.txt") {
 		t.Errorf("expected list-google.txt to be omitted when freeInternet is false")
 	}
-	if !strings.Contains(joinedGame, "50000-50100") {
-		t.Errorf("expected game UDP port 50000-50100 in game args")
+	if !strings.Contains(joinedGame, "50000-65535") {
+		t.Errorf("expected game UDP port 50000-65535 in game args")
 	}
 	if !strings.Contains(joinedGame, "fake_default_quic") {
 		t.Errorf("expected quic fake for WARP in game args")
@@ -72,8 +72,8 @@ func TestBuildFilteredArgs(t *testing.T) {
 	if strings.Contains(joinedGame, ",12") {
 		t.Errorf("expected artifact port 12 to be removed")
 	}
-	if !strings.Contains(joinedGame, "--wf-udp-out=443,19294-19344,50000-50100") {
-		t.Errorf("expected --wf-udp-out=443,19294-19344,50000-50100 in game args")
+	if !strings.Contains(joinedGame, "--wf-udp-out=443,19294-19344,50000-65535") {
+		t.Errorf("expected --wf-udp-out=443,19294-19344,50000-65535 in game args")
 	}
 	if !strings.Contains(joinedGame, "list-exclude-user.txt") {
 		t.Errorf("expected list-exclude-user.txt to be present in game args")
@@ -92,8 +92,8 @@ func TestTenTspuStrategies(t *testing.T) {
 		t.Run(p.Name, func(t *testing.T) {
 			args := p.BuildArgs("C:\\WarLink\\warlink_core")
 			joined := strings.Join(args, " ")
-			if !strings.Contains(joined, "50000-50100") {
-				t.Errorf("preset %s missing UDP voice port range 50000-50100", p.Name)
+			if !strings.Contains(joined, "50000-65535") {
+				t.Errorf("preset %s missing UDP voice port range 50000-65535", p.Name)
 			}
 			if !strings.Contains(joined, "--out-range=-d3") {
 				t.Errorf("preset %s missing --out-range=-d3 Discord UDP cutoff", p.Name)
@@ -114,8 +114,11 @@ func TestCircularAdaptivePreset(t *testing.T) {
 	if !strings.Contains(joined, "circular:fails=3") {
 		t.Errorf("expected circular orchestrator in args, got: %s", joined)
 	}
-	if !strings.Contains(joined, "strategy=1") || !strings.Contains(joined, "strategy=2") || !strings.Contains(joined, "strategy=3:final") {
+	if !strings.Contains(joined, "strategy=1") || !strings.Contains(joined, "strategy=2") || !strings.Contains(joined, "strategy=6:final") {
 		t.Errorf("expected strategy steps in circular preset, got: %s", joined)
+	}
+	if !strings.Contains(joined, "key=google") || !strings.Contains(joined, "key=discord") || !strings.Contains(joined, "key=general") {
+		t.Errorf("expected per-service circular keys in circular preset, got: %s", joined)
 	}
 	if !strings.Contains(joined, "ip_autottl=-2,3-20") {
 		t.Errorf("expected ip_autottl in circular preset, got: %s", joined)
@@ -224,6 +227,30 @@ func TestDiscordVoiceWebRTCSafety(t *testing.T) {
 	}
 	if !strings.Contains(joinedFull, "repeats=6") {
 		t.Errorf("expected repeats=6 on Discord UDP discovery for reliable DPI bypass")
+	}
+}
+
+func TestDynamicPresetsAndRemoteFetch(t *testing.T) {
+	custom := []Preset{
+		{
+			Name: "Custom Server Strategy",
+			Args: []string{"--test-arg=1"},
+		},
+	}
+	SetDynamicPresets(custom)
+	defer SetDynamicPresets(nil)
+
+	p := GetPreset("Custom Server Strategy")
+	if p == nil {
+		t.Fatalf("expected to find custom dynamic preset")
+	}
+	if len(p.Args) != 1 || p.Args[0] != "--test-arg=1" {
+		t.Errorf("unexpected args for custom preset: %v", p.Args)
+	}
+
+	names := GetAvailablePresetNames()
+	if len(names) != 1 || names[0] != "Custom Server Strategy" {
+		t.Errorf("expected available names to return dynamic presets, got: %v", names)
 	}
 }
 

@@ -1,8 +1,13 @@
 package desync
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 type Preset struct {
@@ -10,7 +15,7 @@ type Preset struct {
 	Args []string `json:"args"`
 }
 
-const discordDomainsStr = "discord.com,discord.gg,discordapp.com,discordapp.net,discord.media,gateway.discord.gg,status.discord.com,dis.gd,discord-attachments-uploads-prd.storage.googleapis.com"
+const discordDomainsStr = "discord.com,discord.gg,discordapp.com,discordapp.net,discord.media,gateway.discord.gg,status.discord.com,dis.gd,discord-attachments-uploads-prd.storage.googleapis.com,discordcdn.com,cdn.discordapp.com,voice.discord.gg"
 
 func commonHeader() []string {
 	return []string{
@@ -18,7 +23,7 @@ func commonHeader() []string {
 		"--wf-tcp-out=80,443,2053,2083,2087,2096,8443",
 		"--wf-tcp-in=80,443",
 		"--wf-tcp-empty=0",
-		"--wf-udp-out=443,19294-19344,50000-50100",
+		"--wf-udp-out=443,19294-19344,50000-65535",
 		"--ctrack-timeouts=60:300:60:3600",
 		"--lua-init=@%LUA%zapret-lib.lua",
 		"--lua-init=@%LUA%zapret-antidpi.lua",
@@ -40,7 +45,7 @@ func commonUdpRules() []string {
 		"--payload=quic_initial",
 		"--lua-desync=fake:blob=fake_default_quic:repeats=11",
 		"--new",
-		"--filter-udp=19294-19344,50000-50100",
+		"--filter-udp=19294-19344,50000-65535",
 		"--filter-l7=discord,stun",
 		"--payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery",
 		"--out-range=-d3",
@@ -77,41 +82,118 @@ func commonHttpRules() []string {
 func makeTlsRules(googleDesync []string, generalDesync []string) []string {
 	var rules []string
 
-	// 1. Google & YouTube (dedicated safe desync: fooling=ts, multisplit - never tcp_md5 or fake SNI!)
-	rules = append(rules,
-		"--filter-tcp=443",
-		"--filter-l7=tls",
-		"--hostlist=%LISTS%list-google.txt",
-		"--hostlist-exclude=%LISTS%list-exclude.txt",
-		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
-		"--ipset-exclude=%LISTS%ipset-exclude.txt",
-		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--payload=tls_client_hello",
-	)
-	if len(googleDesync) > 0 {
-		rules = append(rules, googleDesync...)
-	} else {
-		rules = append(rules,
-			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
-			"--lua-desync=multisplit:pos=1,midsld",
-		)
+	hasCircular := false
+	for _, a := range generalDesync {
+		if strings.Contains(a, "circular") {
+			hasCircular = true
+			break
+		}
 	}
-	rules = append(rules, "--new")
 
-	// 2. Discord services (dedicated safe desync: fooling=ts, multisplit - never tcp_md5, which Cloudflare edge drops!)
-	rules = append(rules,
-		"--filter-tcp=443",
-		"--filter-l7=tls",
-		"--hostlist-domains="+discordDomainsStr,
-		"--hostlist-exclude=%LISTS%list-exclude.txt",
-		"--hostlist-exclude=%LISTS%list-exclude-user.txt",
-		"--ipset-exclude=%LISTS%ipset-exclude.txt",
-		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
-		"--payload=tls_client_hello",
-		"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
-		"--lua-desync=multisplit:pos=1,midsld",
-		"--new",
-	)
+	if hasCircular {
+		// 1. Google & YouTube with adaptive circular evasion chain (safe for GFE: SeqOverlap -> TS shift -> AutoTTL -> OOB)
+		rules = append(rules,
+			"--filter-tcp=443",
+			"--filter-l7=tls",
+			"--hostlist=%LISTS%list-google.txt",
+			"--hostlist-exclude=%LISTS%list-exclude.txt",
+			"--hostlist-exclude=%LISTS%list-exclude-user.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
+			"--in-range=-s34228",
+			"--lua-desync=circular:fails=3:key=google:time=60:retrans=3:maxseq=32768:inseq=4096:reset",
+			"--payload=tls_client_hello",
+			"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000:strategy=1",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6:strategy=2",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=2",
+			"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8:strategy=3",
+			"--lua-desync=multidisorder:pos=1,midsld:strategy=3",
+			"--lua-desync=oob:pos=1:strategy=4:final",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=4:final",
+			"--new",
+		)
+
+		// 2. Discord services with adaptive circular evasion chain (safe for Cloudflare: SeqOverlap -> TS shift -> AutoTTL -> OOB)
+		rules = append(rules,
+			"--filter-tcp=443",
+			"--filter-l7=tls",
+			"--hostlist-domains="+discordDomainsStr,
+			"--hostlist-exclude=%LISTS%list-exclude.txt",
+			"--hostlist-exclude=%LISTS%list-exclude-user.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
+			"--in-range=-s34228",
+			"--lua-desync=circular:fails=3:key=discord:time=60:retrans=3:maxseq=32768:inseq=4096:reset",
+			"--payload=tls_client_hello",
+			"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000:strategy=1",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6:strategy=2",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=2",
+			"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8:strategy=3",
+			"--lua-desync=multidisorder:pos=1,midsld:strategy=3",
+			"--lua-desync=oob:pos=1:strategy=4:final",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=4:final",
+			"--new",
+		)
+	} else {
+		// Non-circular preset: determine safest action for Google and Discord matching the preset style
+		var safeGoogleDesync []string
+		hasSeqOvl := false
+		hasTtl := false
+		for _, a := range generalDesync {
+			if strings.Contains(a, "seqovl") {
+				hasSeqOvl = true
+			}
+			if strings.Contains(a, "ip_ttl") || strings.Contains(a, "ip_autottl") {
+				hasTtl = true
+			}
+		}
+
+		if len(googleDesync) > 0 {
+			safeGoogleDesync = googleDesync
+		} else if hasSeqOvl {
+			safeGoogleDesync = []string{
+				"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000",
+			}
+		} else if hasTtl {
+			safeGoogleDesync = []string{
+				"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8",
+				"--lua-desync=multidisorder:pos=1,midsld",
+			}
+		} else {
+			safeGoogleDesync = []string{
+				"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-1000:repeats=6",
+				"--lua-desync=multisplit:pos=1,midsld",
+			}
+		}
+
+		// 1. Google & YouTube
+		rules = append(rules,
+			"--filter-tcp=443",
+			"--filter-l7=tls",
+			"--hostlist=%LISTS%list-google.txt",
+			"--hostlist-exclude=%LISTS%list-exclude.txt",
+			"--hostlist-exclude=%LISTS%list-exclude-user.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
+			"--payload=tls_client_hello",
+		)
+		rules = append(rules, safeGoogleDesync...)
+		rules = append(rules, "--new")
+
+		// 2. Discord services
+		rules = append(rules,
+			"--filter-tcp=443",
+			"--filter-l7=tls",
+			"--hostlist-domains="+discordDomainsStr,
+			"--hostlist-exclude=%LISTS%list-exclude.txt",
+			"--hostlist-exclude=%LISTS%list-exclude-user.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude.txt",
+			"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
+			"--payload=tls_client_hello",
+		)
+		rules = append(rules, safeGoogleDesync...)
+		rules = append(rules, "--new")
+	}
 
 	// 3. General blocked websites (strictly excludes Google and Discord lists)
 	rules = append(rules,
@@ -134,14 +216,6 @@ func makeTlsRules(googleDesync []string, generalDesync []string) []string {
 		"--ipset-exclude=%LISTS%ipset-exclude.txt",
 		"--ipset-exclude=%LISTS%ipset-exclude-user.txt",
 	)
-
-	hasCircular := false
-	for _, a := range generalDesync {
-		if strings.Contains(a, "circular") {
-			hasCircular = true
-			break
-		}
-	}
 
 	if hasCircular {
 		for _, a := range generalDesync {
@@ -211,12 +285,18 @@ var BuiltinPresets = []Preset{
 		Name: "Автокалибровка (Circular Adaptive)",
 		Args: buildPresetArgs(
 			"--in-range=-s34228",
-			"--lua-desync=circular:fails=3:time=60:retrans=3:maxseq=32768:inseq=4096:reset",
-			"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8:strategy=1",
-			"--lua-desync=multidisorder:pos=1,midsld:strategy=1",
-			"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000:strategy=2",
-			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-10000:repeats=6:strategy=3:final",
-			"--lua-desync=multisplit:pos=1,midsld:strategy=3:final",
+			"--lua-desync=circular:fails=3:key=general:time=60:retrans=3:maxseq=32768:inseq=4096:reset",
+			"--lua-desync=multisplit:pos=1,midsld:seqovl=568:seqovl_pattern=0x1603030000:strategy=1",
+			"--lua-desync=fake:blob=fake_default_tls:ip_ttl=8:ip_autottl=-2,3-20:repeats=8:strategy=2",
+			"--lua-desync=multidisorder:pos=1,midsld:strategy=2",
+			"--lua-desync=fake:blob=fake_default_tls:tcp_ts=-10000:repeats=6:tls_mod=rnd,dupsid:strategy=3",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=3",
+			"--lua-desync=oob:pos=1:strategy=4",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=4",
+			"--lua-desync=fake:blob=fake_default_tls:badsum:ip_ttl=8:ip_autottl=-2,3-20:repeats=11:tls_mod=rndsni:strategy=5",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=5",
+			"--lua-desync=fake:blob=fake_default_tls:tls_mod=sni=gosuslugi.ru:tcp_ts=-1000:repeats=6:strategy=6:final",
+			"--lua-desync=multisplit:pos=1,midsld:strategy=6:final",
 		),
 	},
 	{
@@ -445,8 +525,76 @@ var legacyPresets = []Preset{
 	},
 }
 
+var (
+	dynamicPresetsMu sync.RWMutex
+	dynamicPresets   []Preset
+)
+
+// SetDynamicPresets replaces current active presets with remotely fetched presets.
+func SetDynamicPresets(presets []Preset) {
+	dynamicPresetsMu.Lock()
+	defer dynamicPresetsMu.Unlock()
+	if len(presets) > 0 {
+		dynamicPresets = presets
+	}
+}
+
+// GetDynamicPresets returns active dynamic presets or falls back to BuiltinPresets.
+func GetDynamicPresets() []Preset {
+	dynamicPresetsMu.RLock()
+	defer dynamicPresetsMu.RUnlock()
+	if len(dynamicPresets) > 0 {
+		return dynamicPresets
+	}
+	return BuiltinPresets
+}
+
+// FetchRemoteDesyncConfig queries the server API for updated desync presets.
+func FetchRemoteDesyncConfig(serverAPI string) ([]Preset, error) {
+	if serverAPI == "" {
+		return nil, fmt.Errorf("server API not provided")
+	}
+	apiURL := fmt.Sprintf("%s/api/v1/desync/config", strings.TrimRight(serverAPI, "/"))
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Get(apiURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch remote desync config: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned HTTP %d for desync config", resp.StatusCode)
+	}
+
+	var res struct {
+		Success bool     `json:"success"`
+		Version string   `json:"version,omitempty"`
+		Presets []Preset `json:"presets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("failed to decode desync config JSON: %w", err)
+	}
+	if !res.Success || len(res.Presets) == 0 {
+		return nil, fmt.Errorf("server returned empty or unsuccessful desync config")
+	}
+
+	SetDynamicPresets(res.Presets)
+	return res.Presets, nil
+}
+
 func GetPreset(name string) *Preset {
 	norm := strings.TrimSuffix(strings.TrimSpace(name), ".bat")
+
+	dynamicPresetsMu.RLock()
+	for i := range dynamicPresets {
+		if strings.EqualFold(dynamicPresets[i].Name, norm) {
+			p := dynamicPresets[i]
+			dynamicPresetsMu.RUnlock()
+			return &p
+		}
+	}
+	dynamicPresetsMu.RUnlock()
+
 	for i := range BuiltinPresets {
 		if strings.EqualFold(BuiltinPresets[i].Name, norm) {
 			return &BuiltinPresets[i]
@@ -464,6 +612,17 @@ func GetPreset(name string) *Preset {
 }
 
 func GetAvailablePresetNames() []string {
+	dynamicPresetsMu.RLock()
+	if len(dynamicPresets) > 0 {
+		res := make([]string, len(dynamicPresets))
+		for i, p := range dynamicPresets {
+			res[i] = p.Name
+		}
+		dynamicPresetsMu.RUnlock()
+		return res
+	}
+	dynamicPresetsMu.RUnlock()
+
 	res := make([]string, len(BuiltinPresets))
 	for i, p := range BuiltinPresets {
 		res[i] = p.Name
@@ -507,7 +666,7 @@ func (p *Preset) BuildModularArgs(coreDir string, freeInternet bool) []string {
 	// 2. Unblocks voice UDP ports (Discord voice and RTP).
 	// 3. Selectively unblocks game auth & backend HTTPS (TCP 443) via list-general.txt.
 	// Browser, banking, and general web traffic remain 100% direct and untouched!
-	const udpPortsStr = "19294-19344,50000-50100"
+	const udpPortsStr = "19294-19344,50000-65535"
 
 	return []string{
 		"--blob=fake_discord:@" + binSep + "ACTIVE_DISCORD_UDP.bin",

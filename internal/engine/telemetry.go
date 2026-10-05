@@ -1,27 +1,56 @@
 package engine
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
+	"warlink/internal/config"
 	"warlink/internal/singbox"
 )
 
+// ReportEngineCrash sends a background crash/incident report to the telemetry endpoint.
+func ReportEngineCrash(errorType, message string, contextData map[string]interface{}) {
+	payload := map[string]interface{}{
+		"device_id":   singbox.GetMachineGUID(),
+		"app_version": singbox.ClientVersion,
+		"error_type":  errorType,
+		"message":     message,
+		"context":     contextData,
+	}
+	cfg := config.Load()
+	if cfg != nil {
+		payload["account_number"] = cfg.AccountNumber
+	}
+	go func() {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		apiURL := fmt.Sprintf("http://%s/api/v1/telemetry/crash", singbox.StockholmCoreIP)
+		c := &http.Client{Timeout: 5 * time.Second}
+		resp, postErr := c.Post(apiURL, "application/json", bytes.NewReader(body))
+		if postErr == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+}
+
 // TelemetryMonitor tracks real-time physical ping and packet loss over a sliding window.
 type TelemetryMonitor struct {
-	mu             sync.Mutex
-	stopChan       chan struct{}
-	isRunning      bool
-	pingMs         int
-	packetLoss     int
-	history        []bool // true = success, false = dropped/timeout
-	rtts           []int  // rtt in ms for successful probes
-	windowSize     int
-	useSocksProxy  bool
-	socksAddr      string
-	directTarget   string
+	mu           sync.Mutex
+	stopChan     chan struct{}
+	isRunning    bool
+	pingMs       int
+	packetLoss   int
+	history      []bool // true = success, false = dropped/timeout
+	rtts         []int  // rtt in ms for successful probes
+	windowSize   int
+	directTarget string
 }
 
 func NewTelemetryMonitor() *TelemetryMonitor {
@@ -34,11 +63,10 @@ func NewTelemetryMonitor() *TelemetryMonitor {
 		}
 	}
 	return &TelemetryMonitor{
-		windowSize:    15,
-		socksAddr:     "127.0.0.1:40000",
-		directTarget:  target,
-		history:       make([]bool, 0, 15),
-		rtts:          make([]int, 0, 15),
+		windowSize:   15,
+		directTarget: target,
+		history:      make([]bool, 0, 15),
+		rtts:         make([]int, 0, 15),
 	}
 }
 
@@ -57,14 +85,13 @@ func (tm *TelemetryMonitor) SetDirectTarget(target string) {
 }
 
 // Start begins the background probing loop while the tunnel is connected.
-func (tm *TelemetryMonitor) Start(useSocks bool) {
+func (tm *TelemetryMonitor) Start(_ ...bool) {
 	tm.mu.Lock()
 	if tm.isRunning {
 		tm.mu.Unlock()
 		return
 	}
 	tm.isRunning = true
-	tm.useSocksProxy = useSocks
 	tm.stopChan = make(chan struct{})
 	tm.history = tm.history[:0]
 	tm.rtts = tm.rtts[:0]
@@ -134,24 +161,10 @@ func (tm *TelemetryMonitor) loop() {
 
 func (tm *TelemetryMonitor) probe() {
 	tm.mu.Lock()
-	useSocks := tm.useSocksProxy
-	socksAddr := tm.socksAddr
 	directTarget := tm.directTarget
 	tm.mu.Unlock()
 
-	var rtt int
-	var success bool
-
-	if useSocks {
-		rtt, success = probeViaSocks5(socksAddr, "1.1.1.1", 443, 1800*time.Millisecond)
-	} else {
-		rtt, success = probeDirect(directTarget, 1800*time.Millisecond)
-	}
-
-	// Fallback to direct probe if socks fails or is not ready yet
-	if !success && useSocks {
-		rtt, success = probeDirect(directTarget, 1500*time.Millisecond)
-	}
+	rtt, success := probeDirect(directTarget, 1800*time.Millisecond)
 
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -210,59 +223,3 @@ func probeDirect(target string, timeout time.Duration) (int, bool) {
 	return elapsed, true
 }
 
-// probeViaSocks5 performs an RFC 1928 SOCKS5 handshake through the local proxy
-func probeViaSocks5(socksAddr, destHost string, destPort int, timeout time.Duration) (int, bool) {
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", socksAddr)
-	if err != nil {
-		return 0, false
-	}
-	defer conn.Close()
-
-	_ = conn.SetDeadline(time.Now().Add(timeout))
-
-	// 1. Send SOCKS5 Greeting (VER 5, 1 Method: NO_AUTH)
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
-		return 0, false
-	}
-
-	// 2. Read Server Method Selection
-	buf := make([]byte, 2)
-	if _, err := conn.Read(buf); err != nil || buf[0] != 0x05 || buf[1] != 0x00 {
-		return 0, false
-	}
-
-	// 3. Send SOCKS5 Connect Request (IPv4 or Domain)
-	req := make([]byte, 0, 10)
-	req = append(req, 0x05, 0x01, 0x00) // VER 5, CMD 1 (CONNECT), RSV 0
-
-	ip := net.ParseIP(destHost).To4()
-	if ip != nil {
-		req = append(req, 0x01) // ATYP 1 (IPv4)
-		req = append(req, ip...)
-	} else {
-		req = append(req, 0x03, byte(len(destHost))) // ATYP 3 (Domain)
-		req = append(req, []byte(destHost)...)
-	}
-	req = append(req, byte(destPort>>8), byte(destPort&0xFF))
-
-	if _, err := conn.Write(req); err != nil {
-		return 0, false
-	}
-
-	// 4. Read Connection Response
-	resp := make([]byte, 10)
-	if _, err := conn.Read(resp); err != nil || resp[0] != 0x05 || resp[1] != 0x00 {
-		return 0, false
-	}
-
-	elapsed := int(time.Since(start).Milliseconds())
-	if elapsed < 1 {
-		elapsed = 1
-	}
-	return elapsed, true
-}

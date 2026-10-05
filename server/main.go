@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"math"
@@ -37,14 +38,20 @@ import (
 	"image/jpeg"
 	_ "image/png"
 
+	_ "embed"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"warlink/internal/config"
+	"warlink/internal/desync"
 	"warlink/server/aclgen"
 )
 
+//go:embed admin_dialogs.html
+var embeddedAdminDialogsHTML string
+
+
 const (
-	ServerAppVersion     = "v2.2.0"
+	ServerAppVersion     = "v2.2.1"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
@@ -128,6 +135,16 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.statusCode = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 type IPRateLimiter struct {
@@ -282,6 +299,12 @@ type AppState struct {
 	drainMode           bool
 	lastSettingsLoad    time.Time
 	featureMu           sync.RWMutex
+
+	// Gold market cache & daily price alert
+	goldMarketMu       sync.RWMutex
+	cachedGoldData     []byte
+	lastGoldPointTime  int64
+	lastGoldAlertPoint int64
 
 	// Telemetry and Analytics Counters
 	metricRequestsTotal       uint64
@@ -643,6 +666,7 @@ func main() {
 				go state.startAnalyticsCollector()
 				go state.startTicketAutoCloseWorker()
 				go state.startSettingsSyncWorker()
+				go state.startOpsAlertingWorker()
 			} else {
 				log.Printf("[DB] Warning: PostgreSQL ping failed: %v", errPing)
 			}
@@ -663,6 +687,9 @@ func main() {
 	}
 	state.initRedis(redisAddr)
 
+	// Background gold market poller and daily price drop alerter (03:00 MSK reset)
+	go state.startGoldMarketWorker()
+
 	// Internal HTTP Auth server for Hysteria 2 (listening only on 127.0.0.1:8080)
 	go func() {
 		internalMux := http.NewServeMux()
@@ -682,6 +709,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/session/release", state.handleSessionRelease)
 	publicMux.HandleFunc("/api/v1/profiles", state.handleProfiles)
 	publicMux.HandleFunc("/api/v1/singbox/config", state.handleSingBoxConfig)
+	publicMux.HandleFunc("/api/v1/desync/config", state.handleDesyncConfig)
 	publicMux.HandleFunc("/api/v1/donate", state.handleDonate)
 	publicMux.HandleFunc("/api/v1/votes", state.handleVotes)
 	publicMux.HandleFunc("/api/v1/analytics", state.handleAnalytics)
@@ -690,8 +718,10 @@ func main() {
 	publicMux.HandleFunc("/api/v1/releases", state.handleReleases)
 	publicMux.HandleFunc("/api/v1/notifications", state.handleNotifications)
 	publicMux.HandleFunc("/api/v1/notifications/read", state.handleNotificationRead)
+	publicMux.HandleFunc("/api/v1/events", state.handleEventsSSE)
 	publicMux.HandleFunc("/api/v1/admin/notifications", state.handleAdminNotifications)
 	publicMux.HandleFunc("/api/v1/admin/reload-filters", state.handleReloadFilters)
+	publicMux.HandleFunc("/api/v1/market/gold", state.handleGoldMarket)
 	publicMux.HandleFunc("/api/v1/sponsors", state.handleSponsors)
 	publicMux.HandleFunc("/api/v1/progression/database", state.handleProgressionDatabase)
 	publicMux.HandleFunc("/api/v1/profile", state.handleProfile)
@@ -715,6 +745,9 @@ func main() {
 	_ = os.MkdirAll(staticDir, 0755)
 	publicMux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 
+	publicMux.HandleFunc("/api/v1/client/features", state.handleClientFeatures)
+	publicMux.HandleFunc("/api/v1/features", state.handleClientFeatures)
+	publicMux.HandleFunc("/api/v1/admin/features/flags", state.handleAdminFeatureFlags)
 	publicMux.HandleFunc("/api/v1/admin/features", state.handleAdminFeatures)
 	publicMux.HandleFunc("/api/v1/admin/settings", state.handleAdminSettings)
 	publicMux.HandleFunc("/api/v1/admin/slots", state.handleAdminSettings)
@@ -737,10 +770,16 @@ func main() {
 	publicMux.HandleFunc("/api/v1/tickets/resolve", state.handleClientTicketResolve)
 	publicMux.HandleFunc("/api/v1/admin/tickets", state.handleAdminTicketsList)
 	publicMux.HandleFunc("/api/v1/admin/tickets/", state.handleAdminTicketRouter)
+	publicMux.HandleFunc("/api/v1/admin/tickets/canned", state.handleAdminTicketsCanned)
+	publicMux.HandleFunc("/api/v1/admin/dialogs/auth", state.handleAdminDialogsAuth)
 	publicMux.HandleFunc("/admin/tickets", state.handleAdminTicketWeb)
 	publicMux.HandleFunc("/admin/tickets/", state.handleAdminTicketWeb)
+	publicMux.HandleFunc("/admin/dialogs", state.handleAdminDialogsWeb)
 	publicMux.HandleFunc("/api/v1/routing-feedback", state.handleRoutingFeedback)
 	publicMux.HandleFunc("/api/v1/telemetry/beacon", state.handleTelemetryBeacon)
+	publicMux.HandleFunc("/api/v1/telemetry/crash", state.handleTelemetryCrash)
+	publicMux.HandleFunc("/api/v1/admin/crashes", state.handleAdminCrashes)
+	publicMux.HandleFunc("/api/v1/admin/logs", state.handleAdminLogs)
 	publicMux.HandleFunc("/api/v1/admin/routing-feedback", state.handleAdminRoutingFeedback)
 	publicMux.HandleFunc("/admin/routing-feedback", state.handleAdminRoutingFeedbackWeb)
 	publicMux.HandleFunc("/admin/routing-feedback/", state.handleAdminRoutingFeedbackWeb)
@@ -750,7 +789,6 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/community/goal", state.handleAdminCommunityGoals)
 	publicMux.HandleFunc("/api/v1/games/catalog", state.handleGamesCatalog)
 	publicMux.HandleFunc("/api/v1/admin/games/catalog", state.handleAdminGamesCatalog)
-	publicMux.HandleFunc("/api/v1/dpi/strategies", state.handleDPIStrategies)
 	publicMux.HandleFunc("/api/v1/announcements", state.handleAnnouncements)
 	publicMux.HandleFunc("/api/v1/admin/announcements", state.handleAdminAnnouncements)
 	publicMux.HandleFunc("/api/v1/sponsors/tiers", state.handleSponsorsTiers)
@@ -802,10 +840,10 @@ func (s *AppState) loadConfig(path string) {
 	}
 
 	if s.cfg.ServerName == "" {
-		s.cfg.ServerName = "WarLink • Stockholm GPN Telemetry"
+		s.cfg.ServerName = "WarLink • Gaming Gateway"
 	}
 	if s.cfg.ServerLocation == "" {
-		s.cfg.ServerLocation = "Stockholm, Sweden"
+		s.cfg.ServerLocation = "Frankfurt, Germany"
 	}
 	if s.cfg.ServerPorts == "" {
 		s.cfg.ServerPorts = DefaultServerPorts
@@ -1374,10 +1412,22 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	gwLoc := "Франкфурт, Германия"
+	switch routeMode {
+	case "direct_moscow":
+		gwLoc = "Москва, Россия"
+	case "transit":
+		gwLoc = "Транзит Москва → Франкфурт"
+	case "direct_frankfurt", "direct_stockholm":
+		gwLoc = "Франкфурт, Германия"
+	default:
+		gwLoc = "Франкфурт, Германия"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":                           "online",
-		"location":                         s.cfg.ServerLocation,
+		"location":                         gwLoc,
 		"ping_hint_ms":                     livePing,
 		"active_sessions":                  activeCount,
 		"max_sessions":                     maxSessions,
@@ -1628,6 +1678,38 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+
+		// Check if account or device is banned
+		var banReason string
+		var banExpires sql.NullTime
+		errBan := s.db.QueryRow(`
+			SELECT reason, expires_at 
+			FROM security_bans 
+			WHERE (target_value = $1 AND $1 != '') 
+			   OR (target_value = $2 AND $2 != '')
+			ORDER BY id DESC LIMIT 1
+		`, accountNumber, req.DeviceID).Scan(&banReason, &banExpires)
+		if errBan == nil {
+			if !banExpires.Valid || banExpires.Time.After(time.Now()) {
+				atomic.AddUint64(&s.metricRejectionsBadSig, 1)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":  "banned",
+					"reason": banReason,
+				})
+				return
+			}
+		}
+
+		// Apply operator route override if configured
+		if accountNumber != "" {
+			var routeOv string
+			_ = s.db.QueryRow(`SELECT value FROM server_settings WHERE key = $1`, "route_override:"+accountNumber).Scan(&routeOv)
+			if routeOv != "" && routeOv != "auto" {
+				routeMode, connectedNode, gatewayIP = s.resolveRouteAndNode(r, routeOv)
+			}
+		}
 	}
 
 	// Record persistent connection history with resolved account, device, client version, and route
@@ -1637,9 +1719,17 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 
 	pubIP := s.getPublicIP(r)
-	serverField := ":443"
-	if pubIP != "" {
-		serverField = fmt.Sprintf("%s:443", pubIP)
+	targetGW := gatewayIP
+	if targetGW == "" {
+		targetGW = pubIP
+	}
+	gwPort := 443
+	if routeMode == "direct_moscow" {
+		gwPort = 8443
+	}
+	serverField := fmt.Sprintf("%s:%d", targetGW, gwPort)
+	if targetGW == "" {
+		serverField = fmt.Sprintf(":%d", gwPort)
 	}
 
 	maxSessions := s.cfg.MaxSessions
@@ -1675,7 +1765,9 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	// Check if this device already has an active session
 	existingToken, exists := s.deviceTokens[req.DeviceID]
 	serverPorts := s.cfg.ServerPorts
-	if serverPorts == "" {
+	if routeMode == "direct_moscow" {
+		serverPorts = "8443"
+	} else if serverPorts == "" {
 		serverPorts = DefaultServerPorts
 	}
 
@@ -2873,6 +2965,18 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		s.mu.RUnlock()
 	}
 
+	targetGatewayIP := sess.GatewayIP
+	if targetGatewayIP == "" {
+		targetGatewayIP = pubIP
+	}
+	if sess.RouteMode == "direct_moscow" {
+		serverPorts = "8443"
+	} else if sess.RouteMode == "direct_frankfurt" || sess.RouteMode == "transit" {
+		if serverPorts == "" || serverPorts == DefaultServerPorts {
+			serverPorts = "443,20000-30000"
+		}
+	}
+
 	targetGame := r.URL.Query().Get("game")
 	if targetGame == "" {
 		targetGame = sess.Game
@@ -2929,7 +3033,7 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		activeProfiles,
 		extraProcs,
 		includeWebServices,
-		pubIP,
+		targetGatewayIP,
 		serverPorts,
 		obfsPassword,
 		token,
@@ -2953,6 +3057,19 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"game":    targetGame,
 		"config":  parsedCfg,
+	})
+}
+
+func (s *AppState) handleDesyncConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"version": "2026.10.04.1",
+		"presets": desync.BuiltinPresets,
 	})
 }
 
@@ -3321,14 +3438,67 @@ func (s *AppState) initDatabase() {
 	CREATE INDEX IF NOT EXISTS idx_rta_created ON routing_telemetry_auto(created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_rta_route ON routing_telemetry_auto(route_mode);
 	CREATE INDEX IF NOT EXISTS idx_rta_dev ON routing_telemetry_auto(device_id);
+	ALTER TABLE routing_telemetry_auto ADD COLUMN IF NOT EXISTS trace_id TEXT NOT NULL DEFAULT '';
+	CREATE INDEX IF NOT EXISTS idx_rta_trace ON routing_telemetry_auto(trace_id);
+
+	CREATE TABLE IF NOT EXISTS crash_reports (
+		id BIGSERIAL PRIMARY KEY,
+		account_number TEXT NOT NULL DEFAULT '',
+		device_id TEXT NOT NULL DEFAULT '',
+		app_version TEXT NOT NULL DEFAULT '',
+		error_type TEXT NOT NULL DEFAULT 'unknown',
+		message TEXT NOT NULL DEFAULT '',
+		stack_trace TEXT NOT NULL DEFAULT '',
+		os_info TEXT NOT NULL DEFAULT '',
+		context_data JSONB DEFAULT '{}'::jsonb,
+		client_ip TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_crash_created ON crash_reports(created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_crash_type ON crash_reports(error_type);
+	CREATE INDEX IF NOT EXISTS idx_crash_acc ON crash_reports(account_number);
+
+	CREATE TABLE IF NOT EXISTS security_bans (
+		id BIGSERIAL PRIMARY KEY,
+		target_type VARCHAR(32) NOT NULL,
+		target_value VARCHAR(255) NOT NULL,
+		reason TEXT NOT NULL,
+		banned_by VARCHAR(128) NOT NULL DEFAULT 'admin',
+		expires_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_security_bans_target ON security_bans(target_value);
+
+	CREATE TABLE IF NOT EXISTS feature_flags (
+		name VARCHAR(64) PRIMARY KEY,
+		description TEXT NOT NULL DEFAULT '',
+		enabled BOOLEAN NOT NULL DEFAULT true,
+		rollout_pct INTEGER NOT NULL DEFAULT 100,
+		strategy VARCHAR(32) NOT NULL DEFAULT 'percentage',
+		target_accounts JSONB DEFAULT '[]'::jsonb,
+		min_version VARCHAR(32) NOT NULL DEFAULT '',
+		payload JSONB DEFAULT '{}'::jsonb,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_ff_enabled ON feature_flags(enabled);
 
 	DROP TABLE IF EXISTS active_sessions CASCADE;
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		log.Printf("[DB] Error initializing schema: %v", err)
 	} else {
-		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, tickets, ticket_messages, telemetry_auto, active sessions in RAM)")
+		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, tickets, ticket_messages, telemetry_auto, feature_flags, active sessions in RAM)")
 	}
+
+	_, _ = s.db.Exec(`
+		INSERT INTO feature_flags (name, description, enabled, rollout_pct, strategy, target_accounts, payload)
+		VALUES 
+		  ('experimental_zapret_strategy', 'Канареечное тестирование экспериментальной стратегии Zapret на 10% аудитории', false, 10, 'percentage', '[]'::jsonb, '{"preset":"ultra_desync_v2","override_default":false}'::jsonb),
+		  ('canary_frankfurt_direct', 'Канареечный прямой маршрут Франкфурт для пользователей с низким RTT', false, 10, 'percentage', '[]'::jsonb, '{"route_mode":"direct_frankfurt"}'::jsonb),
+		  ('troubleshooter_deep_scan', 'Глубокое сканирование системных конфликтов в модуле сетевой диагностики', true, 100, 'percentage', '[]'::jsonb, '{}'::jsonb)
+		ON CONFLICT (name) DO NOTHING;
+	`)
 
 	_, _ = s.db.Exec(`
 		ALTER TABLE daily_active_devices ADD COLUMN IF NOT EXISTS app_version TEXT;
@@ -3358,6 +3528,23 @@ func (s *AppState) initDatabase() {
 		FROM support_tickets st
 		WHERE length(st.admin_reply) > 0
 		  AND NOT EXISTS (SELECT 1 FROM ticket_messages tm WHERE tm.ticket_id = st.id AND tm.sender_type = 'admin');
+
+		CREATE TABLE IF NOT EXISTS gold_market_cache (
+			id INT PRIMARY KEY DEFAULT 1,
+			current_price INT NOT NULL DEFAULT 0,
+			min_price INT NOT NULL DEFAULT 0,
+			max_price INT NOT NULL DEFAULT 0,
+			change_7d DOUBLE PRECISION NOT NULL DEFAULT 0,
+			change_30d DOUBLE PRECISION NOT NULL DEFAULT 0,
+			change_90d DOUBLE PRECISION NOT NULL DEFAULT 0,
+			change_1y DOUBLE PRECISION NOT NULL DEFAULT 0,
+			change_all DOUBLE PRECISION NOT NULL DEFAULT 0,
+			history_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		INSERT INTO gold_market_cache (id, current_price, min_price, max_price)
+		VALUES (1, 0, 0, 0)
+		ON CONFLICT (id) DO NOTHING;
 	`)
 }
 
@@ -3853,6 +4040,285 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+type FeatureFlagRow struct {
+	Name           string                 `json:"name"`
+	Description    string                 `json:"description"`
+	Enabled        bool                   `json:"enabled"`
+	RolloutPct     int                    `json:"rollout_pct"`
+	Strategy       string                 `json:"strategy"`
+	TargetAccounts []string               `json:"target_accounts"`
+	MinVersion     string                 `json:"min_version"`
+	Payload        map[string]interface{} `json:"payload"`
+	CreatedAt      time.Time              `json:"created_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+}
+
+func (s *AppState) handleClientFeatures(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	accountNum := strings.TrimSpace(r.URL.Query().Get("account_number"))
+	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	_ = strings.TrimSpace(r.URL.Query().Get("version"))
+
+	identifier := accountNum
+	if identifier == "" {
+		identifier = deviceID
+	}
+	if identifier == "" {
+		identifier = s.getPublicIP(r)
+	}
+
+	features := make([]map[string]interface{}, 0)
+	toggles := make(map[string]interface{})
+
+	if s.db != nil {
+		rows, err := s.db.Query(`
+			SELECT name, description, enabled, rollout_pct, strategy, target_accounts, min_version, payload
+			FROM feature_flags
+			ORDER BY name ASC
+		`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var name, description, strategy, minVer string
+				var enabled bool
+				var rolloutPct int
+				var targetAccountsJSON, payloadJSON []byte
+
+				if err := rows.Scan(&name, &description, &enabled, &rolloutPct, &strategy, &targetAccountsJSON, &minVer, &payloadJSON); err == nil {
+					var targetAccounts []string
+					if len(targetAccountsJSON) > 0 {
+						_ = json.Unmarshal(targetAccountsJSON, &targetAccounts)
+					}
+
+					var payload map[string]interface{}
+					if len(payloadJSON) > 0 {
+						_ = json.Unmarshal(payloadJSON, &payload)
+					}
+					if payload == nil {
+						payload = make(map[string]interface{})
+					}
+
+					evaluated := false
+					if enabled {
+						// 1. Direct target account check
+						isTargeted := false
+						if accountNum != "" && len(targetAccounts) > 0 {
+							for _, target := range targetAccounts {
+								if strings.EqualFold(strings.TrimSpace(target), accountNum) {
+									isTargeted = true
+									break
+								}
+							}
+						}
+
+						if isTargeted {
+							evaluated = true
+						} else {
+							switch strategy {
+							case "all":
+								evaluated = true
+							case "accounts":
+								evaluated = isTargeted
+							case "percentage":
+								evaluated = evalRolloutFNV(name, identifier, rolloutPct)
+							default:
+								evaluated = evalRolloutFNV(name, identifier, rolloutPct)
+							}
+						}
+					}
+
+					featObj := map[string]interface{}{
+						"name":        name,
+						"description": description,
+						"type":        "experiment",
+						"enabled":     evaluated,
+						"payload":     payload,
+					}
+					features = append(features, featObj)
+					toggles[name] = map[string]interface{}{
+						"name":    name,
+						"enabled": evaluated,
+						"payload": payload,
+					}
+				}
+			}
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"version":  2,
+		"features": features,
+		"toggles":  toggles,
+	})
+}
+
+func evalRolloutFNV(flagName, identifier string, rolloutPct int) bool {
+	if rolloutPct >= 100 {
+		return true
+	}
+	if rolloutPct <= 0 {
+		return false
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(flagName + ":" + identifier))
+	bucket := int(h.Sum32() % 100)
+	return bucket < rolloutPct
+}
+
+func (s *AppState) handleAdminFeatureFlags(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if s.db == nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"flags": []interface{}{}})
+			return
+		}
+		rows, err := s.db.Query(`
+			SELECT name, description, enabled, rollout_pct, strategy, target_accounts, min_version, payload, created_at, updated_at
+			FROM feature_flags
+			ORDER BY name ASC
+		`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		flagsList := make([]FeatureFlagRow, 0)
+		for rows.Next() {
+			var f FeatureFlagRow
+			var targetAccountsJSON, payloadJSON []byte
+			if err := rows.Scan(&f.Name, &f.Description, &f.Enabled, &f.RolloutPct, &f.Strategy, &targetAccountsJSON, &f.MinVersion, &payloadJSON, &f.CreatedAt, &f.UpdatedAt); err == nil {
+				if len(targetAccountsJSON) > 0 {
+					_ = json.Unmarshal(targetAccountsJSON, &f.TargetAccounts)
+				}
+				if len(payloadJSON) > 0 {
+					_ = json.Unmarshal(payloadJSON, &f.Payload)
+				}
+				flagsList = append(flagsList, f)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"flags":   flagsList,
+		})
+
+	case http.MethodPost:
+		var req struct {
+			Name           string                 `json:"name"`
+			Description    string                 `json:"description"`
+			Enabled        bool                   `json:"enabled"`
+			RolloutPct     int                    `json:"rollout_pct"`
+			Strategy       string                 `json:"strategy"`
+			TargetAccounts []string               `json:"target_accounts"`
+			MinVersion     string                 `json:"min_version"`
+			Payload        map[string]interface{} `json:"payload"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "invalid_json"})
+			return
+		}
+
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "name_required"})
+			return
+		}
+		if req.RolloutPct < 0 {
+			req.RolloutPct = 0
+		}
+		if req.RolloutPct > 100 {
+			req.RolloutPct = 100
+		}
+		if req.Strategy == "" {
+			req.Strategy = "percentage"
+		}
+		if req.TargetAccounts == nil {
+			req.TargetAccounts = []string{}
+		}
+
+		targetAccountsBytes, _ := json.Marshal(req.TargetAccounts)
+		payloadBytes, _ := json.Marshal(req.Payload)
+		if len(payloadBytes) == 0 {
+			payloadBytes = []byte("{}")
+		}
+
+		if s.db != nil {
+			_, err := s.db.Exec(`
+				INSERT INTO feature_flags (name, description, enabled, rollout_pct, strategy, target_accounts, min_version, payload, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+				ON CONFLICT (name) DO UPDATE SET
+					description = EXCLUDED.description,
+					enabled = EXCLUDED.enabled,
+					rollout_pct = EXCLUDED.rollout_pct,
+					strategy = EXCLUDED.strategy,
+					target_accounts = EXCLUDED.target_accounts,
+					min_version = EXCLUDED.min_version,
+					payload = EXCLUDED.payload,
+					updated_at = NOW()
+			`, req.Name, req.Description, req.Enabled, req.RolloutPct, req.Strategy, targetAccountsBytes, req.MinVersion, payloadBytes)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// Broadcast update to all connected clients via Redis pubsub
+		if s.rdb != nil {
+			eventPayload, _ := json.Marshal(map[string]interface{}{
+				"flag": req.Name,
+				"ts":   time.Now().Unix(),
+			})
+			_ = s.rdb.Publish(context.Background(), "flags:updated", string(eventPayload)).Err()
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"flag":    req.Name,
+		})
+
+	case http.MethodDelete:
+		name := strings.TrimSpace(r.URL.Query().Get("name"))
+		if name == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "name_required"})
+			return
+		}
+
+		if s.db != nil {
+			_, _ = s.db.Exec("DELETE FROM feature_flags WHERE name = $1", name)
+		}
+
+		if s.rdb != nil {
+			eventPayload, _ := json.Marshal(map[string]interface{}{
+				"flag":    name,
+				"deleted": true,
+				"ts":      time.Now().Unix(),
+			})
+			_ = s.rdb.Publish(context.Background(), "flags:updated", string(eventPayload)).Err()
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"deleted": name,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
@@ -4523,7 +4989,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# HELP warlink_client_version_online Connected active clients broken down by version\n")
 	sb.WriteString("# TYPE warlink_client_version_online gauge\n")
 	if len(clientVersions) == 0 {
-		sb.WriteString("warlink_client_version_online{version=\"v2.2.0\"} 0\n\n")
+		sb.WriteString("warlink_client_version_online{version=\"v2.2.1\"} 0\n\n")
 	} else {
 		for v, cnt := range clientVersions {
 			sb.WriteString(fmt.Sprintf("warlink_client_version_online{version=\"%s\"} %d\n", v, cnt))
@@ -5129,6 +5595,163 @@ func (s *AppState) startAnalyticsCollector() {
 				_, _ = s.db.Exec("DELETE FROM server_load_history WHERE recorded_at < NOW() - INTERVAL '90 days'")
 				_, _ = s.db.Exec("DELETE FROM routing_feedback WHERE created_at < NOW() - INTERVAL '30 days'")
 				_, _ = s.db.Exec("DELETE FROM routing_telemetry_auto WHERE created_at < NOW() - INTERVAL '30 days'")
+				_, _ = s.db.Exec("DELETE FROM crash_reports WHERE created_at < NOW() - INTERVAL '30 days'")
+			}
+		}
+	}
+}
+
+// OpsAlert represents an operational sentinel incident or recovery event.
+type OpsAlert struct {
+	Title     string    `json:"title"`
+	Message   string    `json:"message"`
+	Details   string    `json:"details,omitempty"`
+	Severity  string    `json:"severity"` // "info", "warning", "critical", "recovered"
+	Node      string    `json:"node,omitempty"`
+	Metric    string    `json:"metric,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+func (s *AppState) emitOpsAlert(alert OpsAlert) {
+	alert.Timestamp = time.Now()
+	log.Printf("[OPS-ALERT] [%s] %s: %s", strings.ToUpper(alert.Severity), alert.Title, alert.Message)
+
+	payload, err := json.Marshal(alert)
+	if err != nil {
+		return
+	}
+
+	// 1. Publish to Redis for Discord Bot Core listener
+	if s.rdb != nil {
+		_ = s.rdb.Publish(context.Background(), "discord:ops_alert", payload).Err()
+	}
+
+	// 2. Direct Discord webhook if configured in environment or settings
+	webhookURL := os.Getenv("WARLINK_OPS_DISCORD_WEBHOOK")
+	if webhookURL == "" && s.db != nil {
+		_ = s.db.QueryRow(`SELECT value FROM server_settings WHERE key = 'discord_ops_webhook'`).Scan(&webhookURL)
+	}
+	if webhookURL != "" {
+		go func(wh string, a OpsAlert) {
+			color := 0xF59E0B // warning amber
+			if a.Severity == "critical" || a.Severity == "urgent" {
+				color = 0xEF4444 // red
+			} else if a.Severity == "recovered" || a.Severity == "info" {
+				color = 0x10B981 // green
+			}
+			embed := map[string]interface{}{
+				"title":       a.Title,
+				"description": a.Message,
+				"color":       color,
+				"timestamp":   a.Timestamp.Format(time.RFC3339),
+				"footer": map[string]string{
+					"text": "WarLink Ops Sentinel • Zero Emoji",
+				},
+			}
+			fields := make([]map[string]interface{}, 0)
+			if a.Node != "" {
+				fields = append(fields, map[string]interface{}{
+					"name":   "Узел кластера",
+					"value":  a.Node,
+					"inline": true,
+				})
+			}
+			if a.Metric != "" {
+				fields = append(fields, map[string]interface{}{
+					"name":   "Показатель",
+					"value":  a.Metric,
+					"inline": true,
+				})
+			}
+			if a.Details != "" {
+				fields = append(fields, map[string]interface{}{
+					"name":   "Технические детали",
+					"value":  "```\n" + a.Details + "\n```",
+					"inline": false,
+				})
+			}
+			embed["fields"] = fields
+
+			body := map[string]interface{}{
+				"username": "WarLink Ops Sentinel",
+				"embeds":   []interface{}{embed},
+			}
+			bodyBytes, _ := json.Marshal(body)
+			client := &http.Client{Timeout: 5 * time.Second}
+			_, _ = client.Post(wh, "application/json", bytes.NewReader(bodyBytes))
+		}(webhookURL, alert)
+	}
+}
+
+func (s *AppState) startOpsAlertingWorker() {
+	ticker := time.NewTicker(45 * time.Second)
+	defer ticker.Stop()
+
+	type nodeState struct {
+		name           string
+		addr           string
+		downCount      int
+		isReportedDown bool
+	}
+
+	nodes := []*nodeState{
+		{name: "Франкфурт Edge", addr: "85.192.24.254:9090"},
+		{name: "Москва Ingress", addr: "45.12.63.85:80"},
+	}
+
+	lastCapacityAlert := time.Time{}
+
+	for range ticker.C {
+		// 1. Probe Node Health
+		for _, n := range nodes {
+			conn, err := net.DialTimeout("tcp", n.addr, 3*time.Second)
+			if err != nil {
+				n.downCount++
+				if n.downCount >= 2 && !n.isReportedDown {
+					n.isReportedDown = true
+					s.emitOpsAlert(OpsAlert{
+						Title:    "Узел недоступен: " + n.name,
+						Message:  fmt.Sprintf("Потеряна сетевая связь с узлом %s (2 последовательных сбоя).", n.name),
+						Details:  err.Error(),
+						Severity: "critical",
+						Node:     n.name,
+					})
+				}
+			} else {
+				_ = conn.Close()
+				if n.isReportedDown {
+					n.isReportedDown = false
+					n.downCount = 0
+					s.emitOpsAlert(OpsAlert{
+						Title:    "Узел восстановлен: " + n.name,
+						Message:  fmt.Sprintf("Связь с узлом %s успешно восстановилась.", n.name),
+						Severity: "recovered",
+						Node:     n.name,
+					})
+				} else {
+					n.downCount = 0
+				}
+			}
+		}
+
+		// 2. Pool Capacity Check (>90%)
+		s.mu.Lock()
+		activeSessions := len(s.sessions)
+		s.mu.Unlock()
+		maxSessions := s.cfg.MaxSessions
+		if maxSessions <= 0 {
+			maxSessions = MaxActiveSessions
+		}
+		if maxSessions > 0 && float64(activeSessions)/float64(maxSessions) >= 0.9 {
+			if time.Since(lastCapacityAlert) > 15*time.Minute {
+				lastCapacityAlert = time.Now()
+				s.emitOpsAlert(OpsAlert{
+					Title:    "Высокая загрузка пула слотов шлюза",
+					Message:  fmt.Sprintf("Занято %d из %d слотов (%.1f%%). Резерв свободных мест подходит к концу.", activeSessions, maxSessions, float64(activeSessions)/float64(maxSessions)*100),
+					Severity: "warning",
+					Node:     "Кластер шлюзов",
+					Metric:   fmt.Sprintf("%d/%d слотов", activeSessions, maxSessions),
+				})
 			}
 		}
 	}
@@ -6044,6 +6667,21 @@ func (s *AppState) handleAdminNotifications(w http.ResponseWriter, r *http.Reque
 			}
 		}
 
+		if s.rdb != nil {
+			notifPayload, _ := json.Marshal(map[string]interface{}{
+				"id":           newID,
+				"target_type":  ttype,
+				"target_id":    tgtID,
+				"title":        title,
+				"message":      msg,
+				"severity":     sev,
+				"action_label": actLabel,
+				"action_url":   actURL,
+				"created_at":   time.Now().UTC().Format(time.RFC3339),
+			})
+			_ = s.rdb.Publish(context.Background(), "notifications:new", string(notifPayload)).Err()
+		}
+
 		log.Printf("[ADMIN-NOTIF] Created notification #%d (%s, target: %s/%s): %s", newID, sev, ttype, tgtID, title)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
@@ -6052,6 +6690,98 @@ func (s *AppState) handleAdminNotifications(w http.ResponseWriter, r *http.Reque
 
 	default:
 		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+// handleEventsSSE establishes a persistent Server-Sent Events (SSE) stream for real-time ticket messages,
+// notifications, slot capacity updates, and system events with 0ms latency.
+func (s *AppState) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	accountNum := strings.TrimSpace(r.URL.Query().Get("account_number"))
+	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+
+	initPayload, _ := json.Marshal(map[string]interface{}{
+		"status":      "connected",
+		"version":     ServerAppVersion,
+		"account":     accountNum,
+		"server_time": time.Now().UTC().Format(time.RFC3339),
+	})
+	fmt.Fprintf(w, "event: init\ndata: %s\n\n", string(initPayload))
+	flusher.Flush()
+
+	if s.rdb == nil {
+		ticker := time.NewTicker(25 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				fmt.Fprintf(w, ": keepalive\n\n")
+				flusher.Flush()
+			}
+		}
+	}
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	pubsub := s.rdb.Subscribe(ctx, "tickets:message", "tickets:updated", "notifications:new", "slots:update", "flags:updated")
+	defer pubsub.Close()
+
+	ch := pubsub.Channel()
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			switch msg.Channel {
+			case "tickets:message":
+				fmt.Fprintf(w, "event: ticket_message\ndata: %s\n\n", msg.Payload)
+				flusher.Flush()
+			case "tickets:updated":
+				fmt.Fprintf(w, "event: ticket_updated\ndata: %s\n\n", msg.Payload)
+				flusher.Flush()
+			case "notifications:new":
+				var nPayload map[string]interface{}
+				if err := json.Unmarshal([]byte(msg.Payload), &nPayload); err == nil {
+					targetType, _ := nPayload["target_type"].(string)
+					targetID, _ := nPayload["target_id"].(string)
+					if targetType == "broadcast" || targetType == "" ||
+						(targetType == "account" && targetID == accountNum) ||
+						(targetType == "device" && targetID == deviceID) {
+						fmt.Fprintf(w, "event: notification\ndata: %s\n\n", msg.Payload)
+						flusher.Flush()
+					}
+				}
+			case "slots:update":
+				fmt.Fprintf(w, "event: slots\ndata: %s\n\n", msg.Payload)
+				flusher.Flush()
+			case "flags:updated":
+				fmt.Fprintf(w, "event: flags:updated\ndata: %s\n\n", msg.Payload)
+				flusher.Flush()
+			}
+		}
 	}
 }
 
@@ -7471,6 +8201,7 @@ type TelemetryBeaconPayload struct {
 	MinPingMs          int                    `json:"min_ping_ms,omitempty"`
 	MaxPingMs          int                    `json:"max_ping_ms,omitempty"`
 	AvgPingMs          int                    `json:"avg_ping_ms,omitempty"`
+	TraceID            string                 `json:"trace_id,omitempty"`
 	TelemetryData      map[string]interface{} `json:"telemetry_data,omitempty"`
 	Timestamp          int64                  `json:"timestamp,omitempty"`
 	Nonce              string                 `json:"nonce,omitempty"`
@@ -7638,17 +8369,22 @@ func (s *AppState) handleTelemetryBeacon(w http.ResponseWriter, r *http.Request)
 	if s.db != nil {
 		go func() {
 			telJSON, _ := json.Marshal(req.TelemetryData)
+			traceID := req.TraceID
+			if traceID == "" {
+				h := sha256.Sum256([]byte(req.AccountNumber + req.DeviceID))
+				traceID = fmt.Sprintf("trc-%x-%d", h[:4], time.Now().Unix())
+			}
 			_, err := s.db.Exec(`
 				INSERT INTO routing_telemetry_auto (
 					account_number, device_id, app_version, route_mode,
 					ping_moscow_ms, ping_stockholm_ms, in_game_ping_ms,
 					jitter_ms, packet_loss, game_name, client_ip,
-					country, city, isp, telemetry_data
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+					country, city, isp, telemetry_data, trace_id
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 				req.AccountNumber, req.DeviceID, req.AppVersion, resolvedRoute,
 				req.PingMoscowMs, req.PingStockholmMs, inGame,
 				req.JitterMs, loss, gameName, clientIP,
-				geo.Country, geo.City, geo.ISP, telJSON,
+				geo.Country, geo.City, geo.ISP, telJSON, traceID,
 			)
 			if err != nil {
 				log.Printf("[BEACON] DB error saving to routing_telemetry_auto: %v", err)
@@ -7714,6 +8450,214 @@ func (s *AppState) handleTelemetryBeacon(w http.ResponseWriter, r *http.Request)
 
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+type CrashReportRequest struct {
+	AccountNumber string                 `json:"account_number"`
+	DeviceID      string                 `json:"device_id"`
+	AppVersion    string                 `json:"app_version"`
+	ErrorType     string                 `json:"error_type"` // go_panic, wintun_driver, singbox_crash, winws2_crash, js_uncaught, js_unhandled_rejection, network_fatal
+	Message       string                 `json:"message"`
+	StackTrace    string                 `json:"stack_trace"`
+	OSInfo        string                 `json:"os_info"`
+	Context       map[string]interface{} `json:"context"`
+}
+
+func (s *AppState) handleTelemetryCrash(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Signature, X-Device-ID, X-Timestamp, X-Nonce")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CrashReportRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 128*1024)).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid_json"}`, http.StatusBadRequest)
+		return
+	}
+
+	clientIP := s.getClientIP(r)
+	if req.AppVersion == "" {
+		req.AppVersion = "unknown"
+	}
+	if req.ErrorType == "" {
+		req.ErrorType = "unknown"
+	}
+
+	ctxJSON, _ := json.Marshal(req.Context)
+	if len(ctxJSON) == 0 {
+		ctxJSON = []byte("{}")
+	}
+
+	log.Printf("[CRASH-TELEMETRY] Type: %s | Acc: %s | Dev: %s | Msg: %s", req.ErrorType, req.AccountNumber, req.DeviceID, req.Message)
+
+	if s.db != nil {
+		_, err := s.db.Exec(`
+			INSERT INTO crash_reports (
+				account_number, device_id, app_version, error_type, message, stack_trace, os_info, context_data, client_ip
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			req.AccountNumber, req.DeviceID, req.AppVersion, req.ErrorType, req.Message, req.StackTrace, req.OSInfo, ctxJSON, clientIP,
+		)
+		if err != nil {
+			log.Printf("[CRASH-TELEMETRY] DB error saving crash report: %v", err)
+		}
+	}
+
+	// VictoriaMetrics metric: warlink_client_crashes_total
+	vmPayload := fmt.Sprintf("warlink_client_crashes_total{error_type=\"%s\",app_version=\"%s\"} 1\n", sanitizeMetricLabel(req.ErrorType), sanitizeMetricLabel(req.AppVersion))
+	go func(body string) {
+		vmClient := &http.Client{Timeout: 1 * time.Second}
+		reqPost, err := http.NewRequest(http.MethodPost, "http://127.0.0.1:8428/api/v1/import/prometheus", strings.NewReader(body))
+		if err == nil {
+			resp, postErr := vmClient.Do(reqPost)
+			if postErr == nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}(vmPayload)
+
+	// Emit Ops Alert if critical
+	critical := req.ErrorType == "go_panic" || req.ErrorType == "wintun_driver" || req.ErrorType == "singbox_crash" || strings.Contains(strings.ToLower(req.Message), "panic")
+	if critical {
+		s.emitOpsAlert(OpsAlert{
+			Severity: "critical",
+			Node:     "Client (" + req.AppVersion + ")",
+			Title:    "Клиентский сбой: " + req.ErrorType,
+			Message:  fmt.Sprintf("Аккаунт: %s\nУстройство: %s\nОшибка: %s\nСтек: %s", req.AccountNumber, req.DeviceID, req.Message, req.StackTrace),
+		})
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (s *AppState) handleAdminCrashes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+	if s.db == nil {
+		http.Error(w, `{"error":"db_not_initialized"}`, http.StatusInternalServerError)
+		return
+	}
+	limit := 50
+	if lStr := r.URL.Query().Get("limit"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 && l <= 500 {
+			limit = l
+		}
+	}
+	errType := r.URL.Query().Get("type")
+	query := "SELECT id, created_at, account_number, device_id, app_version, error_type, message, stack_trace, os_info, context_data, client_ip FROM crash_reports"
+	var args []interface{}
+	if errType != "" {
+		query += " WHERE error_type = $1"
+		args = append(args, errType)
+		query += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args)+1)
+		args = append(args, limit)
+	} else {
+		query += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args)+1)
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type CrashItem struct {
+		ID            int64                  `json:"id"`
+		CreatedAt     string                 `json:"created_at"`
+		AccountNumber string                 `json:"account_number"`
+		DeviceID      string                 `json:"device_id"`
+		AppVersion    string                 `json:"app_version"`
+		ErrorType     string                 `json:"error_type"`
+		Message       string                 `json:"message"`
+		StackTrace    string                 `json:"stack_trace"`
+		OSInfo        string                 `json:"os_info"`
+		Context       map[string]interface{} `json:"context"`
+		ClientIP      string                 `json:"client_ip"`
+	}
+	var items []CrashItem
+	for rows.Next() {
+		var it CrashItem
+		var t time.Time
+		var ctxBytes []byte
+		if scanErr := rows.Scan(&it.ID, &t, &it.AccountNumber, &it.DeviceID, &it.AppVersion, &it.ErrorType, &it.Message, &it.StackTrace, &it.OSInfo, &ctxBytes, &it.ClientIP); scanErr == nil {
+			it.CreatedAt = t.Format(time.RFC3339)
+			_ = json.Unmarshal(ctxBytes, &it.Context)
+			items = append(items, it)
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "crashes": items, "count": len(items)})
+}
+
+func (s *AppState) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+	lines := 100
+	if lStr := r.URL.Query().Get("lines"); lStr != "" {
+		if l, err := strconv.Atoi(lStr); err == nil && l > 0 && l <= 1000 {
+			lines = l
+		}
+	}
+	service := r.URL.Query().Get("service")
+	unit := "warlink-api.service"
+	if service == "hysteria" {
+		unit = "hysteriad.service"
+	}
+	q := r.URL.Query().Get("q")
+
+	args := []string{"-u", unit, "-n", strconv.Itoa(lines), "--no-pager", "-o", "json"}
+	if q != "" {
+		args = append(args, "-g", q)
+	}
+	cmd := exec.Command("journalctl", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"journalctl error: %v"}`, err), http.StatusInternalServerError)
+		return
+	}
+	var logEntries []map[string]interface{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry map[string]interface{}
+		if json.Unmarshal([]byte(line), &entry) == nil {
+			msg, _ := entry["MESSAGE"].(string)
+			ts, _ := entry["__REALTIME_TIMESTAMP"].(string)
+			logEntries = append(logEntries, map[string]interface{}{
+				"timestamp": ts,
+				"message":   msg,
+				"unit":      unit,
+			})
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"unit":    unit,
+		"count":   len(logEntries),
+		"logs":    logEntries,
+	})
 }
 
 func (s *AppState) handleAdminRoutingFeedback(w http.ResponseWriter, r *http.Request) {
@@ -8322,34 +9266,6 @@ func (s *AppState) handleAdminGamesCatalog(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-type DPIStrategyItem struct {
-	ID          int      `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Targets     []string `json:"targets"`
-}
-
-func (s *AppState) handleDPIStrategies(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	strategies := []DPIStrategyItem{
-		{ID: 1, Name: "Стратегия 1 (Default)", Description: "Базовый сплиттинг TLS/HTTP с фейковыми пакетами", Targets: []string{"discord", "youtube"}},
-		{ID: 2, Name: "Стратегия 2 (Aggressive)", Description: "Усиленный мультисплит для провайдеров с глубоким ТСПУ", Targets: []string{"discord", "youtube"}},
-		{ID: 3, Name: "Стратегия 3 (Discord Priority)", Description: "Оптимизация голосовых каналов и WebRTC шлюзов Discord", Targets: []string{"discord"}},
-		{ID: 4, Name: "Стратегия 4 (YouTube 4K)", Description: "Анти-троттлинг видеопотоков Googlevideo и QUIC", Targets: []string{"youtube"}},
-		{ID: 5, Name: "Стратегия 5 (Steam Community)", Description: "Прямой доступ к инвентарю, торговой площадке и профилям Steam", Targets: []string{"steam"}},
-		{ID: 6, Name: "Стратегия 6 (Universal Mixed)", Description: "Комбинированный обход для региональных провайдеров", Targets: []string{"discord", "youtube", "steam"}},
-		{ID: 7, Name: "Стратегия 7 (Fallback Safe)", Description: "Безопасный режим с минимальной модификацией заголовков", Targets: []string{"discord", "youtube"}},
-		{ID: 8, Name: "Стратегия 8 (Extreme Bypass)", Description: "Многократный сплиттинг TCP сессий при жесткой фильтрации", Targets: []string{"discord", "youtube"}},
-		{ID: 9, Name: "Стратегия 9 (Zero Latency)", Description: "Минимальный джиттер для сетевых онлайн-игр", Targets: []string{"games"}},
-		{ID: 10, Name: "Стратегия 10 (Custom)", Description: "Пользовательские параметры WinDivert", Targets: []string{"custom"}},
-	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":    true,
-		"strategies": strategies,
-	})
-}
-
 type AnnouncementItem struct {
 	ID          string `json:"id"`
 	Type        string `json:"type"` // "modal", "toast", "banner"
@@ -8948,6 +9864,17 @@ func (s *AppState) handleClientTicketResolve(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+type UserOnlineInfo struct {
+	IsOnline          bool   `json:"is_online"`
+	Game              string `json:"game,omitempty"`
+	RouteMode         string `json:"route_mode,omitempty"`
+	ConnectedNode     string `json:"connected_node,omitempty"`
+	ConnectedDuration string `json:"connected_duration,omitempty"`
+	ClientVersion     string `json:"client_version,omitempty"`
+	ClientIP          string `json:"client_ip,omitempty"`
+	LastSeen          string `json:"last_seen,omitempty"`
+}
+
 type AdminTicketSummary struct {
 	ID              int64           `json:"id"`
 	CreatedAt       string          `json:"created_at"`
@@ -8962,6 +9889,75 @@ type AdminTicketSummary struct {
 	AdminReply      string          `json:"admin_reply"`
 	ResolvedAt      *string         `json:"resolved_at"`
 	SystemInfo      json.RawMessage `json:"system_info,omitempty"`
+	LastMessage     string          `json:"last_message"`
+	LastSender      string          `json:"last_sender"`
+	MessageCount    int             `json:"message_count"`
+	NeedsReply      bool            `json:"needs_reply"`
+	IsOnline        bool            `json:"is_online"`
+	OnlineDetails   *UserOnlineInfo `json:"online_details,omitempty"`
+	RouteOverride   string          `json:"route_override"`
+	IsBanned        bool            `json:"is_banned"`
+}
+
+func formatSessionOnlineInfo(sess *SessionInfo, now time.Time) *UserOnlineInfo {
+	if sess == nil {
+		return nil
+	}
+	dur := int(now.Sub(sess.CreatedAt).Seconds())
+	durDesc := fmt.Sprintf("%d мин", dur/60)
+	if dur >= 3600 {
+		durDesc = fmt.Sprintf("%d ч %d мин", dur/3600, (dur%3600)/60)
+	} else if dur < 60 {
+		durDesc = fmt.Sprintf("%d сек", dur)
+	}
+
+	gameName := sess.Game
+	if gameName == "" || gameName == "wardogs" {
+		gameName = "WARDOGS"
+	} else if gameName == "free_internet" || strings.EqualFold(gameName, "свободный интернет") || strings.EqualFold(gameName, "комплексный режим") {
+		gameName = "Комплексный режим"
+	}
+
+	node := sess.ConnectedNode
+	if node == "" {
+		if sess.RouteMode == "transit" {
+			node = "Москва -> Франкфурт (Транзит)"
+		} else if sess.RouteMode == "direct_moscow" {
+			node = "Москва Ingress"
+		} else if sess.RouteMode == "direct_frankfurt" {
+			node = "Франкфурт Edge"
+		} else if sess.RouteMode == "direct_stockholm" {
+			node = "Стокгольм Core"
+		} else {
+			node = "В сети"
+		}
+	}
+
+	return &UserOnlineInfo{
+		IsOnline:          true,
+		Game:              gameName,
+		RouteMode:         sess.RouteMode,
+		ConnectedNode:     node,
+		ConnectedDuration: durDesc,
+		ClientVersion:     sess.ClientVersion,
+		ClientIP:          maskIP(sess.ClientIP),
+		LastSeen:          sess.LastSeen.Format("15:04:05"),
+	}
+}
+
+func (s *AppState) checkUserOnline(accountNumber, deviceID string) (bool, *UserOnlineInfo) {
+	now := time.Now()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, sess := range s.sessions {
+		if now.Before(sess.ExpiresAt) {
+			if (accountNumber != "" && sess.AccountNumber == accountNumber) || (deviceID != "" && sess.DeviceID == deviceID) {
+				return true, formatSessionOnlineInfo(sess, now)
+			}
+		}
+	}
+	return false, nil
 }
 
 func (s *AppState) handleAdminTicketsList(w http.ResponseWriter, r *http.Request) {
@@ -8984,8 +9980,8 @@ func (s *AppState) handleAdminTicketsList(w http.ResponseWriter, r *http.Request
 	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
 	searchQuery := strings.TrimSpace(r.URL.Query().Get("q"))
 	limitStr := r.URL.Query().Get("limit")
-	limit := 50
-	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+	limit := 100
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 200 {
 		limit = l
 	}
 
@@ -8996,6 +9992,7 @@ func (s *AppState) handleAdminTicketsList(w http.ResponseWriter, r *http.Request
 		"resolved":    0,
 		"closed":      0,
 		"total":       0,
+		"online":      0,
 	}
 
 	if s.db != nil {
@@ -9013,33 +10010,59 @@ func (s *AppState) handleAdminTicketsList(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-		// Build query
+		// Index active sessions in RAM for instant online status resolution
+		now := time.Now()
+		activeByAcc := make(map[string]*SessionInfo)
+		activeByDev := make(map[string]*SessionInfo)
+		s.mu.RLock()
+		for _, sess := range s.sessions {
+			if now.Before(sess.ExpiresAt) {
+				if sess.AccountNumber != "" {
+					activeByAcc[sess.AccountNumber] = sess
+				}
+				if sess.DeviceID != "" {
+					activeByDev[sess.DeviceID] = sess
+				}
+			}
+		}
+		s.mu.RUnlock()
+
+		// Build query with lateral joins for latest message & message count
 		query := `
-			SELECT id, TO_CHAR(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-			       TO_CHAR(updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-			       account_number, device_id, app_version, category, user_comment,
-			       logs_archive_size, status, admin_reply,
-			       TO_CHAR(resolved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-			       COALESCE(system_info::TEXT, '{}')
-			FROM support_tickets
+			SELECT st.id, TO_CHAR(st.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       TO_CHAR(st.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       st.account_number, st.device_id, st.app_version, st.category, st.user_comment,
+			       st.logs_archive_size, st.status, st.admin_reply,
+			       TO_CHAR(st.resolved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+			       COALESCE(st.system_info::TEXT, '{}'),
+			       COALESCE(last_msg.message, st.user_comment, ''),
+			       COALESCE(last_msg.sender_type, 'user'),
+			       COALESCE(msg_cnt.total_cnt, 0)
+			FROM support_tickets st
+			LEFT JOIN LATERAL (
+				SELECT message, sender_type FROM ticket_messages WHERE ticket_id = st.id ORDER BY id DESC LIMIT 1
+			) last_msg ON true
+			LEFT JOIN LATERAL (
+				SELECT COUNT(*) as total_cnt FROM ticket_messages WHERE ticket_id = st.id
+			) msg_cnt ON true
 			WHERE 1=1
 		`
 		var args []interface{}
 		argIdx := 1
 
 		if statusFilter != "" && statusFilter != "all" {
-			query += fmt.Sprintf(" AND status = $%d", argIdx)
+			query += fmt.Sprintf(" AND st.status = $%d", argIdx)
 			args = append(args, statusFilter)
 			argIdx++
 		}
 
 		if searchQuery != "" {
-			query += fmt.Sprintf(" AND (account_number ILIKE $%d OR device_id ILIKE $%d OR user_comment ILIKE $%d OR id::TEXT = $%d)", argIdx, argIdx, argIdx, argIdx)
+			query += fmt.Sprintf(" AND (st.account_number ILIKE $%d OR st.device_id ILIKE $%d OR st.user_comment ILIKE $%d OR st.id::TEXT = $%d)", argIdx, argIdx, argIdx, argIdx)
 			args = append(args, "%"+searchQuery+"%")
 			argIdx++
 		}
 
-		query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", argIdx)
+		query += fmt.Sprintf(" ORDER BY st.created_at DESC LIMIT $%d", argIdx)
 		args = append(args, limit)
 
 		rows, err := s.db.Query(query, args...)
@@ -9049,12 +10072,30 @@ func (s *AppState) handleAdminTicketsList(w http.ResponseWriter, r *http.Request
 				var t AdminTicketSummary
 				var resAt sql.NullString
 				var sysRaw string
-				if err := rows.Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.AccountNumber, &t.DeviceID, &t.AppVersion, &t.Category, &t.UserComment, &t.LogsArchiveSize, &t.Status, &t.AdminReply, &resAt, &sysRaw); err == nil {
+				if err := rows.Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt, &t.AccountNumber, &t.DeviceID, &t.AppVersion, &t.Category, &t.UserComment, &t.LogsArchiveSize, &t.Status, &t.AdminReply, &resAt, &sysRaw, &t.LastMessage, &t.LastSender, &t.MessageCount); err == nil {
 					if resAt.Valid {
 						val := resAt.String
 						t.ResolvedAt = &val
 					}
 					t.SystemInfo = json.RawMessage(sysRaw)
+					t.NeedsReply = (t.Status != "resolved" && t.Status != "closed") && (t.LastSender == "user" || t.AdminReply == "")
+
+					// Resolve user online status
+					var sess *SessionInfo
+					if t.AccountNumber != "" {
+						sess = activeByAcc[t.AccountNumber]
+					}
+					if sess == nil && t.DeviceID != "" {
+						sess = activeByDev[t.DeviceID]
+					}
+					if sess != nil {
+						t.IsOnline = true
+						t.OnlineDetails = formatSessionOnlineInfo(sess, now)
+						counts["online"]++
+					} else {
+						t.IsOnline = false
+					}
+
 					tickets = append(tickets, t)
 				}
 			}
@@ -9280,6 +10321,126 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "status": stReq.Status})
 
+	case "kick":
+		// POST /api/v1/admin/tickets/:id/kick
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var ticketAcc, ticketDev string
+		if s.db != nil {
+			_ = s.db.QueryRow(`SELECT account_number, device_id FROM support_tickets WHERE id = $1`, ticketID).Scan(&ticketAcc, &ticketDev)
+		}
+		kickedCount := 0
+		s.mu.Lock()
+		for tok, sess := range s.sessions {
+			if (ticketAcc != "" && sess.AccountNumber == ticketAcc) || (ticketDev != "" && sess.DeviceID == ticketDev) {
+				delete(s.sessions, tok)
+				go s.deleteSessionFromRedis(tok, sess.DeviceID)
+				kickedCount++
+			}
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":        true,
+			"kicked_count":   kickedCount,
+			"account_number": ticketAcc,
+		})
+
+	case "route-override":
+		// POST /api/v1/admin/tickets/:id/route-override
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Route string `json:"route"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			return
+		}
+		var ticketAcc string
+		if s.db != nil {
+			_ = s.db.QueryRow(`SELECT account_number FROM support_tickets WHERE id = $1`, ticketID).Scan(&ticketAcc)
+			if ticketAcc != "" {
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value) VALUES ($1, $2)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, "route_override:"+ticketAcc, req.Route)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"route":   req.Route,
+		})
+
+	case "ban":
+		// POST /api/v1/admin/tickets/:id/ban
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Reason   string `json:"reason"`
+			Duration string `json:"duration"`
+			Unban    bool   `json:"unban"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		var ticketAcc, ticketDev string
+		if s.db != nil {
+			_ = s.db.QueryRow(`SELECT account_number, device_id FROM support_tickets WHERE id = $1`, ticketID).Scan(&ticketAcc, &ticketDev)
+		}
+		if req.Unban {
+			if s.db != nil {
+				_, _ = s.db.Exec(`DELETE FROM security_bans WHERE (target_value = $1 AND target_value != '') OR (target_value = $2 AND target_value != '')`, ticketAcc, ticketDev)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "is_banned": false})
+			return
+		}
+
+		if req.Reason == "" {
+			req.Reason = "Нарушение правил сервиса (тикет #" + strconv.FormatInt(ticketID, 10) + ")"
+		}
+		var expiresAt *time.Time
+		if req.Duration == "1h" {
+			tExp := time.Now().Add(1 * time.Hour)
+			expiresAt = &tExp
+		} else if req.Duration == "24h" {
+			tExp := time.Now().Add(24 * time.Hour)
+			expiresAt = &tExp
+		}
+
+		if s.db != nil {
+			if ticketAcc != "" {
+				_, _ = s.db.Exec(`
+					INSERT INTO security_bans (target_type, target_value, reason, banned_by, expires_at)
+					VALUES ('account', $1, $2, 'admin', $3)
+				`, ticketAcc, req.Reason, expiresAt)
+			}
+			if ticketDev != "" {
+				_, _ = s.db.Exec(`
+					INSERT INTO security_bans (target_type, target_value, reason, banned_by, expires_at)
+					VALUES ('device', $1, $2, 'admin', $3)
+				`, ticketDev, req.Reason, expiresAt)
+			}
+		}
+
+		s.mu.Lock()
+		for tok, sess := range s.sessions {
+			if (ticketAcc != "" && sess.AccountNumber == ticketAcc) || (ticketDev != "" && sess.DeviceID == ticketDev) {
+				delete(s.sessions, tok)
+				go s.deleteSessionFromRedis(tok, sess.DeviceID)
+			}
+		}
+		s.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "is_banned": true})
+
 	default:
 		// GET /api/v1/admin/tickets/:id - Full details + file manifest
 		var t AdminTicketSummary
@@ -9310,6 +10471,42 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 				t.ResolvedAt = &val
 			}
 			t.SystemInfo = json.RawMessage(sysRaw)
+
+			isOnline, onlineInfo := s.checkUserOnline(t.AccountNumber, t.DeviceID)
+			t.IsOnline = isOnline
+			if isOnline {
+				t.OnlineDetails = onlineInfo
+			} else {
+				var lastConn time.Time
+				errConn := s.db.QueryRow(`
+					SELECT connected_at 
+					FROM user_connection_history 
+					WHERE (account_number = $1 AND $1 != '') OR (device_id = $2 AND $2 != '') 
+					ORDER BY id DESC LIMIT 1
+				`, t.AccountNumber, t.DeviceID).Scan(&lastConn)
+				if errConn == nil && !lastConn.IsZero() {
+					t.OnlineDetails = &UserOnlineInfo{
+						IsOnline: false,
+						LastSeen: lastConn.Format(time.RFC3339),
+					}
+				}
+			}
+
+			// Route override and ban status
+			var routeOv string
+			_ = s.db.QueryRow(`SELECT value FROM server_settings WHERE key = $1`, "route_override:"+t.AccountNumber).Scan(&routeOv)
+			if routeOv == "" {
+				routeOv = "auto"
+			}
+			t.RouteOverride = routeOv
+
+			var banCount int
+			_ = s.db.QueryRow(`
+				SELECT COUNT(*) FROM security_bans 
+				WHERE (target_value = $1 AND target_value != '') 
+				   OR (target_value = $2 AND target_value != '')
+			`, t.AccountNumber, t.DeviceID).Scan(&banCount)
+			t.IsBanned = banCount > 0
 
 			// Fetch messages
 			rows, err := s.db.Query(`
@@ -9426,7 +10623,101 @@ func extractFileFromTarGz(archive []byte, targetName string) (string, error) {
 }
 
 func (s *AppState) handleAdminTicketWeb(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "https://warlink-hub.duckdns.org:8055/admin/content/support_tickets", http.StatusFound)
+	http.Redirect(w, r, "/admin/dialogs", http.StatusFound)
+}
+
+func (s *AppState) handleAdminDialogsAuth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Key string `json:"key"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	key := strings.TrimSpace(req.Key)
+	if key == "" || key != s.cfg.DashboardKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Неверный секретный ключ"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_key",
+		Value:    key,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   30 * 24 * 3600,
+		SameSite: http.SameSiteLaxMode,
+	})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func (s *AppState) handleAdminTicketsCanned(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "forbidden"})
+		return
+	}
+	type CannedItem struct {
+		ID       int    `json:"id"`
+		Shortcut string `json:"shortcut"`
+		Title    string `json:"title"`
+		Category string `json:"category"`
+		Body     string `json:"body"`
+	}
+	items := make([]CannedItem, 0)
+	if s.db != nil {
+		rows, err := s.db.Query(`SELECT id, shortcut, title, category, body FROM ticket_canned_responses ORDER BY id ASC`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var it CannedItem
+				if err := rows.Scan(&it.ID, &it.Shortcut, &it.Title, &it.Category, &it.Body); err == nil {
+					items = append(items, it)
+				}
+			}
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"canned":  items,
+	})
+}
+
+func (s *AppState) handleAdminDialogsWeb(w http.ResponseWriter, r *http.Request) {
+	if qk := strings.TrimSpace(r.URL.Query().Get("key")); qk != "" {
+		if s.cfg.DashboardKey != "" && qk == s.cfg.DashboardKey {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "admin_key",
+				Value:    qk,
+				Path:     "/",
+				HttpOnly: true,
+				MaxAge:   30 * 24 * 3600,
+				SameSite: http.SameSiteLaxMode,
+			})
+			cleanURL := "/admin/dialogs"
+			if tid := r.URL.Query().Get("id"); tid != "" {
+				cleanURL += "?id=" + tid
+			}
+			http.Redirect(w, r, cleanURL, http.StatusFound)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	htmlBytes, err := os.ReadFile("admin_dialogs.html")
+	if err == nil && len(htmlBytes) > 0 {
+		_, _ = w.Write(htmlBytes)
+		return
+	}
+	htmlBytes, err = os.ReadFile("server/admin_dialogs.html")
+	if err == nil && len(htmlBytes) > 0 {
+		_, _ = w.Write(htmlBytes)
+		return
+	}
+	_, _ = w.Write([]byte(embeddedAdminDialogsHTML))
 }
 
 func (s *AppState) handleAdminRoutingFeedbackWeb(w http.ResponseWriter, r *http.Request) {
@@ -9451,4 +10742,242 @@ func (s *AppState) handleReloadFilters(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": "Фильтры запрещенных игр, поддерживаемых игр и позывных успешно перезагружены из PostgreSQL",
 	})
+}
+
+// -----------------------------------------------------------------------------
+// WARDOGS Gold Bar Market & Daily Notification Engine
+// -----------------------------------------------------------------------------
+
+type GoldBarPoint struct {
+	T     int64 `json:"t"`
+	Price int   `json:"price"`
+}
+
+type GoldMarketChanges struct {
+	D7  float64 `json:"7d"`
+	D30 float64 `json:"30d"`
+	D90 float64 `json:"90d"`
+	Y1  float64 `json:"1y"`
+	All float64 `json:"all"`
+}
+
+type GoldMarketStats struct {
+	Current int               `json:"current"`
+	Min     int               `json:"min"`
+	Max     int               `json:"max"`
+	Changes GoldMarketChanges `json:"changes"`
+}
+
+type GoldMarketResponse struct {
+	Points   []GoldBarPoint  `json:"points"`
+	GoldBars []GoldBarPoint  `json:"goldBars,omitempty"`
+	Stats    GoldMarketStats `json:"stats"`
+}
+
+func (s *AppState) startGoldMarketWorker() {
+	log.Printf("[GOLD-MARKET] Starting background gold market worker")
+	time.Sleep(3 * time.Second)
+	s.fetchGoldMarket()
+
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		nowUTC := time.Now().UTC()
+		todayStr := nowUTC.Format("2006-01-02")
+
+		s.goldMarketMu.RLock()
+		lastPointDate := ""
+		if s.lastGoldPointTime > 0 {
+			lastPointDate = time.UnixMilli(s.lastGoldPointTime).UTC().Format("2006-01-02")
+		}
+		s.goldMarketMu.RUnlock()
+
+		// Active Hunt Mode:
+		// Between 03:00 and 08:00 MSK (00:00 - 05:00 UTC), if MetaForge has not yet published
+		// today's fresh price bar (lastPointDate != todayStr), poll every 2 minutes without stopping.
+		// As soon as today's bar is received, relax back to 10-minute polling.
+		needsTodayPoint := (lastPointDate != todayStr)
+		isResetWindow := (nowUTC.Hour() >= 0 && nowUTC.Hour() < 5)
+
+		if (isResetWindow && needsTodayPoint) || nowUTC.Minute()%10 == 0 {
+			s.fetchGoldMarket()
+		}
+	}
+}
+
+func (s *AppState) fetchGoldMarket() {
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", "https://metaforge.app/api/wardogs/market", nil)
+	if err != nil {
+		log.Printf("[GOLD-MARKET] Error building request: %v", err)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WarLink/"+ServerAppVersion)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[GOLD-MARKET] Error fetching market data: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[GOLD-MARKET] Non-200 status code: %d", resp.StatusCode)
+		return
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[GOLD-MARKET] Error reading response body: %v", err)
+		return
+	}
+
+	var marketResp GoldMarketResponse
+	if err := json.Unmarshal(body, &marketResp); err != nil {
+		log.Printf("[GOLD-MARKET] Error decoding JSON: %v", err)
+		return
+	}
+
+	s.goldMarketMu.Lock()
+	s.cachedGoldData = body
+	s.goldMarketMu.Unlock()
+
+	var lastPointTime int64
+	var lastPointPrice int
+	if len(marketResp.Points) > 0 {
+		last := marketResp.Points[len(marketResp.Points)-1]
+		lastPointTime = last.T
+		lastPointPrice = last.Price
+	} else if len(marketResp.GoldBars) > 0 {
+		last := marketResp.GoldBars[len(marketResp.GoldBars)-1]
+		lastPointTime = last.T
+		lastPointPrice = last.Price
+	}
+
+	if lastPointTime > 0 {
+		s.goldMarketMu.Lock()
+		s.lastGoldPointTime = lastPointTime
+		s.goldMarketMu.Unlock()
+	}
+
+	if s.db != nil {
+		_, _ = s.db.Exec(`
+			INSERT INTO gold_market_cache (id, current_price, min_price, max_price, change_7d, change_30d, change_90d, change_1y, change_all, history_json, updated_at)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+			ON CONFLICT (id) DO UPDATE SET
+				current_price = EXCLUDED.current_price,
+				min_price = EXCLUDED.min_price,
+				max_price = EXCLUDED.max_price,
+				change_7d = EXCLUDED.change_7d,
+				change_30d = EXCLUDED.change_30d,
+				change_90d = EXCLUDED.change_90d,
+				change_1y = EXCLUDED.change_1y,
+				change_all = EXCLUDED.change_all,
+				history_json = EXCLUDED.history_json,
+				updated_at = NOW()
+		`, marketResp.Stats.Current, marketResp.Stats.Min, marketResp.Stats.Max,
+			marketResp.Stats.Changes.D7, marketResp.Stats.Changes.D30, marketResp.Stats.Changes.D90, marketResp.Stats.Changes.Y1, marketResp.Stats.Changes.All,
+			string(body))
+	}
+
+	if lastPointPrice >= 166000 && lastPointPrice <= 200000 && lastPointTime > 0 {
+		s.goldMarketMu.Lock()
+		alreadyAlerted := (s.lastGoldAlertPoint == lastPointTime)
+		if !alreadyAlerted {
+			s.lastGoldAlertPoint = lastPointTime
+		}
+		s.goldMarketMu.Unlock()
+
+		if !alreadyAlerted {
+			canSend := true
+			if s.db != nil {
+				var count int
+				_ = s.db.QueryRow(`
+					SELECT COUNT(*) FROM in_app_notifications
+					WHERE action_url = '#view-gold-market'
+					AND created_at >= CURRENT_DATE
+				`).Scan(&count)
+				if count > 0 {
+					canSend = false
+				}
+			}
+
+			if canSend {
+				log.Printf("[GOLD-MARKET] Fresh trading point %d: Price dropped to $%d (in range 166k-200k). Sending broadcast notification!", lastPointTime, lastPointPrice)
+				title := "Слиток золота подешевел!"
+				msg := fmt.Sprintf("Текущая цена слитка золота опустилась до $%d. Отличный момент для покупки!", lastPointPrice)
+				s.sendBroadcastNotification(title, msg, "update", "Золотообмен", "#view-gold-market")
+			}
+		}
+	}
+}
+
+func (s *AppState) sendBroadcastNotification(title, message, severity, actionLabel, actionURL string) {
+	var newID int64
+	if s.db != nil {
+		err := s.db.QueryRow(`
+			INSERT INTO in_app_notifications (target_type, target_id, title, message, severity, action_label, action_url, created_at)
+			VALUES ('broadcast', '', $1, $2, $3, $4, $5, NOW())
+			RETURNING id
+		`, title, message, severity, actionLabel, actionURL).Scan(&newID)
+		if err != nil {
+			log.Printf("[NOTIFICATION] Error creating broadcast notification: %v", err)
+			return
+		}
+	}
+
+	if s.rdb != nil {
+		notifPayload, _ := json.Marshal(map[string]interface{}{
+			"id":           newID,
+			"target_type":  "broadcast",
+			"target_id":    "",
+			"title":        title,
+			"message":      message,
+			"severity":     severity,
+			"action_label": actionLabel,
+			"action_url":   actionURL,
+			"created_at":   time.Now().UTC().Format(time.RFC3339),
+		})
+		_ = s.rdb.Publish(context.Background(), "notifications:new", string(notifPayload)).Err()
+	}
+	log.Printf("[NOTIFICATION] Broadcast sent #%d: %s", newID, title)
+}
+
+func (s *AppState) handleGoldMarket(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	s.goldMarketMu.RLock()
+	cached := s.cachedGoldData
+	s.goldMarketMu.RUnlock()
+
+	if len(cached) > 0 {
+		_, _ = w.Write(cached)
+		return
+	}
+
+	if s.db != nil {
+		var histJSON string
+		err := s.db.QueryRow(`SELECT history_json FROM gold_market_cache WHERE id = 1`).Scan(&histJSON)
+		if err == nil && len(histJSON) > 0 && histJSON != "[]" {
+			s.goldMarketMu.Lock()
+			s.cachedGoldData = []byte(histJSON)
+			s.goldMarketMu.Unlock()
+			_, _ = w.Write([]byte(histJSON))
+			return
+		}
+	}
+
+	s.fetchGoldMarket()
+	s.goldMarketMu.RLock()
+	cached = s.cachedGoldData
+	s.goldMarketMu.RUnlock()
+
+	if len(cached) > 0 {
+		_, _ = w.Write(cached)
+	} else {
+		http.Error(w, `{"error":"gold_market_unavailable"}`, http.StatusServiceUnavailable)
+	}
 }

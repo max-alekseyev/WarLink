@@ -1,0 +1,123 @@
+<!-- VIEW: Gold Bar Market (ЗОЛОТООБМЕН WARDOGS) -->
+<div id="view-gold-market" class="details-view">
+    <div class="details-header">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="details-title font-mono">ЗОЛОТООБМЕН</span>
+            <span class="votes-badge" style="font-size: 10px; color: var(--text-muted); background: #181818; border: 1px solid #282828;">Сброс в 03:00 МСК</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <button class="btn-link" style="font-size: 11px; color: var(--text-muted); cursor: pointer;" onclick="refreshGoldMarket(event)">Обновить</button>
+            <button class="details-close" onclick="toggleGoldMarket(event)">Закрыть</button>
+        </div>
+    </div>
+    
+    <div class="details-content" style="display: flex; flex-direction: column; gap: 10px; padding: 0 4px 10px 4px; overflow-y: auto;">
+        
+        <!-- Top Stats Row (5 Cards) -->
+        <div class="gold-stats-row">
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ТЕКУЩИЙ КУРС</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-current">$ —</div>
+                <div class="gold-stat-sub font-mono" id="gold-stat-reset-date">За 1 слиток</div>
+            </div>
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ЗА 7 ДНЕЙ</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-7d">—</div>
+                <div class="gold-stat-sub">Динамика недели</div>
+            </div>
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ЗА 30 ДНЕЙ</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-30d">—</div>
+                <div class="gold-stat-sub">Динамика месяца</div>
+            </div>
+            <div class="gold-stat-card">
+                <div class="gold-stat-label">ЗА ВСЕ ВРЕМЯ</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-all">—</div>
+                <div class="gold-stat-sub">Общий тренд</div>
+            </div>
+            <div class="gold-stat-card" id="gold-buy-zone-card">
+                <div class="gold-stat-label">ЗОНА ПОКУПКИ</div>
+                <div class="gold-stat-val font-mono" style="color: #FF5E1F;">$166k – 200k</div>
+                <div class="gold-stat-sub" id="gold-stat-signal">Ожидание спада</div>
+            </div>
+        </div>
+
+        <!-- Notification Banner if in buy zone -->
+        <div id="gold-alert-banner" class="gold-alert-banner" style="display: none;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span id="gold-alert-banner-text">Слиток золота подешевел! Отличный момент для покупки.</span>
+        </div>
+
+        <!-- Chart Container -->
+        <div class="gold-chart-box">
+            <div class="gold-chart-header">
+                <div class="gold-chart-header-left">
+                    <span class="gold-chart-title font-mono">Стоимость слитка золота</span>
+                    <div id="gold-pinned-badge" class="gold-pinned-badge font-mono" style="display: none;">
+                        <span id="gold-pinned-date"></span>
+                        <b id="gold-pinned-price"></b>
+                        <span id="gold-pinned-pct"></span>
+                        <button type="button" class="gold-unpin-btn" onclick="unpinGoldPoint(event)" title="Сбросить метку">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="gold-timeframe-selector">
+                    <button class="gold-tf-btn" data-tf="7d" onclick="setGoldTimeframe('7d')">7Д</button>
+                    <button class="gold-tf-btn" data-tf="30d" onclick="setGoldTimeframe('30d')">30Д</button>
+                    <button class="gold-tf-btn active" data-tf="90d" onclick="setGoldTimeframe('90d')">90Д</button>
+                    <button class="gold-tf-btn" data-tf="all" onclick="setGoldTimeframe('all')">Все</button>
+                </div>
+            </div>
+            <div class="gold-canvas-wrap" id="gold-canvas-wrap">
+                <canvas id="gold-market-canvas" width="620" height="180"></canvas>
+                <!-- Floating Hover Tooltip -->
+                <div id="gold-chart-tooltip" class="gold-chart-tooltip" style="display: none;">
+                    <div class="gold-tt-date font-mono" id="gold-tt-date"></div>
+                    <div class="gold-tt-price font-mono" id="gold-tt-price"></div>
+                    <div class="gold-tt-change font-mono" id="gold-tt-change"></div>
+                </div>
+            </div>
+            <div class="gold-chart-footer font-mono">
+                <span>Мин: <b id="gold-stat-min">$166 000</b></span>
+                <span class="gold-legend-avg"><span class="gold-legend-dash-avg"></span> Средняя цена за период</span>
+                <span>Макс: <b id="gold-stat-max">—</b></span>
+            </div>
+        </div>
+
+        <!-- Converter Block -->
+        <div class="gold-converter-box">
+            <div class="gold-converter-header font-mono">КАЛЬКУЛЯТОР КОНВЕРТАЦИИ В ИГРОВУЮ ВАЛЮТУ ($)</div>
+            <div class="gold-converter-inputs">
+                <div class="gold-conv-group">
+                    <label class="gold-conv-label font-mono">Слитки золота</label>
+                    <div class="gold-input-wrap">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+                            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+                        </svg>
+                        <input type="number" id="gold-calc-bars" min="1" step="1" value="1" oninput="calculateGoldToCash()">
+                    </div>
+                </div>
+
+                <div class="gold-conv-eq">=</div>
+
+                <div class="gold-conv-group">
+                    <label class="gold-conv-label font-mono">Игровая валюта ($)</label>
+                    <div class="gold-input-wrap">
+                        <span class="gold-input-curr font-mono">$</span>
+                        <input type="text" id="gold-calc-cash" oninput="calculateCashToBars()">
+                    </div>
+                </div>
+            </div>
+            <div class="gold-converter-hint font-mono" id="gold-calc-hint">
+                1 слиток = $ — по текущему курсу рынка WARDOGS
+            </div>
+        </div>
+
+    </div>
+</div>

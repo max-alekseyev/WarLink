@@ -41,6 +41,7 @@ type Engine struct {
 	isConnected        bool
 	isConnecting       bool
 	winwsStopping      atomic.Bool
+	singboxStopping    atomic.Bool
 	selectedAlt        string
 	freeInternetActive bool
 	logCallback        func(string)
@@ -169,7 +170,10 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 				}
 				selectedGameID = selectedGameID + " (гибрид)"
 			}
-			if err := e.singboxMgr.Start(targets, true, e.log, selectedGameID); err != nil {
+			e.singboxStopping.Store(true)
+			startErr := e.singboxMgr.Start(targets, true, e.log, selectedGameID)
+			e.singboxStopping.Store(false)
+			if startErr != nil {
 				// Rollback and release session immediately on failure
 				e.mu.Lock()
 				e.freeInternetActive = false
@@ -178,14 +182,14 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 					_ = e.stopWinws()
 					_ = singbox.ReleaseSession()
 				}
-				errMsg := err.Error()
+				errMsg := startErr.Error()
 				if idx := strings.Index(errMsg, "техобслуживани"); idx != -1 {
 					return errors.New(errMsg[idx:])
 				}
 				if idx := strings.Index(errMsg, "все слоты шлюза заняты"); idx != -1 {
 					return errors.New(errMsg[idx:])
 				}
-				return fmt.Errorf("ошибка подключения к шлюзу: %w", err)
+				return fmt.Errorf("ошибка подключения к шлюзу: %w", startErr)
 			}
 		}
 
@@ -236,7 +240,9 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 				if selectedGameID == "" {
 					selectedGameID = "wardogs"
 				}
+				e.singboxStopping.Store(true)
 				_ = e.singboxMgr.Start(targets, false, e.log, selectedGameID)
+				e.singboxStopping.Store(false)
 			}
 			return nil
 		}
@@ -246,7 +252,9 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 			e.beacon.Stop()
 		}
 		if e.singboxMgr != nil {
+			e.singboxStopping.Store(true)
 			_ = e.singboxMgr.Stop()
+			e.singboxStopping.Store(false)
 		}
 		// Release slot immediately when Free Internet is disabled
 		go func() {
@@ -759,18 +767,22 @@ func (e *Engine) disconnectInternal() error {
 
 	// 2. Disconnect sing-box (unless Free Internet mode is active)
 	if !freeActive {
+		e.singboxStopping.Store(true)
 		if e.singboxMgr != nil {
 			e.log("[INFO] Остановка игрового туннеля sing-box...")
 			_ = e.singboxMgr.Stop()
 		}
 		go func() {
 			_ = singbox.ReleaseSession()
+			e.singboxStopping.Store(false)
 		}()
 	} else {
+		e.singboxStopping.Store(true)
 		if e.singboxMgr != nil {
 			// Seamlessly transition sing-box to Web-Only mode (remove game process)
 			_ = e.singboxMgr.Start(nil, true, e.log, "free_internet")
 		}
+		e.singboxStopping.Store(false)
 		e.log("[INFO] Селективный туннель Hysteria 2 остается активным для Telegram, Meta и WhatsApp")
 	}
 
@@ -943,14 +955,22 @@ func (e *Engine) checkProcessHealth() {
 
 	if !winwsAlive && (isConn || isFreeNet) && !e.winwsStopping.Load() {
 		e.log("[WARN] Обнаружено неожиданное завершение winws2.exe. Автоматическое восстановление сетевого фильтра...")
+		ReportEngineCrash("winws2_crash", "Неожиданное завершение winws2.exe во время активной сессии", map[string]interface{}{
+			"is_connected": isConn,
+			"is_free_net":  isFreeNet,
+		})
 		_ = e.EnsureWinwsRunning()
 	}
 
 	// 2. Check sing-box.exe if connected or free internet
 	needRestart := false
-	if (isConn || isFreeNet) && e.singboxMgr != nil {
+	if (isConn || isFreeNet) && e.singboxMgr != nil && !e.singboxStopping.Load() {
 		if !e.singboxMgr.IsProcessAlive() {
 			e.log("[WARN] Обнаружено неожиданное завершение sing-box.exe. Перезапуск туннеля...")
+			ReportEngineCrash("singbox_crash", "Неожиданное завершение sing-box.exe во время активного подключения", map[string]interface{}{
+				"is_connected": isConn,
+				"is_free_net":  isFreeNet,
+			})
 			needRestart = true
 		} else if e.singboxMgr.HasAuthError() {
 			e.log("[WARN] Обнаружен сбой авторизации шлюза Hysteria 2 (404/expired). Обновление сессии и перезапуск туннеля...")
@@ -958,6 +978,8 @@ func (e *Engine) checkProcessHealth() {
 		}
 	}
 	if needRestart {
+		e.singboxStopping.Store(true)
+		defer e.singboxStopping.Store(false)
 		var targets []string
 		if isConn {
 			selectedGame := e.cfg.GetSelectedGame()
@@ -993,6 +1015,9 @@ func (e *Engine) checkProcessHealth() {
 		startErr := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID)
 		if startErr != nil && strings.Contains(startErr.Error(), "already exists") {
 			e.log("[WARN] Обнаружена задержка освобождения Wintun-интерфейса Windows. Принудительный сброс адаптера...")
+			ReportEngineCrash("wintun_driver", "Задержка освобождения Wintun-интерфейса: "+startErr.Error(), map[string]interface{}{
+				"game_id": selectedGameID,
+			})
 			deps.CleanupZombieWintunAdapter(e.log)
 			time.Sleep(2000 * time.Millisecond)
 			startErr = e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID)
@@ -1001,6 +1026,9 @@ func (e *Engine) checkProcessHealth() {
 		if startErr != nil {
 			e.singboxRestartAttempts++
 			e.log(fmt.Sprintf("[ERROR] Не удалось перезапустить туннель (попытка %d/3): %v", e.singboxRestartAttempts, startErr))
+			ReportEngineCrash("singbox_restart_failed", fmt.Sprintf("Ошибка перезапуска sing-box: %v", startErr), map[string]interface{}{
+				"attempts": e.singboxRestartAttempts,
+			})
 			if e.singboxRestartAttempts >= 3 {
 				e.log("[ERROR] Превышен лимит попыток восстановления туннеля (шлюз перегружен или недоступен). Сессия отключена.")
 				e.singboxRestartAttempts = 0

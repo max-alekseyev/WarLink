@@ -83,14 +83,7 @@ var DirectGameDomains = []string{
 	"steamcommunity.com",
 	"steamstatic.com",
 	"steamgames.com",
-	// Epic Games Store — WARDOGS lobby auth & backend
-	"epicgames.com",
-	"epicgames.dev",
-	"epicgames.net",
-	"unrealengine.com",
-	"ol.epicgames.com",
-	"api.epicgames.dev",
-	// EGS CDN & auth services
+	// EGS CDN & AWS services
 	"cloudfront.net",
 	"amazonaws.com",
 	// AWS GameLift infrastructure (match server assignment API)
@@ -116,8 +109,6 @@ var DirectLauncherProcesses = []string{
 	"vgtray.exe",
 	"EasyAntiCheat.exe",
 	"easyanticheat.exe",
-	"EasyAntiCheat_EOS.exe",
-	"easyanticheat_eos.exe",
 	"BEService.exe",
 	"beservice.exe",
 	"faceitclient.exe",
@@ -357,11 +348,11 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-stockholm
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-gateway
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
-			Outbound: "hy2-stockholm",
+			Outbound: "hy2-gateway",
 		},
 		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
@@ -382,13 +373,13 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		})
 	}
 
-	// 7. Route specified target game processes to hy2-stockholm with HIGHEST PRIORITY!
+	// 7. Route specified target game processes to hy2-gateway with HIGHEST PRIORITY!
 	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
 	// MUST go through tunnel!
 	if len(allProcesses) > 0 {
 		rules = append(rules, SingBoxRouteRule{
 			ProcessName: allProcesses,
-			Outbound:    "hy2-stockholm",
+			Outbound:    "hy2-gateway",
 		})
 	}
 
@@ -416,11 +407,11 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		rules = append(rules,
 			SingBoxRouteRule{
 				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-stockholm",
+				Outbound:     "hy2-gateway",
 			},
 			SingBoxRouteRule{
 				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-stockholm",
+				Outbound: "hy2-gateway",
 			},
 		)
 	}
@@ -429,7 +420,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	if len(allDomains) > 0 {
 		rules = append(rules, SingBoxRouteRule{
 			DomainSuffix: allDomains,
-			Outbound:     "hy2-stockholm",
+			Outbound:     "hy2-gateway",
 		})
 	}
 
@@ -437,7 +428,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	if len(allIPs) > 0 {
 		rules = append(rules, SingBoxRouteRule{
 			IPCIDR:   allIPs,
-			Outbound: "hy2-stockholm",
+			Outbound: "hy2-gateway",
 		})
 	}
 
@@ -445,7 +436,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	rules = append(rules, SingBoxRouteRule{
 		Network:   "udp",
 		PortRange: []string{"4000:4500"},
-		Outbound:  "hy2-stockholm",
+		Outbound:  "hy2-gateway",
 	})
 
 	// Discord Voice WebRTC UDP media strictly for Discord processes routes direct
@@ -459,7 +450,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		SingBoxRouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
-			PortRange:   []string{"19294:19344", "50000:50100"},
+			PortRange:   []string{"19294:19344", "50000:65535"},
 			Outbound:    "direct",
 		},
 	)
@@ -545,7 +536,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				Tag:    "dns-remote",
 				Type:   "tcp",
 				Server: "1.1.1.1",
-				Detour: "hy2-stockholm",
+				Detour: "hy2-gateway",
 			},
 			{
 				Tag:    "dns-local",
@@ -559,7 +550,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 
 	hy2Outbound := SingBoxOutbound{
 		Type:        "hysteria2",
-		Tag:         "hy2-stockholm",
+		Tag:         "hy2-gateway",
 		Server:      targetServer,
 		ServerPorts: normalizeServerPorts(serverPorts),
 		HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
@@ -592,7 +583,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
 				Address:       []string{"172.19.0.1/30"},
-				MTU:           1360,
+				MTU:           1320,
 				AutoRoute:           true,
 				StrictRoute:         false,
 				Stack:               "mixed",

@@ -1,7 +1,25 @@
-// ui/js/account.js - User Account, Profile & Donation Handling
+function loadCachedAccountProfile() {
+    try {
+        const raw = localStorage.getItem('warlink_account_profile');
+        if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return null;
+}
 
-let cachedAccountProfile = null;
+let cachedAccountProfile = loadCachedAccountProfile();
 let currentDonateAmount = 100;
+
+window.initAccountCache = function() {
+    if (cachedAccountProfile) {
+        renderAccountData(cachedAccountProfile);
+        if (cachedAccountProfile.avatar_url) {
+            updateAvatarDisplays(cachedAccountProfile.avatar_url);
+        }
+    }
+};
+if (cachedAccountProfile) {
+    window.initAccountCache();
+}
 
 function getDonationsSkeletonHtml(count = 2) {
     let html = '';
@@ -22,10 +40,6 @@ function getDonationsSkeletonHtml(count = 2) {
 function toggleAccount(e) {
     if (e) e.stopPropagation();
     switchView('view-account');
-}
-
-function closeAccount() {
-    switchView(null);
 }
 
 async function fetchAccountProfile() {
@@ -72,6 +86,12 @@ async function fetchAccountProfile() {
 function renderAccountData(p) {
     if (!p) return;
     cachedAccountProfile = p;
+    try {
+        localStorage.setItem('warlink_account_profile', JSON.stringify(p));
+        if (p.account_number) {
+            localStorage.setItem('warlink_account_number', p.account_number);
+        }
+    } catch (e) {}
     const accNumEl = document.getElementById('val-account-number');
     if (accNumEl && p.account_number) {
         accNumEl.textContent = p.account_number;
@@ -426,6 +446,10 @@ function openDonateModalWithTab(tab, e) {
     const modal = document.getElementById('modal-donate-custom');
     if (modal) {
         modal.style.display = 'flex';
+        const modalBody = document.querySelector('.donate-modal-card .modal-body');
+        if (modalBody) {
+            modalBody.scrollTop = 0;
+        }
         switchDonateTab(tab || 'boosty');
         loadBoostyGoal();
         if (tab === 'server') {
@@ -436,19 +460,110 @@ function openDonateModalWithTab(tab, e) {
 }
 
 function switchDonateTab(tab) {
-    currentDonateTab = tab === 'server' ? 'server' : 'boosty';
+    if (tab === 'crypto' || tab === 'usdt') {
+        currentDonateTab = 'crypto';
+    } else if (tab === 'server') {
+        currentDonateTab = 'server';
+    } else {
+        currentDonateTab = 'boosty';
+    }
+
     const tabServer = document.getElementById('tab-donate-server');
     const tabBoosty = document.getElementById('tab-donate-boosty');
+    const tabCrypto = document.getElementById('tab-donate-crypto');
     const panelServer = document.getElementById('donate-panel-server');
     const panelBoosty = document.getElementById('donate-panel-boosty');
+    const panelCrypto = document.getElementById('donate-panel-crypto');
 
-    if (tabServer) tabServer.classList.toggle('active', currentDonateTab === 'server');
+    if (tabServer) {
+        tabServer.classList.toggle('active', currentDonateTab === 'server');
+        tabServer.classList.toggle('tab-server-active', currentDonateTab === 'server');
+    }
     if (tabBoosty) {
         tabBoosty.classList.toggle('active', currentDonateTab === 'boosty');
         tabBoosty.classList.toggle('tab-boosty-active', currentDonateTab === 'boosty');
     }
+    if (tabCrypto) {
+        tabCrypto.classList.toggle('active', currentDonateTab === 'crypto');
+        tabCrypto.classList.toggle('tab-crypto-active', currentDonateTab === 'crypto');
+    }
+
     if (panelServer) panelServer.style.display = currentDonateTab === 'server' ? 'block' : 'none';
-    if (panelBoosty) panelBoosty.style.display = currentDonateTab === 'boosty' ? 'block' : 'none';
+    if (panelBoosty) panelBoosty.style.display = currentDonateTab === 'boosty' ? 'flex' : 'none';
+    if (panelCrypto) {
+        panelCrypto.style.display = currentDonateTab === 'crypto' ? 'flex' : 'none';
+        if (currentDonateTab === 'crypto') {
+            renderCryptoQR();
+        }
+    }
+
+    const modalBody = document.querySelector('.donate-modal-card .modal-body');
+    if (modalBody) {
+        modalBody.scrollTop = 0;
+    }
+}
+
+const TRC20_USDT_ADDRESS = 'TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM';
+
+function renderCryptoQR() {
+    const container = document.getElementById('crypto-qr-container');
+    if (!container) return;
+    if (container.dataset.rendered === 'true') return;
+
+    try {
+        if (typeof qrcode === 'function') {
+            const qr = qrcode(0, 'M');
+            qr.addData(TRC20_USDT_ADDRESS);
+            qr.make();
+            container.innerHTML = qr.createSvgTag(4, 2);
+            container.dataset.rendered = 'true';
+        }
+    } catch (err) {
+        console.error('Failed to generate crypto QR code:', err);
+    }
+}
+
+function copyCryptoAddress() {
+    const addr = TRC20_USDT_ADDRESS;
+    const input = document.getElementById('input-crypto-addr');
+    if (input) {
+        input.select();
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(addr).then(() => {
+            showCryptoCopyFeedback();
+        }).catch(() => {
+            legacyCopyCrypto(addr);
+        });
+    } else {
+        legacyCopyCrypto(addr);
+    }
+}
+
+function showCryptoCopyFeedback() {
+    const btn = document.getElementById('btn-copy-crypto-addr');
+    if (btn) {
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span style="color: #22c55e;">Скопировано!</span>
+        `;
+        setTimeout(() => {
+            btn.innerHTML = originalHTML;
+        }, 2200);
+    }
+    if (typeof showToast === 'function') {
+        showToast('Адрес кошелька TRC20 скопирован в буфер обмена');
+    }
+}
+
+function legacyCopyCrypto(text) {
+    const input = document.getElementById('input-crypto-addr');
+    if (input) {
+        input.select();
+        document.execCommand('copy');
+        showCryptoCopyFeedback();
+    }
 }
 
 function closeDonateModal() {

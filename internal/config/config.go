@@ -115,7 +115,7 @@ func DefaultGames() []GameProfile {
 			},
 			PreferredAlt: "Автокалибровка (Circular Adaptive)",
 			LaunchCount:  0,
-			IconURL:      "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/1867240/6829090332535af8637c4b6e1dddf3ee8ec3d134.ico",
+			IconURL:      "wardogs_icon.png",
 			LastPlayed:   time.Now().Unix(),
 			IsDefault:    true,
 			Autolaunch:   true,
@@ -134,7 +134,7 @@ func DefaultGames() []GameProfile {
 			},
 			PreferredAlt: "Автокалибровка (Circular Adaptive)",
 			LaunchCount:  0,
-			IconURL:      "https://shared.fastly.steamstatic.com/community_assets/images/apps/1808500/c284e73b6f3321864805d66f99924a0da9f0b219.ico",
+			IconURL:      "arc_raiders_icon.png",
 			LastPlayed:   time.Now().Unix() - 100,
 			IsDefault:    true,
 			Autolaunch:   true,
@@ -153,7 +153,7 @@ func DefaultGames() []GameProfile {
 			},
 			PreferredAlt: "Автокалибровка (Circular Adaptive)",
 			LaunchCount:  0,
-			IconURL:      "https://shared.fastly.steamstatic.com/community_assets/images/apps/2016590/4f519f3cd01554e7a59945ac296ac8e301b00728.ico",
+			IconURL:      "dark_and_darker_icon.png",
 			LastPlayed:   time.Now().Unix() - 200,
 			IsDefault:    true,
 			Autolaunch:   true,
@@ -226,8 +226,18 @@ func Load() *Config {
 			existingMap[g.ID] = i
 			if g.ID == "wardogs" {
 				cfg.Games[i].SteamAppID = "1867240"
-				if cfg.Games[i].IconURL == "" || cfg.Games[i].IconURL == "/wardogs_icon.png" {
-					cfg.Games[i].IconURL = "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/apps/1867240/6829090332535af8637c4b6e1dddf3ee8ec3d134.ico"
+				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") || cfg.Games[i].IconURL == "/wardogs_icon.png" {
+					cfg.Games[i].IconURL = "wardogs_icon.png"
+				}
+			} else if g.ID == "arc_raiders" {
+				cfg.Games[i].SteamAppID = "1808500"
+				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") {
+					cfg.Games[i].IconURL = "arc_raiders_icon.png"
+				}
+			} else if g.ID == "dark_and_darker" {
+				cfg.Games[i].SteamAppID = "2016590"
+				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") {
+					cfg.Games[i].IconURL = "dark_and_darker_icon.png"
 				}
 			}
 		}
@@ -235,7 +245,7 @@ func Load() *Config {
 			if idx, found := existingMap[defG.ID]; !found {
 				cfg.Games = append(cfg.Games, defG)
 			} else {
-				if cfg.Games[idx].IconURL == "" {
+				if cfg.Games[idx].IconURL == "" || strings.Contains(cfg.Games[idx].IconURL, "steamstatic.com") {
 					cfg.Games[idx].IconURL = defG.IconURL
 				}
 				if cfg.Games[idx].SteamAppID == "" {
@@ -555,19 +565,6 @@ func (c *Config) GetSelectedAlt() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.SelectedAlt
-}
-
-func (c *Config) SetAutolaunchGame(enabled bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.AutolaunchGame = enabled
-	_ = c.saveLocked()
-}
-
-func (c *Config) IsAutolaunchGame() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.AutolaunchGame
 }
 
 func (c *Config) SetBenchmarkCompleted(completed bool) {

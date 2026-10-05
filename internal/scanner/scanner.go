@@ -30,6 +30,17 @@ var ConflictingProcessNames = []string{
 	"hiddify.exe",
 	"v2ray.exe",
 	"xray.exe",
+	// Third-party game boosters with conflicting WFP/socket drivers
+	"gearup_booster.exe",
+	"gearup_ball.exe",
+	"gearupbooster.exe",
+	"exitlag.exe",
+	"lagofast.exe",
+	// Commercial VPNs causing double-tunnel conflicts
+	"RedShieldVPN.exe",
+	"redshieldvpn.exe",
+	"RedShield.exe",
+	"adguardsvc.exe",
 }
 
 // FindConflicts returns a list of conflicting processes currently running.

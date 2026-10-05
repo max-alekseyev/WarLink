@@ -10,19 +10,25 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
         </div>
+        <!-- Navigation Tabs (Static, outside scrollable body) -->
+        <div class="donate-nav-tabs">
+            <button type="button" id="tab-donate-boosty" class="donate-tab-btn tab-boosty-active active" onclick="switchDonateTab('boosty')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <span>АВТОРУ (BOOSTY)</span>
+            </button>
+            <button type="button" id="tab-donate-server" class="donate-tab-btn" onclick="switchDonateTab('server')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                <span>СЕРВЕР (СБП)</span>
+            </button>
+            <button type="button" id="tab-donate-crypto" class="donate-tab-btn" onclick="switchDonateTab('crypto')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v12M9 10h6M9 14h6"/>
+                </svg>
+                <span>USDT (TRC20)</span>
+            </button>
+        </div>
         <div class="modal-body">
-            <!-- Navigation Tabs (Boosty First & Highlighted) -->
-            <div class="donate-nav-tabs">
-                <button type="button" id="tab-donate-boosty" class="donate-tab-btn tab-boosty-active active font-mono" onclick="switchDonateTab('boosty')">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                    ПОДДЕРЖКА АВТОРА (BOOSTY)
-                </button>
-                <button type="button" id="tab-donate-server" class="donate-tab-btn font-mono" onclick="switchDonateTab('server')">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                    СЕРВЕРНЫЙ ШЛЮЗ (СБП)
-                </button>
-            </div>
-
             <!-- TAB 1: Автору на Boosty (Default & Prominent) -->
             <div id="donate-panel-boosty" class="boosty-panel">
                 <!-- 1. Special Project BF6 -->
@@ -177,6 +183,34 @@
                     <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 28px; font-size: 11px;" onclick="submitCustomDonation()">
                         Поддержать сервер
                     </button>
+                </div>
+            </div>
+
+            <!-- TAB 3: USDT (TRC20) Crypto Donate -->
+            <div id="donate-panel-crypto" class="crypto-panel" style="display: none;">
+                <div class="crypto-network-header font-mono">
+                    <span class="crypto-network-badge">TRON NETWORK (TRC20)</span>
+                    <span class="crypto-token-badge">Tether USD (USDT)</span>
+                </div>
+
+                <div class="crypto-qr-card">
+                    <div id="crypto-qr-container"></div>
+                </div>
+
+                <div class="crypto-addr-box font-mono">
+                    <label class="crypto-addr-label">Адрес кошелька TRC20 для пополнения:</label>
+                    <div class="crypto-addr-row">
+                        <input type="text" id="input-crypto-addr" class="crypto-addr-input" value="TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM" readonly onclick="this.select()">
+                        <button type="button" id="btn-copy-crypto-addr" class="btn-copy-crypto" onclick="copyCryptoAddress()">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                            <span>Скопировать</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="crypto-warning-box font-mono">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span>Отправляйте только USDT через сеть TRC20 (Tron). Перевод других токенов или отправка через иные сети приведет к безвозвратной потере средств.</span>
                 </div>
             </div>
         </div>

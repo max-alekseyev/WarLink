@@ -75,7 +75,12 @@ direct(suffix:steamserver.net)
 direct(all, udp/27000-27200)
 
 # 7. Allow Game Engine, Cloud Infrastructure & Dedicated Servers
+direct(suffix:epicgames.com)
 direct(suffix:epicgames.dev)
+direct(suffix:epicgames.net)
+direct(suffix:unrealengine.com)
+direct(suffix:ol.epicgames.com)
+direct(suffix:api.epicgames.dev)
 direct(suffix:amazonaws.com)
 direct(suffix:cloudflare.com)
 direct(suffix:fastly.net)

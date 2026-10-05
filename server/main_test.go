@@ -40,6 +40,28 @@ func TestHandleSingBoxConfigUnauthorized(t *testing.T) {
 	}
 }
 
+func TestHandleDesyncConfig(t *testing.T) {
+	state := &AppState{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/desync/config", nil)
+	w := httptest.NewRecorder()
+	state.handleDesyncConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Code)
+	}
+
+	var res struct {
+		Success bool          `json:"success"`
+		Presets []interface{} `json:"presets"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !res.Success || len(res.Presets) == 0 {
+		t.Fatalf("expected non-empty presets list from desync config")
+	}
+}
+
 func TestHandleSingBoxConfigSuccess(t *testing.T) {
 	state := &AppState{
 		sessions:     make(map[string]*SessionInfo),
@@ -119,7 +141,7 @@ func TestHandleSingBoxConfigSuccess(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if rule["outbound"] == "hy2-stockholm" {
+		if rule["outbound"] == "hy2-gateway" {
 			if portRanges, ok := rule["port_range"].([]interface{}); ok {
 				for _, pr := range portRanges {
 					if pr == "4000:4500" {
@@ -140,7 +162,7 @@ func TestHandleSingBoxConfigSuccess(t *testing.T) {
 	}
 
 	if !hasMatchTunnel {
-		t.Errorf("expected hy2-stockholm tunnel rule for UDP 4000:4500")
+		t.Errorf("expected hy2-gateway tunnel rule for UDP 4000:4500")
 	}
 	if !hasSDRDirect {
 		t.Errorf("expected direct rule for UDP 27000:27200")
@@ -473,7 +495,7 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	beacon := TelemetryBeaconPayload{
 		DeviceID:           "dev-123",
 		AccountNumber:      "1111-2222-3333-4444",
-		AppVersion:         "v2.2.0",
+		AppVersion:         "v2.2.1",
 		RouteMode:          "transit",
 		Status:             "beacon",
 		PingMoscowMs:       24,
@@ -643,27 +665,6 @@ func TestGamesCatalog(t *testing.T) {
 	}
 }
 
-func TestDPIStrategies(t *testing.T) {
-	state := &AppState{}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/dpi/strategies", nil)
-	w := httptest.NewRecorder()
-	state.handleDPIStrategies(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	var resp struct {
-		Success    bool              `json:"success"`
-		Strategies []DPIStrategyItem `json:"strategies"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode: %v", err)
-	}
-	if len(resp.Strategies) != 10 {
-		t.Errorf("expected 10 strategies, got %d", len(resp.Strategies))
-	}
-}
-
 func TestSupportedGamesRejection(t *testing.T) {
 	state := &AppState{
 		enableVoting: true,
@@ -706,5 +707,55 @@ func TestSupportedGamesRejection(t *testing.T) {
 		if !strings.Contains(errMsg, "уже официально поддерживается в WarLink") {
 			t.Errorf("expected error message to mention support, got %q", errMsg)
 		}
+	}
+}
+
+func TestFeatureFlagsEvaluation(t *testing.T) {
+	// 1. evalRolloutFNV bounds
+	if evalRolloutFNV("test_flag", "id1", 0) {
+		t.Fatal("0% rollout should always be false")
+	}
+	if !evalRolloutFNV("test_flag", "id1", 100) {
+		t.Fatal("100% rollout should always be true")
+	}
+
+	// 2. Determinism
+	v1 := evalRolloutFNV("test_flag", "acc-1234-5678", 35)
+	for i := 0; i < 20; i++ {
+		v2 := evalRolloutFNV("test_flag", "acc-1234-5678", 35)
+		if v1 != v2 {
+			t.Fatalf("evalRolloutFNV non-deterministic: iter %d got %v, expected %v", i, v2, v1)
+		}
+	}
+
+	// 3. handleAdminFeatureFlags auth check
+	state := &AppState{
+		cfg: ServerConfig{DashboardKey: "test_secret_password"},
+	}
+
+	reqUnauthorized := httptest.NewRequest(http.MethodGet, "/api/v1/admin/features/flags", nil)
+	wUnauthorized := httptest.NewRecorder()
+	state.handleAdminFeatureFlags(wUnauthorized, reqUnauthorized)
+	if wUnauthorized.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for unauthorized admin access, got %d", wUnauthorized.Code)
+	}
+
+	// 4. handleClientFeatures with empty DB returns empty list and HTTP 200
+	reqClient := httptest.NewRequest(http.MethodGet, "/api/v1/client/features?account_number=1234-5678-9012-3456", nil)
+	wClient := httptest.NewRecorder()
+	state.handleClientFeatures(wClient, reqClient)
+	if wClient.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", wClient.Code)
+	}
+
+	var resp struct {
+		Version  int                      `json:"version"`
+		Features []map[string]interface{} `json:"features"`
+	}
+	if err := json.Unmarshal(wClient.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode client features response: %v", err)
+	}
+	if resp.Version != 2 {
+		t.Fatalf("expected version 2, got %d", resp.Version)
 	}
 }
