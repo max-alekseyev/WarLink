@@ -495,7 +495,7 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	beacon := TelemetryBeaconPayload{
 		DeviceID:           "dev-123",
 		AccountNumber:      "1111-2222-3333-4444",
-		AppVersion:         "v2.2.1",
+		AppVersion:         "v2.2.2",
 		RouteMode:          "transit",
 		Status:             "beacon",
 		PingMoscowMs:       24,

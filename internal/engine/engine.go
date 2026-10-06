@@ -53,6 +53,7 @@ type Engine struct {
 	beacon             *AutoBeacon
 	watchdogStop           chan struct{}
 	singboxRestartAttempts int
+	singboxLastRestart     time.Time
 }
 
 func New(cfg *config.Config, logCb func(string)) *Engine {
@@ -265,6 +266,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 }
 
 func (e *Engine) EnsureWinwsRunning() error {
+	e.winwsStopping.Store(true)
 	defer e.winwsStopping.Store(false)
 	e.mu.Lock()
 	if e.zapretCmd != nil && e.zapretCmd.Process != nil {
@@ -882,6 +884,8 @@ func (e *Engine) OnGameExit(gameTitle string) {
 // AddGameProcess dynamically adds an executable name to the running sing-box routing rules.
 func (e *Engine) AddGameProcess(procName string) error {
 	if e.singboxMgr != nil {
+		e.singboxStopping.Store(true)
+		defer e.singboxStopping.Store(false)
 		return e.singboxMgr.AddTargetProcess(procName, e.log)
 	}
 	return nil
@@ -966,10 +970,13 @@ func (e *Engine) checkProcessHealth() {
 	needRestart := false
 	if (isConn || isFreeNet) && e.singboxMgr != nil && !e.singboxStopping.Load() {
 		if !e.singboxMgr.IsProcessAlive() {
-			e.log("[WARN] Обнаружено неожиданное завершение sing-box.exe. Перезапуск туннеля...")
-			ReportEngineCrash("singbox_crash", "Неожиданное завершение sing-box.exe во время активного подключения", map[string]interface{}{
+			exitCode, stderrTail := e.singboxMgr.GetLastExitInfo()
+			e.log(fmt.Sprintf("[WARN] Обнаружено неожиданное завершение sing-box.exe (код: %d). Перезапуск туннеля...", exitCode))
+			ReportEngineCrash("singbox_crash", fmt.Sprintf("Неожиданное завершение sing-box.exe во время активного подключения (код: %d)", exitCode), map[string]interface{}{
 				"is_connected": isConn,
 				"is_free_net":  isFreeNet,
+				"exit_code":    exitCode,
+				"stderr":       stderrTail,
 			})
 			needRestart = true
 		} else if e.singboxMgr.HasAuthError() {
@@ -978,6 +985,10 @@ func (e *Engine) checkProcessHealth() {
 		}
 	}
 	if needRestart {
+		if e.singboxRestartAttempts > 0 && time.Since(e.singboxLastRestart) < time.Duration(e.singboxRestartAttempts*4)*time.Second {
+			return
+		}
+		e.singboxLastRestart = time.Now()
 		e.singboxStopping.Store(true)
 		defer e.singboxStopping.Store(false)
 		var targets []string

@@ -582,7 +582,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				Type:          "tun",
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
-				Address:       []string{"172.19.0.1/30"},
+				Address:       []string{"172.28.192.1/30"},
 				MTU:           1320,
 				AutoRoute:           true,
 				StrictRoute:         false,

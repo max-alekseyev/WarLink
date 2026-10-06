@@ -51,7 +51,7 @@ var embeddedAdminDialogsHTML string
 
 
 const (
-	ServerAppVersion     = "v2.2.1"
+	ServerAppVersion     = "v2.2.2"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""

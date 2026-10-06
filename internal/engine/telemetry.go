@@ -22,6 +22,11 @@ func ReportEngineCrash(errorType, message string, contextData map[string]interfa
 		"message":     message,
 		"context":     contextData,
 	}
+	if st, ok := contextData["stderr"].(string); ok && st != "" {
+		payload["stack_trace"] = st
+	} else if st, ok := contextData["stack_trace"].(string); ok && st != "" {
+		payload["stack_trace"] = st
+	}
 	cfg := config.Load()
 	if cfg != nil {
 		payload["account_number"] = cfg.AccountNumber

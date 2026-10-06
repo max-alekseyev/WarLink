@@ -1363,7 +1363,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Type:                "tun",
 				Tag:                 "tun-in",
 				InterfaceName:       "WarLink-Tun",
-				Address:             []string{"172.19.0.1/30"},
+				Address:             []string{"172.28.192.1/30"},
 				MTU:                 1320,
 				AutoRoute:           true,
 				StrictRoute:         false,
@@ -1851,7 +1851,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Type:          "tun",
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
-				Address:       []string{"172.19.0.1/30"},
+				Address:       []string{"172.28.192.1/30"},
 				MTU:           1320, // Standard safe MTU (1320) avoiding UDP packet fragmentation across PPPoE and regional ISP tunnels
 				AutoRoute:     true,
 				StrictRoute:   false,
@@ -2127,6 +2127,10 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 		m.logFile = nil
 	}
 	stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
+	if fi, err := os.Stat(stderrPath); err == nil && fi.Size() > 0 {
+		prevPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.prev.log")
+		_ = os.Rename(stderrPath, prevPath)
+	}
 	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
 		m.logFile = f
 		cmd.Stderr = f
@@ -2266,6 +2270,10 @@ func (m *Manager) AddTargetProcess(proc string, logFn func(string)) error {
 		m.logFile = nil
 	}
 	stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
+	if fi, err := os.Stat(stderrPath); err == nil && fi.Size() > 0 {
+		prevPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.prev.log")
+		_ = os.Rename(stderrPath, prevPath)
+	}
 	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
 		m.logFile = f
 		cmd.Stderr = f
@@ -2295,18 +2303,46 @@ func (m *Manager) isProcessAliveLocked() bool {
 	if m.cmd == nil || m.cmd.Process == nil {
 		return false
 	}
-	// PROCESS_QUERY_LIMITED_INFORMATION (0x1000) | SYNCHRONIZE (0x00100000)
-	h, err := syscall.OpenProcess(0x00101000, false, uint32(m.cmd.Process.Pid))
+	// PROCESS_QUERY_LIMITED_INFORMATION (0x1000) avoids SYNCHRONIZE access denied issues
+	h, err := syscall.OpenProcess(0x1000, false, uint32(m.cmd.Process.Pid))
 	if err != nil {
 		return false
 	}
 	defer syscall.CloseHandle(h)
 
-	event, err := syscall.WaitForSingleObject(h, 0)
-	if err == nil && event == 0x00000102 { // WAIT_TIMEOUT means process has NOT signaled/terminated
-		return true
+	var exitCode uint32
+	if err := syscall.GetExitCodeProcess(h, &exitCode); err == nil && exitCode == 259 {
+		return true // 259 == STILL_ACTIVE
 	}
 	return false
+}
+
+// GetLastExitInfo returns the exit code and recent stderr lines of sing-box if it terminated.
+func (m *Manager) GetLastExitInfo() (uint32, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var exitCode uint32 = 0
+	if m.cmd != nil && m.cmd.Process != nil {
+		if h, err := syscall.OpenProcess(0x1000, false, uint32(m.cmd.Process.Pid)); err == nil {
+			_ = syscall.GetExitCodeProcess(h, &exitCode)
+			syscall.CloseHandle(h)
+		}
+	}
+
+	stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
+	stderrTail := ""
+	if data, err := os.ReadFile(stderrPath); err == nil && len(data) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		if len(lines) > 5 {
+			lines = lines[len(lines)-5:]
+		}
+		for i := range lines {
+			lines[i] = strings.TrimSpace(lines[i])
+		}
+		stderrTail = strings.Join(lines, " | ")
+	}
+	return exitCode, stderrTail
 }
 
 // IsProcessAlive checks whether the sing-box process is genuinely running in the Windows kernel.

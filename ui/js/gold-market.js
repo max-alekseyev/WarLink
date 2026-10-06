@@ -122,12 +122,7 @@
             }
         }
 
-        // Min & Max (Min is anchored to $166 000 game minimum)
-        const elMin = document.getElementById('gold-stat-min');
-        if (elMin) elMin.textContent = '$' + formatNumber(166000);
-
-        const elMax = document.getElementById('gold-stat-max');
-        if (elMax) elMax.textContent = '$' + formatNumber(stats.max || 2798240);
+        // Min, Avg & Max footer stats are dynamically updated in renderChart() for the active timeframe
 
         // Reset Date Subtitle
         const allBars = (goldMarketData.points || goldMarketData.goldBars || []);
@@ -281,7 +276,7 @@
             ctx.fillText(label, padLeft - 6, y);
         }
 
-        // 2. Draw SINGLE dashed line for period average price (Russian label)
+        // 2. Draw clean dashed line for period average price (level reference)
         const avgPrice = Math.round(bars.reduce((sum, b) => sum + b.price, 0) / bars.length);
         const avgY = getY(avgPrice);
 
@@ -294,20 +289,22 @@
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Label Ср. ... on the right side above the dashed line
-        ctx.fillStyle = '#888888';
-        ctx.font = '9px monospace';
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
-        const avgLabel = 'Ср. ' + formatShortPrice(avgPrice);
-        ctx.fillText(avgLabel, w - padRight - 4, avgY - 3);
+        // Update footer stats dynamically for the selected timeframe
+        const elMin = document.getElementById('gold-stat-min');
+        if (elMin) elMin.textContent = '$' + formatNumber(minPrice);
 
-        // 3. Draw Date Ticks on X-axis
+        const elAvg = document.getElementById('gold-stat-avg');
+        if (elAvg) elAvg.textContent = '$' + formatNumber(avgPrice);
+
+        const elMax = document.getElementById('gold-stat-max');
+        if (elMax) elMax.textContent = '$' + formatNumber(maxPrice);
+
+        // 3. Draw Date Ticks on X-axis (all days for short ranges <= 7d, evenly spaced for longer)
         ctx.fillStyle = '#666666';
         ctx.font = '9px monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        const numTicks = Math.min(6, bars.length);
+        const numTicks = bars.length <= 7 ? bars.length : Math.min(6, bars.length);
         for (let t = 0; t < numTicks; t++) {
             const idx = Math.floor((t / (numTicks - 1)) * (bars.length - 1));
             const x = getX(idx);
@@ -344,7 +341,7 @@
         }
         ctx.stroke();
 
-        // 6. Draw Peak & Valley markers (with collision avoidance)
+        // 6. Draw Peak & Valley markers (clean, zero-collision design)
         const peakX = getX(maxIdx);
         const peakY = getY(maxPrice);
         ctx.fillStyle = '#FF5E1F';
@@ -354,13 +351,24 @@
 
         ctx.fillStyle = '#ffffff';
         ctx.font = '10px monospace';
-        ctx.textAlign = 'center';
+        let textX = peakX;
+        if (peakX <= padLeft + 25) {
+            ctx.textAlign = 'left';
+            textX = peakX + 4;
+        } else if (peakX >= w - padRight - 25) {
+            ctx.textAlign = 'right';
+            textX = peakX - 4;
+        } else {
+            ctx.textAlign = 'center';
+            textX = peakX;
+        }
+
         if (peakY <= padTop + 14) {
             ctx.textBaseline = 'top';
-            ctx.fillText(formatShortPrice(maxPrice), peakX, peakY + 4);
+            ctx.fillText(formatShortPrice(maxPrice), textX, peakY + 4);
         } else {
             ctx.textBaseline = 'bottom';
-            ctx.fillText(formatShortPrice(maxPrice), peakX, peakY - 4);
+            ctx.fillText(formatShortPrice(maxPrice), textX, peakY - 4);
         }
 
         if (minIdx !== maxIdx) {
@@ -370,19 +378,8 @@
             ctx.beginPath();
             ctx.arc(valleyX, valleyY, 2.5, 0, Math.PI * 2);
             ctx.fill();
-
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '10px monospace';
-            ctx.textAlign = 'center';
-
-            // If valley is near bottom floor, draw label ABOVE the dot so it NEVER overlaps date ticks!
-            if (valleyY >= h - padBottom - 18) {
-                ctx.textBaseline = 'bottom';
-                ctx.fillText(formatShortPrice(minPrice), valleyX, valleyY - 4);
-            } else {
-                ctx.textBaseline = 'top';
-                ctx.fillText(formatShortPrice(minPrice), valleyX, valleyY + 4);
-            }
+            // Note: valley static text is omitted on canvas to eliminate collisions with dates,
+            // grid lines and average level. Exact minimum for the period is prominently shown in footer.
         }
 
         // 7. Draw PINNED vertical marker (with guaranteed 7px gap from text to line)

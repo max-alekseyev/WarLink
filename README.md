@@ -2,7 +2,7 @@
   <img src="assets/warlink_header.svg" alt="WarLink — Автономный оптимизатор игрового сетевого маршрута" width="100%">
 </p>
 <p align="center">
-  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.2.1"><img src="https://img.shields.io/badge/Релиз-v2.2.1-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.2.1"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.2.2"><img src="https://img.shields.io/badge/Релиз-v2.2.2-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.2.2"></a>
   <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe"><img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe"></a>
   <img src="https://raw.githubusercontent.com/max-alekseyev/WarLink/badges/online.svg" alt="Онлайн игрового шлюза" height="28">
 </p>
@@ -26,7 +26,7 @@
 - Ошибки «Connection lost / Server unreachable» при загрузке карты
 - Высокий пинг, подергивания и внезапная потеря пакетов (packet loss)
 
-**WarLink v2.2.1** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
+**WarLink v2.2.2** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
 
 ---
 
@@ -39,7 +39,7 @@
 
 ---
 
-## Ключевые возможности WarLink v2.2.1
+## Ключевые возможности WarLink v2.2.2
 
 - **Биржевой рынок золота (Gold Bar Market):** встроенный аналитический мониторинг курса доллара к слиткам золота WARDOGS в реальном времени. Интерактивный график динамики с таймфреймами (7Д, 30Д, 90Д, Все время), калькулятор конвертации в Cash и автоматические депеши при снижении цены в диапазон выгодной покупки ($166k – $200k).
 - **Реворк профиля в стиле 2026 года:** компактный Hero-блок идентичности оператора и сегментированная навигация по вкладкам (Персонализация, Discord, Устройства, Поддержка) без бесконечного скролла-одностраничника.

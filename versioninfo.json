@@ -3,13 +3,13 @@
 		"FileVersion": {
 			"Major": 2,
 			"Minor": 2,
-			"Patch": 1,
+			"Patch": 2,
 			"Build": 0
 		},
 		"ProductVersion": {
 			"Major": 2,
 			"Minor": 2,
-			"Patch": 1,
+			"Patch": 2,
 			"Build": 0
 		},
 		"FileFlagsMask": "3f",
@@ -22,14 +22,14 @@
 		"Comments": "WarLink",
 		"CompanyName": "Max Alekseyev",
 		"FileDescription": "WarLink",
-		"FileVersion": "2.2.1.0",
+		"FileVersion": "2.2.2.0",
 		"InternalName": "WarLink.exe",
 		"LegalCopyright": "Copyright 2026 Max Alekseyev",
 		"LegalTrademarks": "",
 		"OriginalFilename": "WarLink.exe",
 		"PrivateBuild": "",
 		"ProductName": "WarLink",
-		"ProductVersion": "2.2.1.0",
+		"ProductVersion": "2.2.2.0",
 		"SpecialBuild": ""
 	},
 	"VarFileInfo": {

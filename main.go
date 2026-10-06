@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.1"
+var AppVersion = "v2.2.2"
 
 const (
 	AppWindowWidth     int32  = 690
