@@ -1,89 +1,142 @@
 <!-- VIEW: Settings Panel (Progressive Disclosure) -->
 <div id="view-details" class="details-view">
     <div class="details-header">
-        <span class="details-title">Параметры маршрутизации</span>
+        <span class="details-title font-mono">Настройки</span>
         <button class="details-close" onclick="toggleDetails(event)">Закрыть</button>
     </div>
 
+    <!-- Segmented Navigation Subtabs -->
+    <div class="settings-nav-tabs">
+        <button id="tab-btn-settings-general" class="settings-tab-btn active" onclick="switchSettingsTab('general', event)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span>Сеть и система</span>
+        </button>
+        <button id="tab-btn-settings-tweaks" class="settings-tab-btn" onclick="switchSettingsTab('tweaks', event)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+            <span>Твики</span>
+            <span class="tab-badge-accent font-mono">WARDOGS</span>
+        </button>
+    </div>
+
     <div class="details-content">
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">МАРШРУТИЗАЦИЯ И СЕТЬ</span>
-                <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
-            </div>
-            <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
-                <div class="privacy-info-text">
-                    WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
+        <!-- SUBTAB 1: General & Network -->
+        <div id="settings-panel-general" class="settings-tab-panel">
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">МАРШРУТИЗАЦИЯ И СЕТЬ</span>
+                    <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
+                </div>
+                <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
+                    <div class="privacy-info-text">
+                        WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
+                    </div>
+                </div>
+                <div class="setting-row" style="margin-top: 6px;">
+                    <span class="setting-label">Выбор маршрута:</span>
+                    <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
+                        <option value="direct_moscow">Москва (Транзит, РФ)</option>
+                        <option value="direct_frankfurt">Франкфурт (Европа)</option>
+                        <option value="transit">Москва → Франкфурт</option>
+                    </select>
+                </div>
+                <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                    <span class="info-label">Описание:</span>
+                    <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
+                </div>
+                <div class="setting-info-row" style="margin-top: 6px;">
+                    <span class="info-label">Сетевой фильтр:</span>
+                    <span class="info-value">sing-box (Wintun TUN)</span>
+                </div>
+                <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                    <span class="info-label">Кэш авто-доменов:</span>
+                    <span style="display: flex; gap: 8px; align-items: center;">
+                        <span id="auto-hosts-count" class="info-value">0</span>
+                        <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
+                    </span>
                 </div>
             </div>
-            <div class="setting-row" style="margin-top: 6px;">
-                <span class="setting-label">Выбор маршрута:</span>
-                <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
-                    <option value="direct_moscow">Москва (Транзит, РФ)</option>
-                    <option value="direct_frankfurt">Франкфурт (Европа)</option>
-                    <option value="transit">Москва → Франкфурт</option>
-                </select>
-            </div>
-            <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                <span class="info-label">Описание:</span>
-                <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
-            </div>
-            <div class="setting-info-row" style="margin-top: 6px;">
-                <span class="info-label">Сетевой фильтр:</span>
-                <span class="info-value">WinDivert (Автономный режим)</span>
-            </div>
-            <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                <span class="info-label">Кэш авто-доменов:</span>
-                <span style="display: flex; gap: 8px; align-items: center;">
-                    <span id="auto-hosts-count" class="info-value">0</span>
-                    <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
-                </span>
-            </div>
-        </div>
 
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">ПРИВЯЗАННЫЕ УСТРОЙСТВА</span>
-                <button id="btn-settings-reset-devices" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие ПК</button>
-            </div>
-            <div class="setting-info-row">
-                <span class="info-label">Текущий ПК:</span>
-                <span class="info-value font-mono" style="color: var(--accent); font-weight:600;">активен</span>
-            </div>
-            <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                Отвязывает все старые сессии и лишние компьютеры от вашего аккаунта (лимит: 2 ПК на аккаунт).
-            </div>
-        </div>
-
-        <div class="setting-group">
-            <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
-            <div class="setting-row" style="margin-top: 6px;">
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                    <input type="checkbox" id="check-sound-effects" checked onchange="onToggleSoundEffects(this.checked)" style="accent-color: var(--action); cursor:pointer;">
-                    <span style="font-size: 11px; color: var(--text);">Звуковые сигналы депеш и системных отказов</span>
-                </label>
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">ПРИВЯЗАННЫЕ УСТРОЙСТВА</span>
+                    <button id="btn-settings-reset-devices" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие ПК</button>
+                </div>
+                <div class="setting-info-row">
+                    <span class="info-label">Текущий ПК:</span>
+                    <span class="info-value font-mono" style="color: var(--accent); font-weight:600;">активен</span>
+                </div>
                 <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                    Тактические аудио-сигналы при поступлении уведомлений и ошибках сети.
+                    Отвязывает все старые сессии и лишние компьютеры от вашего аккаунта (лимит: 2 ПК на аккаунт).
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
+                <div class="setting-row" style="margin-top: 6px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                        <input type="checkbox" id="check-sound-effects" checked onchange="onToggleSoundEffects(this.checked)" style="accent-color: var(--action); cursor:pointer;">
+                        <span style="font-size: 11px; color: var(--text);">Звуковые сигналы депеш и системных отказов</span>
+                    </label>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                        Тактические аудио-сигналы при поступлении уведомлений и ошибках сети.
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
+                    <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                        </svg>
+                        Мастер диагностики сети
+                    </button>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
+                    <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                    <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                    <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                    <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                    <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 </div>
             </div>
         </div>
 
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                    </svg>
-                    Мастер диагностики сети
-                </button>
+        <!-- SUBTAB 2: Game Tweaks -->
+        <div id="settings-panel-tweaks" class="settings-tab-panel" style="display: none;">
+            <div class="tweak-disclaimer-banner">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span>Используйте на свой страх и риск. Модификация конфигурации игры.</span>
             </div>
-            <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
-                <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
-                <span style="color: var(--text-muted); font-size: 11px;">•</span>
-                <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
-                <span style="color: var(--text-muted); font-size: 11px;">•</span>
-                <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+
+            <div class="setting-group" style="margin-top: 8px;">
+                <div class="tweak-row">
+                    <div class="tweak-info">
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <span class="tweak-title">Отключение теней</span>
+                            <span class="tweak-tag font-mono">WARDOGS</span>
+                            <span id="wardogs-shadows-badge" class="tweak-badge font-mono" style="display: none;">ВКЛ</span>
+                        </div>
+                        <div class="tweak-desc">Отключение динамических теней для прироста FPS</div>
+                    </div>
+                    <div id="wardogs-shadows-switch" class="free-net-toggle tweak-switch" onclick="toggleWardogsShadows(event)" title="Переключить тени WARDOGS">
+                        <div class="switch-pill">
+                            <div class="switch-thumb"></div>
+                        </div>
+                        <span id="wardogs-shadows-switch-label" class="tweak-switch-label">ВЫКЛ</span>
+                    </div>
+                </div>
+
+                <div id="wardogs-running-alert" class="tweak-alert-box" style="display: none;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span>Закройте игру перед изменением настроек.</span>
+                </div>
             </div>
         </div>
     </div>

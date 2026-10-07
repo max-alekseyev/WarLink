@@ -10,7 +10,7 @@ import (
 )
 
 func TestEvaluateRollout(t *testing.T) {
-	flagName := "experimental_zapret_strategy"
+	flagName := "experimental_tunnel_strategy"
 
 	// Boundary checks
 	if EvaluateRollout(flagName, "user-1", 0) {

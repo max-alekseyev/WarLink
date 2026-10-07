@@ -7,6 +7,7 @@ const SUPPORTED_STEAM_APP_IDS = new Map([
     [1867240, 'WARDOGS'],
     [1808500, 'ARC Raiders'],
     [2016590, 'Dark and Darker'],
+    [3393110, 'AION 2'],
 ]);
 
 // Реестр AppID игр, запрещенных к добавлению в голосование сообщества

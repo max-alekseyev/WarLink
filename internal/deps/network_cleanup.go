@@ -5,12 +5,10 @@ package deps
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 )
 
 var (
@@ -37,22 +35,30 @@ func CleanupZombieWintunAdapter(logFn func(string)) {
 				if len(parts) >= 3 {
 					currentInstanceID = parts[2]
 				}
-			} else if (strings.Contains(line, "sing-tun") || strings.Contains(line, "WarLink") || strings.Contains(line, "Wintun")) && strings.HasPrefix(currentInstanceID, "SWD\\Wintun\\") {
-				cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
-				cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-				_ = cmdRm.Run()
-				if logFn != nil {
-					logFn(fmt.Sprintf("[OK] Устройство сетевого адаптера %s удалено", currentInstanceID))
+			} else if strings.HasPrefix(strings.ToUpper(currentInstanceID), "SWD\\WINTUN\\") {
+				lineLower := strings.ToLower(line)
+				if strings.Contains(lineLower, "sing-tun") ||
+					strings.Contains(lineLower, "warlink") ||
+					strings.Contains(lineLower, "wintun") ||
+					strings.Contains(lineLower, "throne") {
+					cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
+					cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+					_ = cmdRm.Run()
+					if logFn != nil {
+						logFn(fmt.Sprintf("[OK] Устройство сетевого адаптера %s удалено", currentInstanceID))
+					}
+					currentInstanceID = ""
 				}
-				currentInstanceID = ""
 			}
 		}
 	}
 
-	// 2. Fallback to netsh
-	cmd := exec.Command("netsh", "interface", "delete", "interface", "name=WarLink-Tun")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	_ = cmd.Run()
+	// 2. Fallback to netsh for WarLink TUN interface
+	for _, iface := range []string{"WarLink-Tun", "throne-tun", "sing-tun"} {
+		cmd := exec.Command("netsh", "interface", "delete", "interface", "name="+iface)
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = cmd.Run()
+	}
 }
 
 // FlushDNSResolverCache flushes the Windows DNS resolver cache using dnsapi.dll!DnsFlushResolverCache
@@ -93,74 +99,6 @@ func RestoreWindowsNetworkStack(logFn func(string)) {
 	if err := ResetLoopbackProxy(logFn); err != nil {
 		if logFn != nil {
 			logFn(fmt.Sprintf("[WARN] Ошибка сброса системного прокси: %v", err))
-		}
-	}
-
-	HealWinDivertService(logFn)
-}
-
-// HealWinDivertService detects and repairs disabled or corrupted WinDivert services
-// left by external software (such as zapret-discord-youtube or goodbyedpi) that
-// set StartType=4 (DISABLED) or point ImagePath to broken directories.
-func HealWinDivertService(logFn func(string)) {
-	zapretDir := GetZapretDir()
-	driverPath := filepath.Join(zapretDir, "bin", "WinDivert64.sys")
-	absDriverPath, err := filepath.Abs(driverPath)
-	if err != nil {
-		absDriverPath = driverPath
-	}
-	ntDriverPath := `\??\` + absDriverPath
-
-	for _, svcName := range []string{"WinDivert", "WinDivert14"} {
-		// 1. Direct Registry inspection and repair (HKLM\SYSTEM\CurrentControlSet\Services\<svcName>)
-		regPath := `SYSTEM\CurrentControlSet\Services\` + svcName
-		if k, err := registry.OpenKey(registry.LOCAL_MACHINE, regPath, registry.SET_VALUE|registry.QUERY_VALUE); err == nil {
-			startVal, _, errStart := k.GetIntegerValue("Start")
-			imgPath, _, _ := k.GetStringValue("ImagePath")
-
-			needsFix := false
-			if errStart == nil && startVal == 4 { // SERVICE_DISABLED
-				needsFix = true
-			}
-			if imgPath != "" && !strings.EqualFold(imgPath, ntDriverPath) && !strings.EqualFold(imgPath, absDriverPath) {
-				needsFix = true
-			}
-
-			if needsFix {
-				if logFn != nil {
-					logFn(fmt.Sprintf("[WARN] Обнаружена некорректная служба %s (Start=%d, путь: %s). Восстановление...", svcName, startVal, imgPath))
-				}
-				_ = k.SetDWordValue("Start", 3) // SERVICE_DEMAND_START
-				_ = k.SetStringValue("ImagePath", ntDriverPath)
-				_ = k.DeleteValue("DeleteFlag")
-				if logFn != nil {
-					logFn(fmt.Sprintf("[OK] Служба %s восстановлена в реестре: Start=3 (по требованию), путь: %s", svcName, ntDriverPath))
-				}
-
-				// Synchronize SCM without stopping or deleting the service (prevents ERROR_BAD_DEVICE / STOP_PENDING)
-				if scm, errSCM := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_ALL_ACCESS); errSCM == nil {
-					pName, _ := windows.UTF16PtrFromString(svcName)
-					if hSvc, errSvc := windows.OpenService(scm, pName, windows.SERVICE_CHANGE_CONFIG); errSvc == nil {
-						pBin, _ := windows.UTF16PtrFromString(ntDriverPath)
-						_ = windows.ChangeServiceConfig(
-							hSvc,
-							windows.SERVICE_NO_CHANGE,
-							windows.SERVICE_DEMAND_START,
-							windows.SERVICE_NO_CHANGE,
-							pBin,
-							nil,
-							nil,
-							nil,
-							nil,
-							nil,
-							nil,
-						)
-						_ = windows.CloseServiceHandle(hSvc)
-					}
-					_ = windows.CloseServiceHandle(scm)
-				}
-			}
-			k.Close()
 		}
 	}
 }

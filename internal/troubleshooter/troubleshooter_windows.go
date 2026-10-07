@@ -12,54 +12,38 @@ import (
 
 	"golang.org/x/sys/windows/registry"
 	"warlink/internal/deps"
+	"warlink/internal/scanner"
 )
 
-// checkDriversAndServices inspects WinDivert, Wintun and conflicting processes on Windows.
+// checkDriversAndServices inspects Wintun, sing-box and conflicting processes on Windows.
 func checkDriversAndServices() []CheckResult {
 	results := make([]CheckResult, 0, 4)
 
-	// 1. WinDivert Service & Registry Check
-	wdResult := CheckResult{
-		ID:       "driver_windivert",
+	// 1. Sing-box router binary integrity
+	sbResult := CheckResult{
+		ID:       "singbox_binary",
 		Category: "driver",
-		Title:    "Служба WinDivert (Сетевой фильтр)",
+		Title:    "Игровой сетевой роутер sing-box",
 		Status:   "ok",
-		Message:  "Служба и драйвер в штатном состоянии",
+		Message:  "Исполняемый файл роутера готов к работе",
 	}
-
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\WinDivert`, registry.QUERY_VALUE)
-	if err == nil {
-		defer key.Close()
-		startVal, _, errVal := key.GetIntegerValue("Start")
-		if errVal == nil && startVal == 4 {
-			wdResult.Status = "error"
-			wdResult.Message = "Служба WinDivert отключена антивирусом или сторонней утилитой (Start=4)"
-			wdResult.Detail = "Требуется восстановление штатного запуска драйвера"
-			wdResult.CanAutoFix = true
-		}
-
-		imagePath, _, errPath := key.GetStringValue("ImagePath")
-		if errPath == nil && imagePath != "" {
-			coreDir := strings.ToLower(filepath.Clean(deps.GetCoreDir()))
-			cleanPath := strings.ToLower(imagePath)
-			cleanPath = strings.TrimPrefix(cleanPath, `\??\`)
-			cleanPath = strings.TrimPrefix(cleanPath, `\\?\`)
-			cleanPath = filepath.Clean(cleanPath)
-			if !strings.Contains(cleanPath, coreDir) && !strings.Contains(cleanPath, "warlink_core") && !strings.Contains(cleanPath, "system32\\drivers") {
-				wdResult.Status = "warning"
-				wdResult.Message = "Обнаружен путь драйвера WinDivert от сторонней утилиты"
-				wdResult.Detail = "Служба WinDivert указывает на каталог сторонней программы"
-				wdResult.CanAutoFix = true
-			}
+	sbPath := filepath.Join(deps.GetCoreDir(), "singbox", "sing-box.exe")
+	if _, errStat := os.Stat(sbPath); errStat != nil {
+		fallbackSb := filepath.Join(deps.GetCoreDir(), "sing-box.exe")
+		if _, errFb := os.Stat(fallbackSb); errFb != nil {
+			sbResult.Status = "warning"
+			sbResult.Message = "Исполняемый файл sing-box будет распакован при запуске"
+			sbResult.CanAutoFix = true
 		}
 	}
-	results = append(results, wdResult)
+	results = append(results, sbResult)
 
-	// Check third-party packet filter drivers that conflict with WinDivert/Wintun
+	// Check third-party packet filter drivers that conflict with Wintun/TUN routing
 	conflictDrivers := []struct {
 		svc  string
 		name string
 	}{
+		{"WinDivert", "WinDivert Packet Filter"},
 		{"WinDivert14", "WinDivert 1.4"},
 		{"npcap", "Npcap Packet Filter"},
 		{"npf", "WinPcap Packet Filter"},
@@ -127,7 +111,7 @@ func checkDriversAndServices() []CheckResult {
 // findConflictingProcesses checks if any third-party DPI or network filtering utilities are running.
 func findConflictingProcesses() []string {
 	cmd := exec.Command("tasklist", "/FO", "CSV", "/NH")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -225,27 +209,31 @@ func findConflictingProcesses() []string {
 func fixPlatformIssues() []string {
 	actions := make([]string, 0)
 
-	// 1. Terminate conflicting standalone DPI tools
-	dpiProcesses := []string{"goodbyedpi.exe", "ciadpi.exe", "byedpi.exe", "spoof-dpi.exe", "spoofdpi.exe"}
+	// 1. Terminate conflicting standalone VPN/TUN/DPI processes
+	killed, _ := scanner.KillAllConflicts()
+	for _, proc := range killed {
+		actions = append(actions, fmt.Sprintf("Остановлен конфликтующий процесс: %s", proc))
+	}
+
+	// 2. Extra taskkill pass for legacy DPI tools and zombie boosters
+	dpiProcesses := []string{"goodbyedpi.exe", "ciadpi.exe", "byedpi.exe", "spoof-dpi.exe", "spoofdpi.exe", "Throne.exe", "ThroneCore.exe"}
 	for _, proc := range dpiProcesses {
-		killCmd := exec.Command("taskkill", "/F", "/IM", proc)
-		killCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		killCmd := exec.Command("taskkill", "/F", "/T", "/IM", proc)
+		killCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 		if err := killCmd.Run(); err == nil {
-			actions = append(actions, fmt.Sprintf("Остановлен конфликтующий процесс: %s", proc))
+			actions = append(actions, fmt.Sprintf("Завершен процесс: %s", proc))
 		}
 	}
 
-	// 2. Heal WinDivert service registry
-	deps.HealWinDivertService(nil)
-	actions = append(actions, "Служба WinDivert проверена и восстановлена")
+	// 3. Stop conflicting third-party driver services if running
+	scanner.StopWinDivertService()
 
-	// 3. Cleanup zombie Wintun interface if stuck
-	cmdWintun := exec.Command("netsh", "interface", "delete", "interface", "WarLink-Tun")
-	cmdWintun.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	_ = cmdWintun.Run()
-	actions = append(actions, "Сетевой адаптер WarLink-Tun сброшен")
+	// 4. Cleanup zombie Wintun / sing-tun / throne-tun network adapters
+	deps.CleanupZombieWintunAdapter(func(msg string) {
+		actions = append(actions, msg)
+	})
 
-	// 4. Reset loopback proxy
+	// 5. Reset loopback proxy
 	_ = deps.ResetLoopbackProxy(nil)
 	actions = append(actions, "Настройки системного прокси сброшены на прямое подключение")
 

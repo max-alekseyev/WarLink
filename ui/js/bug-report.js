@@ -212,7 +212,7 @@
                 `Complex DPI Mode: ${freenet}`,
                 `Active Profile: ${selProfile}`,
                 `Local Time: ${new Date().toISOString()}`,
-                `Network Filter: WinDivert / Zapret winws2`,
+                `Engine: Hysteria 2 (QUIC/UDP)`,
                 `Core Router: sing-box (wintun)`,
                 `\n[SANITIZED EVENT LOG]`,
                 `[INFO] Session token cryptographic handshake: VALID`,

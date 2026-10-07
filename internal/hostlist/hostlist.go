@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -206,57 +205,9 @@ func (m *Manager) GetAllHosts() []string {
 	return res
 }
 
-// SyncUpstream checks GitHub upstream lists in background, merges updates, and writes hosts cache
+// SyncUpstream kept for backward compatibility; domain lists are statically managed.
 func (m *Manager) SyncUpstream() {
-	go func() {
-		client := &http.Client{Timeout: 5 * time.Second}
-
-		// Pull list-general from Flowseal
-		url := "https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/main/lists/list-general.txt"
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return
-		}
-		req.Header.Set("User-Agent", "WarLink-Hostlist")
-
-		resp, err := client.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			return
-		}
-		defer resp.Body.Close()
-
-		var upstreamDomains []string
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" && !strings.HasPrefix(line, "#") {
-				upstreamDomains = append(upstreamDomains, strings.ToLower(line))
-			}
-		}
-
-		if len(upstreamDomains) > 0 {
-			m.mu.Lock()
-			// Merge discord/general
-			mergedSet := make(map[string]struct{})
-			for _, d := range m.categories["discord"] {
-				mergedSet[d] = struct{}{}
-			}
-			for _, d := range upstreamDomains {
-				mergedSet[d] = struct{}{}
-			}
-			var merged []string
-			for d := range mergedSet {
-				merged = append(merged, d)
-			}
-			sort.Strings(merged)
-			m.categories["discord"] = merged
-			m.rebuildAllHostsLocked()
-			m.mu.Unlock()
-
-			m.saveCache()
-			m.log(fmt.Sprintf("[HOSTLIST] Списки доменов актуализированы с GitHub (%d уникальных узлов)", len(m.allHosts)))
-		}
-	}()
+	// No external domain lists required for Hysteria 2 tunnel.
 }
 
 func (m *Manager) saveCache() {
@@ -274,7 +225,7 @@ func (m *Manager) saveCache() {
 }
 
 // GetGeneralHosts returns all target domains excluding YouTube/Google (handled by list-google.txt)
-// and Stockholm tunnel domains (Telegram, Meta, Twitter, WhatsApp), which bypass WinDivert to prevent desync collisions.
+// and direct tunnel domains (Telegram, Meta, Twitter, WhatsApp).
 func (m *Manager) GetGeneralHosts() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -303,17 +254,16 @@ func (m *Manager) GetGeneralHosts() []string {
 	return all
 }
 
-// ExportFreeInternetList creates warlink_core/zapret/lists/list-free-internet.txt for winws
+// ExportFreeInternetList creates warlink_core/lists/list-free-internet.txt
 func (m *Manager) ExportFreeInternetList() (string, error) {
-	zapretListsDir := filepath.Join(deps.GetZapretDir(), "lists")
-	_ = os.MkdirAll(zapretListsDir, 0755)
+	listsDir := filepath.Join(deps.GetCoreDir(), "lists")
+	_ = os.MkdirAll(listsDir, 0755)
 
-	destFile := filepath.Join(zapretListsDir, "list-free-internet.txt")
+	destFile := filepath.Join(listsDir, "list-free-internet.txt")
 	hosts := m.GetGeneralHosts()
 
 	var sb strings.Builder
-	sb.WriteString("# WarLink - Free Internet Domain List\n")
-	sb.WriteString("# Auto-generated and maintained for selective DPI desynchronization\n\n")
+	sb.WriteString("# WarLink - Free Internet Domain List\n\n")
 	for _, h := range hosts {
 		sb.WriteString(h)
 		sb.WriteString("\n")
@@ -324,12 +274,10 @@ func (m *Manager) ExportFreeInternetList() (string, error) {
 		return "", err
 	}
 
-	// Also sync into list-general-user.txt so standard zapret rules include these domains
-	userListFile := filepath.Join(zapretListsDir, "list-general-user.txt")
+	userListFile := filepath.Join(listsDir, "list-general-user.txt")
 	_ = os.WriteFile(userListFile, []byte(sb.String()), 0644)
 
-	// Also ensure Telegram IP ranges are included in ipset-telegram.txt
-	tgIpsetFile := filepath.Join(zapretListsDir, "ipset-telegram.txt")
+	tgIpsetFile := filepath.Join(listsDir, "ipset-telegram.txt")
 	var tgSb strings.Builder
 	tgSb.WriteString("# Telegram DC IP ranges\n")
 	for _, ipr := range TelegramIPRanges {
@@ -338,20 +286,19 @@ func (m *Manager) ExportFreeInternetList() (string, error) {
 	}
 	_ = os.WriteFile(tgIpsetFile, []byte(tgSb.String()), 0644)
 
-	// Ensure list-auto.txt exists for winws2 runtime discovery
 	_, _ = m.EnsureAutoList()
 
 	return destFile, nil
 }
 
-// EnsureAutoList guarantees that list-auto.txt exists in warlink_core/zapret/lists.
+// EnsureAutoList guarantees that list-auto.txt exists in warlink_core/lists.
 func (m *Manager) EnsureAutoList() (string, error) {
-	zapretListsDir := filepath.Join(deps.GetZapretDir(), "lists")
-	_ = os.MkdirAll(zapretListsDir, 0755)
+	listsDir := filepath.Join(deps.GetCoreDir(), "lists")
+	_ = os.MkdirAll(listsDir, 0755)
 
-	autoFile := filepath.Join(zapretListsDir, "list-auto.txt")
+	autoFile := filepath.Join(listsDir, "list-auto.txt")
 	if _, err := os.Stat(autoFile); os.IsNotExist(err) {
-		initialContent := "# WarLink - Auto-discovered blocked domains\n# Automatically populated by winws2 at runtime\n\n"
+		initialContent := "# WarLink - Auto-discovered blocked domains\n\n"
 		err = os.WriteFile(autoFile, []byte(initialContent), 0644)
 		if err != nil {
 			return "", err
@@ -453,9 +400,9 @@ func (m *Manager) ResetAutoList() error {
 	m.mu.Unlock()
 	m.saveCache()
 
-	zapretListsDir := filepath.Join(deps.GetZapretDir(), "lists")
-	autoFile := filepath.Join(zapretListsDir, "list-auto.txt")
-	initialContent := "# WarLink - Auto-discovered blocked domains\n# Automatically populated by winws2 at runtime\n\n"
+	listsDir := filepath.Join(deps.GetCoreDir(), "lists")
+	autoFile := filepath.Join(listsDir, "list-auto.txt")
+	initialContent := "# WarLink - Auto-discovered blocked domains\n\n"
 	return os.WriteFile(autoFile, []byte(initialContent), 0644)
 }
 

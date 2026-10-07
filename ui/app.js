@@ -56,6 +56,16 @@ const defaultGames = [
         is_default: true,
         autolaunch: true,
         launch_count: 0
+    },
+    {
+        id: 'aion2',
+        title: 'AION 2',
+        steam_app_id: '3393110',
+        icon_url: 'aion2_icon.png',
+        last_played: 1789653325,
+        is_default: true,
+        autolaunch: true,
+        launch_count: 0
     }
 ];
 
@@ -76,6 +86,7 @@ function loadCachedShowcaseGames() {
                     if (g.id === 'wardogs' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'wardogs_icon.png';
                     if (g.id === 'arc_raiders' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'arc_raiders_icon.png';
                     if (g.id === 'dark_and_darker' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'dark_and_darker_icon.png';
+                    if (g.id === 'aion2' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'aion2_icon.png';
                     return g;
                 });
             }
@@ -242,6 +253,7 @@ function switchView(targetViewId) {
         if (nextActiveId === 'view-progression' && window.ProgressionController) window.ProgressionController.onOpen();
         if (nextActiveId === 'view-support' && typeof openSupportChat === 'function') openSupportChat();
         if (nextActiveId === 'view-gold-market' && typeof openGoldMarket === 'function') openGoldMarket();
+        if (nextActiveId === 'view-details' && typeof loadWardogsTweaksStatus === 'function') loadWardogsTweaksStatus();
     }
 
     updateTitlebarActiveState(nextActiveId);
@@ -409,6 +421,7 @@ function renderShowcase(games, activeId) {
         if (g.id === 'wardogs' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'wardogs_icon.png';
         if (g.id === 'arc_raiders' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'arc_raiders_icon.png';
         if (g.id === 'dark_and_darker' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'dark_and_darker_icon.png';
+        if (g.id === 'aion2' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'aion2_icon.png';
         if (!iconSrc && g.id === 'wardogs') iconSrc = 'wardogs_icon.png';
         if (iconSrc) {
             iconHtml = `
@@ -927,11 +940,25 @@ function updateUI(data) {
             const isFull = slots.includes('50/50') || slots.includes('60/60') || (data.gateway_full === true);
             gwSlotsEl.classList.toggle('slots-full', isFull);
             gwSlotsEl.title = data.gateway_slots_tooltip || 'Активные слоты игрового шлюза';
-        } else {
+        } else if (!gwSlotsEl.textContent || gwSlotsEl.textContent === '—') {
             if (!gwSlotsEl.querySelector('.skeleton')) {
                 gwSlotsEl.innerHTML = '<span class="skeleton" style="width: 30px; height: 10px;"></span>';
             }
             gwSlotsEl.title = 'Получение статуса слотов шлюза...';
+        }
+    }
+    if (gwDaysEl) {
+        if (data.gateway_days && data.gateway_days > 0) {
+            gwDaysEl.textContent = `${data.gateway_days} дн`;
+            gwDaysEl.title = `Оплачено дней работы шлюза: ${data.gateway_days} дн`;
+        } else if (data.gateway_days === 0 && data.gateway_slots && data.gateway_slots !== '—') {
+            gwDaysEl.textContent = '30 дн';
+            gwDaysEl.title = 'Оплачено дней работы шлюза: 30 дн';
+        } else if (!gwDaysEl.textContent || gwDaysEl.textContent === '—') {
+            if (!gwDaysEl.querySelector('.skeleton')) {
+                gwDaysEl.innerHTML = '<span class="skeleton" style="width: 38px; height: 10px;"></span>';
+            }
+            gwDaysEl.title = 'Получение статуса оплаты шлюза...';
         }
     }
 
@@ -962,17 +989,6 @@ function updateUI(data) {
         }
     }
     updateAvatarDisplays(data.avatar_url);
-    if (gwDaysEl) {
-        if (data.gateway_days !== undefined && data.gateway_days > 0) {
-            gwDaysEl.textContent = data.gateway_days + ' дн.';
-            gwDaysEl.title = `Оплачено дней работы шлюза: ${data.gateway_days}`;
-        } else {
-            if (!gwDaysEl.querySelector('.skeleton')) {
-                gwDaysEl.innerHTML = '<span class="skeleton" style="width: 38px; height: 10px;"></span>';
-            }
-            gwDaysEl.title = 'Получение срока аренды шлюза...';
-        }
-    }
     const gwTitleEl = document.getElementById('gw-title') || document.querySelector('.gateway-title');
     if (gwTitleEl) {
         if (data.gateway_badge) {
@@ -1013,6 +1029,10 @@ function updateUI(data) {
         document.querySelectorAll('.btn-author-donate, .btn-compact-donate, .account-donate-links').forEach(el => {
             el.style.display = isDonateEnabled ? '' : 'none';
         });
+    }
+
+    if (typeof updateDonateMethodsState === 'function') {
+        updateDonateMethodsState(data);
     }
 
     // Profile options in Settings
@@ -1634,6 +1654,165 @@ async function resetAutoHosts() {
         console.error('Reset auto hosts error:', e);
     }
 }
+
+// --- Settings Subtabs & WARDOGS Tweaks ---
+let wardogsTweakStatus = null;
+let isTogglingWardogsShadows = false;
+
+function switchSettingsTab(tabName, e) {
+    if (e) e.stopPropagation();
+    const btnGeneral = document.getElementById('tab-btn-settings-general');
+    const btnTweaks = document.getElementById('tab-btn-settings-tweaks');
+    const panelGeneral = document.getElementById('settings-panel-general');
+    const panelTweaks = document.getElementById('settings-panel-tweaks');
+
+    if (tabName === 'tweaks') {
+        if (btnGeneral) btnGeneral.classList.remove('active');
+        if (btnTweaks) btnTweaks.classList.add('active');
+        if (panelGeneral) panelGeneral.style.display = 'none';
+        if (panelTweaks) panelTweaks.style.display = 'block';
+        loadWardogsTweaksStatus();
+    } else {
+        if (btnGeneral) btnGeneral.classList.add('active');
+        if (btnTweaks) btnTweaks.classList.remove('active');
+        if (panelGeneral) panelGeneral.style.display = 'block';
+        if (panelTweaks) panelTweaks.style.display = 'none';
+    }
+}
+
+async function loadWardogsTweaksStatus() {
+    try {
+        const res = await fetch('/api/tweaks/wardogs/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.success && data.status) {
+            updateWardogsTweaksUI(data.status);
+        }
+    } catch (e) {
+        console.error('Failed to load WARDOGS tweaks status:', e);
+    }
+}
+
+function updateWardogsTweaksUI(status) {
+    wardogsTweakStatus = status;
+
+    const badge = document.getElementById('wardogs-shadows-badge');
+    const metaVal = document.getElementById('wardogs-shadows-meta-val');
+    const metaAttr = document.getElementById('wardogs-shadows-meta-attr');
+    const switchEl = document.getElementById('wardogs-shadows-switch');
+    const switchLabel = document.getElementById('wardogs-shadows-switch-label');
+    const runningAlert = document.getElementById('wardogs-running-alert');
+    const backupInfo = document.getElementById('wardogs-backup-info');
+
+    if (!status.config_found) {
+        if (badge) {
+            badge.textContent = 'НЕ НАЙДЕН';
+            badge.classList.remove('active');
+        }
+        if (metaVal) metaVal.textContent = 'Конфиг не найден';
+        if (metaAttr) metaAttr.textContent = 'Атрибут: —';
+        if (switchEl) switchEl.classList.remove('active');
+        if (switchLabel) switchLabel.textContent = 'ВЫКЛ';
+        if (runningAlert) runningAlert.style.display = 'none';
+        if (backupInfo) backupInfo.style.display = 'none';
+        return;
+    }
+
+    // Status Badge
+    if (badge) {
+        if (status.shadows_disabled) {
+            badge.textContent = 'ТЕНИ ОТКЛЮЧЕНЫ';
+            badge.classList.add('active');
+        } else {
+            badge.textContent = 'СТАНДАРТНЫЕ ТЕНИ';
+            badge.classList.remove('active');
+        }
+    }
+
+    // Meta labels
+    if (metaVal) {
+        metaVal.textContent = 'Параметр: sg.ShadowQuality=' + status.shadow_quality;
+    }
+    if (metaAttr) {
+        metaAttr.textContent = 'Атрибут: ' + (status.is_read_only ? 'Только для чтения' : 'Обычный');
+    }
+
+    // Airplane-style switch
+    if (switchEl) {
+        switchEl.classList.toggle('active', !!status.shadows_disabled);
+    }
+    if (switchLabel) {
+        switchLabel.textContent = status.shadows_disabled ? 'ВКЛ' : 'ВЫКЛ';
+    }
+
+    // Alert if game is running
+    if (runningAlert) {
+        runningAlert.style.display = status.game_running ? 'flex' : 'none';
+    }
+
+    // Backup note
+    if (backupInfo) {
+        backupInfo.style.display = status.has_backup ? 'block' : 'none';
+    }
+}
+
+async function toggleWardogsShadows(e) {
+    if (e) e.stopPropagation();
+    if (isTogglingWardogsShadows) return;
+
+    const switchEl = document.getElementById('wardogs-shadows-switch');
+    const currentDisabled = wardogsTweakStatus ? wardogsTweakStatus.shadows_disabled : (switchEl && switchEl.classList.contains('active'));
+    const targetDisable = !currentDisabled;
+
+    isTogglingWardogsShadows = true;
+    if (switchEl) {
+        switchEl.style.pointerEvents = 'none';
+        switchEl.style.opacity = '0.6';
+    }
+
+    try {
+        const res = await fetch('/api/tweaks/wardogs/shadows', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ disable_shadows: targetDisable })
+        });
+        const data = await res.json();
+        if (data && data.success && data.status) {
+            updateWardogsTweaksUI(data.status);
+            showToast(targetDisable ? 'Тени отключены' : 'Тени включены (восстановлены)');
+        } else {
+            showToast('Ошибка применения твика: ' + (data && data.error ? data.error : 'неизвестная ошибка'));
+            await loadWardogsTweaksStatus();
+        }
+    } catch (err) {
+        console.error('Failed to toggle WARDOGS shadows:', err);
+        showToast('Сетевой сбой при применении твика');
+    } finally {
+        isTogglingWardogsShadows = false;
+        if (switchEl) {
+            switchEl.style.pointerEvents = '';
+            switchEl.style.opacity = '';
+        }
+    }
+}
+
+async function openWardogsConfigFolder() {
+    try {
+        const res = await fetch('/api/tweaks/wardogs/open-folder', { method: 'POST' });
+        const data = await res.json();
+        if (!data || !data.success) {
+            showToast('Не удалось открыть папку конфигурации');
+        }
+    } catch (e) {
+        console.error('Failed to open config folder:', e);
+        showToast('Ошибка при открытии папки');
+    }
+}
+
+window.switchSettingsTab = switchSettingsTab;
+window.toggleWardogsShadows = toggleWardogsShadows;
+window.openWardogsConfigFolder = openWardogsConfigFolder;
+window.loadWardogsTweaksStatus = loadWardogsTweaksStatus;
 
 
 // --- In-App Notifications Center ---

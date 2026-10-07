@@ -85,6 +85,7 @@ var BuiltinAliases = map[string][]string{
 	"1245620": {"eldenring.exe"},
 	"1808500": {"pioneergame.exe", "pioneergame-win64-shipping.exe", "discovery.exe", "discovery-win64-shipping.exe", "arcraiders.exe", "arcraiders-win64-shipping.exe"},
 	"2016590": {"dungeoncrawler.exe", "dungeoncrawler-win64-shipping.exe", "tavern.exe", "taverndart.exe", "tavernworker.exe", "blacksmith.exe"},
+	"3393110": {"aion2.exe", "aion2-win64-shipping.exe"},
 }
 
 // NormalizeGameToken strips common game engine suffixes to find the root name

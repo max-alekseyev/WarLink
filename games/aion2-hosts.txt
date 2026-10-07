@@ -1,0 +1,53 @@
+# ==============================================================================
+# WARLINK PROFILE: AION 2
+# Strict Game Routing & Server-Side Whitelist
+# ==============================================================================
+name: AION 2
+
+# Game Processes (Client-side routing filter)
+process: AION2.exe
+process: aion2.exe
+process: CrashReportClient.exe
+process: CrashReportClientEditor.exe
+process: EpicWebHelper.exe
+
+# Game Backend, NCSoft & Platform Domains
+domain: plaync.com
+domain: ncsoft.com
+domain: aion.com
+domain: aion2.com
+domain: purple.game
+domain: ncplatform.com
+domain: ncsjapan.com
+domain: ncjapan.co.jp
+domain: ncwest.com
+domain: ncsoft.net
+domain: appsflyer.com
+domain: azurefd.net
+domain: trafficmanager.net
+domain: tm-azurefd.net
+domain: playfabapi.com
+domain: amazonaws.com
+domain: cloudfront.net
+domain: fastly.net
+domain: akamaitechnologies.com
+domain: akamaiedge.net
+domain: akamai.net
+domain: edgekey.net
+domain: edgesuite.net
+domain: cloudflare.com
+domain: sectigo.com
+domain: digicert.com
+domain: epicgames.dev
+domain: epicgames.com
+domain: unrealengine.com
+
+# Dedicated Game and Region IP Ranges
+ip: 193.202.112.0/24
+ip: 216.107.254.0/24
+ip: 212.101.4.0/24
+ip: 34.117.142.0/24
+ip: 35.217.56.0/24
+ip: 150.171.0.0/16
+ip: 80.239.138.0/24
+

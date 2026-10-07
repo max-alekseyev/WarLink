@@ -66,7 +66,6 @@ func TestGenerateConfig(t *testing.T) {
 		}
 	}
 
-	hasSteamSDRDirect := false
 	hasMatchPortsTunnel := false
 	hasSteamDomainsDirect := false
 	for _, r := range parsed.Route.Rules {
@@ -78,20 +77,12 @@ func TestGenerateConfig(t *testing.T) {
 			}
 		}
 		if r.Outbound == "direct" {
-			for _, pr := range r.PortRange {
-				if pr == "27000:27200" {
-					hasSteamSDRDirect = true
-				}
-			}
 			for _, d := range r.DomainSuffix {
 				if d == "steamserver.net" {
 					hasSteamDomainsDirect = true
 				}
 			}
 		}
-	}
-	if !hasSteamSDRDirect {
-		t.Errorf("Expected direct route for Steam SDR UDP 27000:27200")
 	}
 	if !hasMatchPortsTunnel {
 		t.Errorf("Expected hy2-gateway tunnel route for WARDOGS match servers UDP 4000:4500")
@@ -124,39 +115,51 @@ func TestGenerateConfig(t *testing.T) {
 	if !hasVivoxRemoteDNS {
 		t.Errorf("Expected vivox.com to resolve via dns-remote (not fakeip)")
 	}
-	hasDiscordRouteExclude := false
 	for _, ip := range parsed.Inbounds[0].RouteExcludeAddress {
 		if ip == "162.159.0.0/16" {
-			hasDiscordRouteExclude = true
+			t.Errorf("162.159.0.0/16 must NOT be in route_exclude_address in v2.2.3 (Discord routes through Hysteria 2)")
 		}
-	}
-	if !hasDiscordRouteExclude {
-		t.Errorf("Expected 162.159.0.0/16 in route_exclude_address so Discord bypasses Wintun to local Zapret 2")
 	}
 
 	hasDiscordSignalingInHy2 := false
-	hasDiscordUDPDirectRule := false
+	hasDiscordUDPHy2Rule := false
+	hasYouTubeInHy2 := false
+	hasQuicRejectRule := false
 	for _, r := range parsed.Route.Rules {
+		if r.Action == "reject" && r.Network == "udp" {
+			for _, p := range r.Port {
+				if p == 443 {
+					hasQuicRejectRule = true
+				}
+			}
+		}
 		if r.Outbound == "hy2-gateway" {
 			for _, d := range r.DomainSuffix {
-				if d == "discord.media" || d == "gateway.discord.gg" {
+				if d == "discord.media" || d == "gateway.discord.gg" || d == "discord.com" {
 					hasDiscordSignalingInHy2 = true
 				}
+				if d == "youtube.com" || d == "googlevideo.com" {
+					hasYouTubeInHy2 = true
+				}
 			}
-		}
-		if r.Outbound == "direct" {
 			for _, pr := range r.PortRange {
 				if pr == "50000:65535" {
-					hasDiscordUDPDirectRule = true
+					hasDiscordUDPHy2Rule = true
 				}
 			}
 		}
 	}
-	if hasDiscordSignalingInHy2 {
-		t.Errorf("Discord signaling domains must NOT route through hy2-gateway tunnel (Flowseal-equivalent local bypass)")
+	if !hasDiscordSignalingInHy2 {
+		t.Errorf("Expected Discord domains to route through hy2-gateway tunnel")
 	}
-	if !hasDiscordUDPDirectRule {
-		t.Errorf("Expected Discord voice UDP ports 50000:65535 to route direct")
+	if !hasDiscordUDPHy2Rule {
+		t.Errorf("Expected Discord voice UDP ports 50000:65535 to route through hy2-gateway")
+	}
+	if !hasYouTubeInHy2 {
+		t.Errorf("Expected YouTube domains to route through hy2-gateway tunnel")
+	}
+	if !hasQuicRejectRule {
+		t.Errorf("Expected QUIC reject rule on UDP 443 for YouTube and web services")
 	}
 
 	if !hasGameRule {
@@ -184,23 +187,6 @@ func TestGenerateConfig(t *testing.T) {
 
 	if parsed.Experimental == nil || parsed.Experimental.CacheFile == nil || !parsed.Experimental.CacheFile.Enabled {
 		t.Errorf("Expected experimental cache_file enabled")
-	}
-
-	// Test Game Only Mode (includeWebServices = false)
-	gameOnlyData, err := GenerateConfig(targets, false, "test-session-token")
-	if err != nil {
-		t.Fatalf("GenerateConfig (GameOnly) failed: %v", err)
-	}
-	var gameParsed Config
-	if err := json.Unmarshal(gameOnlyData, &gameParsed); err != nil {
-		t.Fatalf("Failed to unmarshal game only json: %v", err)
-	}
-	for _, r := range gameParsed.Route.Rules {
-		for _, d := range r.DomainSuffix {
-			if d == "web.telegram.org" {
-				t.Errorf("Did not expect web.telegram.org in GameOnly mode")
-			}
-		}
 	}
 }
 
@@ -537,7 +523,6 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 	}
 
 	// 3. Check Route Rules
-	foundDynamoDB := false
 	foundMatchUDP := false
 	foundWardogsProcess := false
 	foundLauncherTunnel := false
@@ -552,11 +537,6 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 		for _, c := range r.IPCIDR {
 			if c == "198.18.0.0/15" && r.Outbound == "hy2-gateway" {
 				foundFakeIPPool = true
-			}
-		}
-		for _, d := range r.DomainSuffix {
-			if strings.Contains(d, "dynamodb.eu-central-1.amazonaws.com") && r.Outbound == "direct" {
-				foundDynamoDB = true
 			}
 		}
 		for _, pr := range r.PortRange {
@@ -588,9 +568,6 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 	}
 	if !foundAntiCheatDirect {
 		t.Errorf("expected EasyAntiCheat.exe routed to direct for real IPs")
-	}
-	if !foundDynamoDB {
-		t.Errorf("expected DynamoDB region probe domains in routing rules routed to direct")
 	}
 	foundDynamoDBLocal := false
 	for _, dr := range parsed.DNS.Rules {

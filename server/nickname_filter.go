@@ -89,7 +89,7 @@ var (
 	reservedImpersonation = []string{
 		"admin", "administrator", "админ", "администратор",
 		"warlink", "варлинк", "aeza", "аеза", "stockholm", "frankfurt",
-		"hysteria", "singbox", "wintun", "zapret", "windivert",
+		"hysteria", "singbox", "wintun",
 		"support", "саппорт", "техподдержка", "поддержка",
 		"moderator", "модератор", "root", "system", "систем", "рут",
 		"developer", "разработчик", "owner", "владелец", "creator", "создатель",

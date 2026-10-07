@@ -116,8 +116,8 @@
 
 - [x] **Мастер автодиагностики сети в клиенте (Network Troubleshooter):**
   - **Реализовано:**
-    1. Модуль `internal/troubleshooter` с полным набором проверок: служба и реестр WinDivert, обнаружение конфликтующих сторонних утилит (GoodbyeDPI, Zapret, cFosSpeed), проверка Wintun адаптера, DNS-резолвинг игровых эндпоинтов и замер RTT.
-    2. Автоисправление в 1 клик (`/api/troubleshoot/fix`): восстановление службы WinDivert, сброс сетевого адаптера `WarLink-Tun`, сброс кэша DNS (`ipconfig /flushdns`) и сброс прокси.
+    1. Модуль `internal/troubleshooter` с полным набором проверок: проверка системных драйверов, обнаружение конфликтующих сторонних утилит (GoodbyeDPI, сторонние прокси, cFosSpeed), проверка Wintun адаптера, DNS-резолвинг игровых эндпоинтов и замер RTT.
+    2. Автоисправление в 1 клик (`/api/troubleshoot/fix`): остановка конфликтующих драйверов, сброс сетевого адаптера `WarLink-Tun`, сброс кэша DNS (`ipconfig /flushdns`) и сброс прокси.
     3. Модальное окно `ui/views/troubleshooter-modal.html` и контроллер `ui/js/troubleshooter.js` в стиле Dark Cloudflare Utility.
 
 - [x] **Проактивные операционные алерты в Discord (Ops Alerting):**
@@ -135,7 +135,7 @@
 
 - [x] **Автоматический сбор крашей и аварийных дампов (Crash Telemetry):**
   - **Реализовано:**
-    1. Нативная легковесная система перехвата сбоев в Go-клиенте: перехват паник (`defer recover()`), сбоев Wintun-драйвера, неожиданных завершений `sing-box.exe` и `winws2.exe`.
+    1. Нативная легковесная система перехвата сбоев в Go-клиенте: перехват паник (`defer recover()`), сбоев Wintun-драйвера, неожиданных завершений `sing-box.exe`.
     2. Обработчики `window.onerror` и `window.onunhandledrejection` в WebView2 с антифлуд-дебаунсом (3 минуты).
     3. Эндпоинт `POST /api/v1/telemetry/crash`, таблица PostgreSQL `crash_reports` с 30-дневной авто-ротацией, экспорт в VictoriaMetrics и Discord Ops.
 

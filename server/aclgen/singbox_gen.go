@@ -28,6 +28,113 @@ var BlockedServiceIPs = []string{
 	"91.105.192.0/23",
 }
 
+// DiscordDomains contains all official Discord API, gateway, CDN, and RTC endpoints.
+var DiscordDomains = []string{
+	"discord.com",
+	"discord.gg",
+	"discordapp.com",
+	"discordapp.net",
+	"discord.media",
+	"gateway.discord.gg",
+	"status.discord.com",
+	"discordstatus.com",
+	"dis.gd",
+	"discord-attachments-uploads-prd.storage.googleapis.com",
+	"discordcdn.com",
+	"cdn.discordapp.com",
+	"voice.discord.gg",
+	"discord.app",
+	"discord.dev",
+	"discord.gift",
+	"discord.gifts",
+	"discord.design",
+	"discord.new",
+	"discord.store",
+	"discord-activities.com",
+	"discordactivities.com",
+	"discordmerch.com",
+	"discordpartygames.com",
+	"discordsays.com",
+	"discordsez.com",
+	"stable.dl2.discordapp.net",
+}
+
+// YouTubeDomains contains YouTube video streaming, player API, and thumbnail CDN domains.
+var YouTubeDomains = []string{
+	"youtube.com",
+	"youtu.be",
+	"googlevideo.com",
+	"ytimg.com",
+	"ytimg.l.google.com",
+	"yt3.ggpht.com",
+	"yt4.ggpht.com",
+	"yt3.googleusercontent.com",
+	"jnn-pa.googleapis.com",
+	"wide-youtube.l.google.com",
+	"youtube-nocookie.com",
+	"youtube-ui.l.google.com",
+	"youtubeembeddedplayer.googleapis.com",
+	"youtubekids.com",
+	"youtube.googleapis.com",
+	"youtubei.googleapis.com",
+	"yt-video-upload.l.google.com",
+	"play.google.com",
+}
+
+// SocialMessengerDomains contains social media, instant messengers, and stream chat extensions.
+var SocialMessengerDomains = []string{
+	// X (Twitter)
+	"x.com",
+	"twitter.com",
+	"twimg.com",
+	"t.co",
+	"abs.twimg.com",
+	"pbs.twimg.com",
+	"api.twitter.com",
+	"api.x.com",
+	// Meta (Instagram / Facebook / Threads)
+	"instagram.com",
+	"cdninstagram.com",
+	"threads.net",
+	"facebook.com",
+	"fbcdn.net",
+	"fbsbx.com",
+	"messenger.com",
+	"meta.com",
+	// Telegram
+	"web.telegram.org",
+	"telegram.org",
+	"t.me",
+	"telegra.ph",
+	"telegram.me",
+	"telesco.pe",
+	"tdesktop.com",
+	"aurora.web.telegram.org",
+	"flora.web.telegram.org",
+	"pluto.web.telegram.org",
+	"venus.web.telegram.org",
+	"vesta.web.telegram.org",
+	"stel.com",
+	// WhatsApp & Viber
+	"web.whatsapp.com",
+	"whatsapp.com",
+	"whatsapp.net",
+	"whatsapp.org",
+	"wa.me",
+	"viber.com",
+	"api.viber.com",
+	"media.viber.com",
+	"share.viber.com",
+	"download.viber.com",
+	// Twitch chat extensions
+	"7tv.app",
+	"7tv.io",
+	"betterttv.net",
+	"frankerfacez.com",
+	"ffzap.com",
+	"klipy.com",
+}
+
 // BlockedServiceDomains contains domains that require tunneling through Stockholm GPN.
 var BlockedServiceDomains = []string{
 	"web.telegram.org",
@@ -49,6 +156,11 @@ var BlockedServiceDomains = []string{
 	"twitter.com",
 	"twimg.com",
 	"t.co",
+	// Gaming matchmaking & DGS services blocked by Russian ISP / TSPU
+	"azurefd.net",
+	"tm-azurefd.net",
+	"trafficmanager.net",
+	"playfabapi.com",
 }
 
 // CRLDomains contains Certificate Revocation List (CRL) and OCSP domains that must bypass tunnel over port 80.
@@ -131,6 +243,53 @@ var WardogsGameProcesses = []string{
 	"wardogslauncher.exe",
 }
 
+// DynamoDBRegionProbeDomains contains AWS DynamoDB regional endpoints used by WARDOGS
+// and Unreal Engine games to calculate regional latency in region/server select screens.
+var DynamoDBRegionProbeDomains = []string{
+	"dynamodb.eu-central-1.amazonaws.com",
+	"dynamodb.eu-north-1.amazonaws.com",
+	"dynamodb.eu-west-1.amazonaws.com",
+	"dynamodb.eu-west-2.amazonaws.com",
+	"dynamodb.eu-west-3.amazonaws.com",
+	"dynamodb.eu-south-1.amazonaws.com",
+	"dynamodb.us-east-1.amazonaws.com",
+	"dynamodb.us-east-2.amazonaws.com",
+	"dynamodb.us-west-1.amazonaws.com",
+	"dynamodb.us-west-2.amazonaws.com",
+	"dynamodb.ca-central-1.amazonaws.com",
+	"dynamodb.sa-east-1.amazonaws.com",
+	"dynamodb.ap-northeast-1.amazonaws.com",
+	"dynamodb.ap-northeast-2.amazonaws.com",
+	"dynamodb.ap-southeast-1.amazonaws.com",
+	"dynamodb.ap-southeast-2.amazonaws.com",
+	"dynamodb.ap-south-1.amazonaws.com",
+	"dynamodb.me-south-1.amazonaws.com",
+	"dynamodb.af-south-1.amazonaws.com",
+}
+
+// AWSRegionProbeSubnets contains Anycast / Global Accelerator IP ranges used by AWS DynamoDB regional endpoints.
+var AWSRegionProbeSubnets = []string{
+	"35.71.0.0/16",
+	"52.94.0.0/16",
+	"52.119.0.0/16",
+	"54.239.0.0/16",
+	"3.218.0.0/16",
+}
+
+// ValveSDRSubnets contains Steam Datagram Relay (SDR) relay clusters used by Steamworks for ping estimation.
+var ValveSDRSubnets = []string{
+	"155.133.0.0/16",
+	"162.254.192.0/18",
+	"146.66.152.0/21",
+	"185.25.180.0/22",
+	"45.121.184.0/23",
+	"89.222.108.0/24",
+	"205.196.6.0/24",
+	"103.10.124.0/23",
+	"103.28.54.0/23",
+	"152.233.52.0/23",
+}
+
 type SingBoxLogConfig struct {
 	Disabled bool   `json:"disabled,omitempty"`
 	Level    string `json:"level,omitempty"`
@@ -147,6 +306,10 @@ type SingBoxInbound struct {
 	StrictRoute         bool     `json:"strict_route"`
 	Stack               string   `json:"stack"`
 	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
+	UDPTimeout          string   `json:"udp_timeout,omitempty"`
+	UDPMapping          string   `json:"udp_mapping,omitempty"`
+	UDPFiltering        string   `json:"udp_filtering,omitempty"`
+	UDPNATMax           int      `json:"udp_nat_max,omitempty"`
 }
 
 type SingBoxHysteria2Obfs struct {
@@ -162,17 +325,19 @@ type SingBoxOutboundTLSOptions struct {
 }
 
 type SingBoxOutbound struct {
-	Type        string                     `json:"type"`
-	Tag         string                     `json:"tag"`
-	Server      string                     `json:"server,omitempty"`
-	ServerPort  int                        `json:"server_port,omitempty"`
-	ServerPorts []string                   `json:"server_ports,omitempty"`
-	HopInterval string                     `json:"hop_interval,omitempty"`
-	UpMbps      int                        `json:"up_mbps,omitempty"`
-	DownMbps    int                        `json:"down_mbps,omitempty"`
-	Password    string                     `json:"password,omitempty"`
-	Obfs        *SingBoxHysteria2Obfs      `json:"obfs,omitempty"`
-	TLS         *SingBoxOutboundTLSOptions `json:"tls,omitempty"`
+	Type                string                     `json:"type"`
+	Tag                 string                     `json:"tag"`
+	Server              string                     `json:"server,omitempty"`
+	ServerPort          int                        `json:"server_port,omitempty"`
+	ServerPorts         []string                   `json:"server_ports,omitempty"`
+	HopInterval         string                     `json:"hop_interval,omitempty"`
+	UpMbps              int                        `json:"up_mbps,omitempty"`
+	DownMbps            int                        `json:"down_mbps,omitempty"`
+	Password            string                     `json:"password,omitempty"`
+	Obfs                *SingBoxHysteria2Obfs      `json:"obfs,omitempty"`
+	TLS                 *SingBoxOutboundTLSOptions `json:"tls,omitempty"`
+	DisableChromeParrot bool                       `json:"disable_chrome_parrot,omitempty"`
+	InitialPacketSize   int                        `json:"initial_packet_size,omitempty"`
 }
 
 type SingBoxRouteRule struct {
@@ -252,9 +417,9 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			procSet[pClean] = struct{}{}
 		}
 	}
-	if includeWebServices {
-		procSet["Telegram.exe"] = struct{}{}
-		procSet["telegram.exe"] = struct{}{}
+	// Always include Discord and Telegram processes into tunnel
+	for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
+		procSet[dp] = struct{}{}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -322,7 +487,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		// 1. Exclude core daemons, local DNS proxies, WarLink, and Antigravity IDE from TUN routing
 		{
 			ProcessName: []string{
-				"sing-box.exe", "winws2.exe", "winws.exe", "WarLink.exe", "warlink.exe",
+				"sing-box.exe", "WarLink.exe", "warlink.exe",
 				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe", "dnsproxy.exe", "cloudflared.exe", "stubby.exe", "AdGuardSvc.exe",
 				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
 			},
@@ -373,9 +538,9 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		})
 	}
 
-	// 7. Route specified target game processes to hy2-gateway with HIGHEST PRIORITY!
-	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
-	// MUST go through tunnel!
+	// 7. Route specified target game processes to hy2-gateway with TOP PRIORITY for game TCP/UDP!
+	// Every single packet from game processes (AION2.exe, WardogsClient-Win64-Shipping.exe, etc.)
+	// including UDP ping probes (#$#$), lobby TCP TLS handshakes, STUN, and match UDP MUST go through hy2-gateway!
 	if len(allProcesses) > 0 {
 		rules = append(rules, SingBoxRouteRule{
 			ProcessName: allProcesses,
@@ -383,38 +548,91 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		})
 	}
 
-	// 8. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
+	// 8. ICMP ping/echo always routes direct. Hysteria 2 QUIC proxy only carries TCP/UDP streams.
+	// Game ICMP latency probes must never be captured by hy2-gateway proxy.
+	rules = append(rules, SingBoxRouteRule{
+		Network:  "icmp",
+		Outbound: "direct",
+	})
+
+	// 9. DynamoDB and AWS region ping endpoints must route direct so region evaluation reflects real physical latency
+	rules = append(rules, SingBoxRouteRule{
+		DomainSuffix: DynamoDBRegionProbeDomains,
+		Outbound:     "direct",
+	})
+
+	// 10. Route AION 2 / Throne and Liberty region ping gateways and NCSoft server subnets
+	// through the accelerated gateway tunnel regardless of process identification.
+	// These IP rules ensure ping probes reach game servers even when sing-box cannot
+	// identify the originating process (NCGPA.dll injected threads, Access is denied).
+	//   193.202.112.0/24 - Cloudflare Spectrum proxy for NCSoft login / ping servers (IE, Dublin)
+	//   216.107.254.0/24 - NCSoft Korea direct (Seongnam-si, KR)
+	//   80.239.138.0/24  - Arelion Sweden (Stockholm) EU region game server
+	//   212.101.4.0/24   - STUN relay for AION 2 NAT traversal (stun.solnet.ch)
+	rules = append(rules, SingBoxRouteRule{
+		IPCIDR: []string{
+			"193.202.112.0/24",
+			"216.107.254.0/24",
+			"80.239.138.0/24",
+			"212.101.4.0/24",
+		},
+		Outbound: "hy2-gateway",
+	})
+
+	// 11. AWS Anycast & Valve SDR region probe subnets route direct for real ping
+	regionProbeSubnets := append(append([]string{}, AWSRegionProbeSubnets...), ValveSDRSubnets...)
+	rules = append(rules, SingBoxRouteRule{
+		IPCIDR:   regionProbeSubnets,
+		Outbound: "direct",
+	})
+
+	// 12. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
 	rules = append(rules, SingBoxRouteRule{
 		DomainSuffix: CRLDomains,
 		Port:         []int{80},
 		Outbound:     "direct",
 	})
 
-	// 9. Direct game domains (Steam downloads, CDN) for non-game processes route direct
+	// 13. Direct game domains (Steam downloads, CDN) for non-game processes route direct
 	rules = append(rules, SingBoxRouteRule{
 		DomainSuffix: DirectGameDomains,
 		Outbound:     "direct",
 	})
 
-	if includeWebServices {
-		rules = append(rules, SingBoxRouteRule{
-			Action:       "reject",
-			Network:      "udp",
-			Port:         []int{443},
-			DomainSuffix: BlockedServiceDomains,
-		})
+	// Reject QUIC (HTTP/3 over UDP 443) only for YouTube to force TCP HTTP/2.
+	// BlockedServiceDomains (azurefd.net, trafficmanager.net, playfabapi.com etc.) are excluded
+	// because AION 2 and other games use UDP probes on these domains for ping measurement.
+	quicRejectDomains := append([]string{}, YouTubeDomains...)
+	rules = append(rules, SingBoxRouteRule{
+		Action:       "reject",
+		Network:      "udp",
+		Port:         []int{443},
+		DomainSuffix: quicRejectDomains,
+	})
 
-		rules = append(rules,
-			SingBoxRouteRule{
-				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-gateway",
-			},
-			SingBoxRouteRule{
-				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-gateway",
-			},
-		)
-	}
+	// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+	rules = append(rules,
+		SingBoxRouteRule{
+			DomainSuffix: YouTubeDomains,
+			Outbound:     "hy2-gateway",
+		},
+		SingBoxRouteRule{
+			DomainSuffix: DiscordDomains,
+			Outbound:     "hy2-gateway",
+		},
+		SingBoxRouteRule{
+			DomainSuffix: SocialMessengerDomains,
+			Outbound:     "hy2-gateway",
+		},
+		SingBoxRouteRule{
+			DomainSuffix: BlockedServiceDomains,
+			Outbound:     "hy2-gateway",
+		},
+		SingBoxRouteRule{
+			IPCIDR:   BlockedServiceIPs,
+			Outbound: "hy2-gateway",
+		},
+	)
 
 	// Route profile domains
 	if len(allDomains) > 0 {
@@ -439,28 +657,21 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media strictly for Discord processes routes direct
+	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
 	rules = append(rules,
 		SingBoxRouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
 			Port:        []int{3478},
-			Outbound:    "direct",
+			Outbound:    "hy2-gateway",
 		},
 		SingBoxRouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
 			PortRange:   []string{"19294:19344", "50000:65535"},
-			Outbound:    "direct",
+			Outbound:    "hy2-gateway",
 		},
 	)
-
-	// Steam Datagram Relay (SDR) ping relays for Steam client
-	rules = append(rules, SingBoxRouteRule{
-		Network:   "udp",
-		PortRange: []string{"27000:27200"},
-		Outbound:  "direct",
-	})
 
 	// Default fallback to direct
 	rules = append(rules, SingBoxRouteRule{
@@ -481,28 +692,42 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		DomainSuffix: CRLDomains,
 		Server:       "dns-local",
 	})
-	// 3. Vivox voice chat -> dns-remote (resolves real IP of voice servers via 1.1.1.1 through tunnel)
+	// 2.1 DynamoDB regional probe domains -> dns-local (real physical IPs for true RTT measurement)
+	dnsRules = append(dnsRules, SingBoxDNSRule{
+		DomainSuffix: DynamoDBRegionProbeDomains,
+		Server:       "dns-local",
+	})
+	// 3. Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP
+	targetTunnelDomains := append([]string{}, YouTubeDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
+	dnsRules = append(dnsRules, SingBoxDNSRule{
+		DomainSuffix: targetTunnelDomains,
+		Server:       "dns-fakeip",
+	})
+	// 4. Vivox voice chat -> dns-remote (resolves real IP of voice servers via 1.1.1.1 through tunnel)
 	dnsRules = append(dnsRules, SingBoxDNSRule{
 		DomainSuffix: []string{"vivox.com"},
 		Server:       "dns-remote",
 	})
-	// 4. Target game processes -> dns-fakeip (all queries from game EXEs get FakeIP and resolve remotely)
+	// 5. Target game processes resolve through encrypted remote DNS to real public IPs
+	// (critical: never use FakeIP for games, as FakeIP breaks ICMP ping, STUN, QoS probes, and anti-cheat)
 	if len(allProcesses) > 0 {
 		dnsRules = append(dnsRules, SingBoxDNSRule{
 			ProcessName: allProcesses,
-			Server:      "dns-fakeip",
+			Server:      "dns-remote",
 		})
 	}
-	// 5. Direct game domains (for non-game processes, e.g. steam.exe) -> dns-local
+
+	// 6. Game & launcher direct domains (for non-game processes, e.g. steam.exe) -> dns-local
 	dnsRules = append(dnsRules, SingBoxDNSRule{
 		DomainSuffix: DirectGameDomains,
 		Server:       "dns-local",
 	})
 
-	var fakeDomains []string
-	if includeWebServices {
-		fakeDomains = append(fakeDomains, BlockedServiceDomains...)
-	}
+	// 7. Game domains resolve through encrypted remote DNS to real IPs
+	var remoteGameDomains []string
 	if len(allDomains) > 0 {
 		for _, d := range allDomains {
 			isDirect := false
@@ -512,15 +737,23 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 					break
 				}
 			}
-			if isDirect || strings.HasSuffix(d, "vivox.com") {
+			if isDirect || strings.HasSuffix(d, "vivox.com") || strings.HasSuffix(d, "amazonaws.com") {
 				continue
 			}
-			fakeDomains = append(fakeDomains, d)
+			remoteGameDomains = append(remoteGameDomains, d)
 		}
 	}
-	if len(fakeDomains) > 0 {
+	if len(remoteGameDomains) > 0 {
 		dnsRules = append(dnsRules, SingBoxDNSRule{
-			DomainSuffix: fakeDomains,
+			DomainSuffix: remoteGameDomains,
+			Server:       "dns-remote",
+		})
+	}
+
+	// 8. ONLY web browsing bypass services (YouTube, Discord web, Social/Messengers) resolve via FakeIP
+	if len(targetTunnelDomains) > 0 {
+		dnsRules = append(dnsRules, SingBoxDNSRule{
+			DomainSuffix: targetTunnelDomains,
 			Server:       "dns-fakeip",
 		})
 	}
@@ -562,6 +795,8 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			ServerName: "gateway.warlink.network",
 			Insecure:   true,
 		},
+		DisableChromeParrot: true,
+		InitialPacketSize:   1320,
 	}
 
 	if obfsPassword != "" {
@@ -569,6 +804,16 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			Type:     "salamander",
 			Password: obfsPassword,
 		}
+	}
+
+	routeExclude := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+	}
+	if targetServer != "" && !strings.Contains(targetServer, ":") {
+		routeExclude = append(routeExclude, targetServer+"/32")
 	}
 
 	fullConfig := SingBoxFullConfig{
@@ -579,15 +824,19 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		},
 		Inbounds: []SingBoxInbound{
 			{
-				Type:          "tun",
-				Tag:           "tun-in",
-				InterfaceName: "WarLink-Tun",
-				Address:       []string{"172.28.192.1/30"},
-				MTU:           1320,
+				Type:                "tun",
+				Tag:                 "tun-in",
+				InterfaceName:       "WarLink-Tun",
+				Address:             []string{"172.28.192.1/30"},
+				MTU:                 1320,
 				AutoRoute:           true,
-				StrictRoute:         false,
+				StrictRoute:         true,
 				Stack:               "mixed",
-				RouteExcludeAddress: []string{"162.159.0.0/16"},
+				RouteExcludeAddress: routeExclude,
+				UDPTimeout:          "3m",
+				UDPMapping:          "endpoint_independent",
+				UDPFiltering:        "endpoint_independent",
+				UDPNATMax:           8192,
 			},
 		},
 		Outbounds: []SingBoxOutbound{

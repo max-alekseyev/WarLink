@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,23 +35,44 @@ type Engine struct {
 	mu                 sync.Mutex
 	transitionMu       sync.Mutex
 	cfg                *config.Config
-	zapretCmd          *exec.Cmd
 	isConnected        bool
 	isConnecting       bool
-	winwsStopping      atomic.Bool
 	singboxStopping    atomic.Bool
 	selectedAlt        string
 	freeInternetActive bool
 	logCallback        func(string)
 	pipelineProgress   PipelineProgress
 	hostlistMgr        *hostlist.Manager
-	singboxMgr         *singbox.Manager
-	telemetry          *TelemetryMonitor
-	pingMeter          *pingmeter.Meter
-	beacon             *AutoBeacon
+	singboxMgr             *singbox.Manager
+	telemetry              *TelemetryMonitor
+	pingMeter              *pingmeter.Meter
+	beacon                 *AutoBeacon
 	watchdogStop           chan struct{}
 	singboxRestartAttempts int
 	singboxLastRestart     time.Time
+	singboxStartedAt       time.Time
+	lastCrashReportTime    time.Time
+	crashReportsThisHour   int
+	crashReportHourStart   time.Time
+}
+
+func (e *Engine) shouldSendCrashReport() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	now := time.Now()
+	if now.Sub(e.crashReportHourStart) > time.Hour {
+		e.crashReportHourStart = now
+		e.crashReportsThisHour = 0
+	}
+	if e.crashReportsThisHour >= 3 {
+		return false
+	}
+	if !e.lastCrashReportTime.IsZero() && now.Sub(e.lastCrashReportTime) < 30*time.Second {
+		return false
+	}
+	e.lastCrashReportTime = now
+	e.crashReportsThisHour++
+	return true
 }
 
 func New(cfg *config.Config, logCb func(string)) *Engine {
@@ -65,7 +84,7 @@ func New(cfg *config.Config, logCb func(string)) *Engine {
 		freeInternetActive: cfg.FreeInternetEnabled,
 		singboxMgr:         singbox.NewManager(deps.GetCoreDir()),
 		telemetry:          NewTelemetryMonitor(),
-		pingMeter:          pingmeter.New(filepath.Join(deps.GetCoreDir(), "zapret", "bin")),
+		pingMeter:          pingmeter.New(),
 	}
 	eng.beacon = NewAutoBeacon(eng, logCb)
 	if eng.singboxMgr != nil {
@@ -112,35 +131,11 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 	e.mu.Unlock()
 
 	if enable {
-		e.log("[FREE NET] Включение режима «Комплексный режим» (YouTube, Discord, Telegram, WhatsApp, web)...")
-		if !deps.HasZapret() {
-			if err := deps.PrepareZapret(e.log); err != nil {
-				return fmt.Errorf("ошибка загрузки компонентов: %w", err)
-			}
-		}
-		if _, err := e.hostlistMgr.ExportFreeInternetList(); err != nil {
-			e.log(fmt.Sprintf("[WARN] Ошибка экспорта списка доменов: %v", err))
-		}
-		// Set freeInternetActive BEFORE starting winws2 so BuildModularArgs builds composite/free net args
+		e.log("[FREE NET] Включение режима «Свободный интернет» (маршрутизация Discord, YouTube, Telegram через Hysteria 2)...")
 		e.mu.Lock()
 		e.freeInternetActive = true
 		e.mu.Unlock()
 
-		// Remove any stale DeleteFlag=1 left from a previous sc delete call.
-		// Without this, WinDivertOpen fails with ERROR_BAD_DEVICE until reboot.
-		scanner.CleanWinDivertDeleteFlag()
-
-		if isConn {
-			_ = e.stopWinws()
-		}
-		if err := e.EnsureWinwsRunning(); err != nil {
-			e.mu.Lock()
-			e.freeInternetActive = false
-			e.mu.Unlock()
-			return err
-		}
-
-		// Ensure sing-box is active with Stockholm Hysteria 2 for IP-blocked services
 		if err := deps.EnsureSingBoxFiles(e.log); err != nil {
 			e.mu.Lock()
 			e.freeInternetActive = false
@@ -175,12 +170,10 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 			startErr := e.singboxMgr.Start(targets, true, e.log, selectedGameID)
 			e.singboxStopping.Store(false)
 			if startErr != nil {
-				// Rollback and release session immediately on failure
 				e.mu.Lock()
 				e.freeInternetActive = false
 				e.mu.Unlock()
 				if !isConn {
-					_ = e.stopWinws()
 					_ = singbox.ReleaseSession()
 				}
 				errMsg := startErr.Error()
@@ -215,7 +208,7 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		}
 		return nil
 	} else {
-		e.log("[FREE NET] Отключение режима «Комплексный режим» (браузер возвращен на прямой интернет)...")
+		e.log("[FREE NET] Отключение режима «Свободный интернет»...")
 		e.mu.Lock()
 		e.freeInternetActive = false
 		e.cfg.FreeInternetEnabled = false
@@ -223,8 +216,6 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 		e.mu.Unlock()
 
 		if isConn {
-			_ = e.stopWinws()
-			_ = e.EnsureWinwsRunning()
 			if e.singboxMgr != nil {
 				targetGameProcess := "WardogsClient-Win64-Shipping.exe"
 				selectedGame := e.cfg.GetSelectedGame()
@@ -257,194 +248,12 @@ func (e *Engine) ToggleFreeInternet(enable bool) error {
 			_ = e.singboxMgr.Stop()
 			e.singboxStopping.Store(false)
 		}
-		// Release slot immediately when Free Internet is disabled
 		go func() {
 			_ = singbox.ReleaseSession()
 		}()
-		return e.stopWinws()
+		return nil
 	}
 }
-
-func (e *Engine) EnsureWinwsRunning() error {
-	e.winwsStopping.Store(true)
-	defer e.winwsStopping.Store(false)
-	e.mu.Lock()
-	if e.zapretCmd != nil && e.zapretCmd.Process != nil {
-		pid := e.zapretCmd.Process.Pid
-		e.mu.Unlock()
-		h, err := syscall.OpenProcess(0x1000, false, uint32(pid))
-		if err == nil {
-			var code uint32
-			alive := syscall.GetExitCodeProcess(h, &code) == nil && code == 259
-			syscall.CloseHandle(h)
-			if alive {
-				return nil // already running and healthy
-			}
-		}
-	} else {
-		e.mu.Unlock()
-	}
-
-	bestAlt := e.GetBestAlt()
-	zapretDir := deps.GetZapretDir()
-	winwsPath := filepath.Join(zapretDir, "bin", "winws2.exe")
-
-	if gwIP := singbox.GetServerIP(); gwIP != "" {
-		_ = deps.AddGatewayToZapretExclude(gwIP)
-	}
-
-	_, _ = e.hostlistMgr.ExportFreeInternetList()
-
-	e.mu.Lock()
-	isFreeNet := e.freeInternetActive
-	isConn := e.isConnected || e.pipelineProgress.IsRunning
-	e.mu.Unlock()
-
-	selectedGame := e.cfg.GetSelectedGame()
-	if selectedGame.PreferredAlt != "" {
-		bestAlt = selectedGame.PreferredAlt
-	}
-	if e.selectedAlt != "" && e.selectedAlt != "general" {
-		bestAlt = e.selectedAlt
-	}
-
-	preset := desync.GetPreset(bestAlt)
-	if preset == nil {
-		preset = desync.GetPreset("Автокалибровка (Circular Adaptive)")
-	}
-
-	args := preset.BuildModularArgs(zapretDir, isFreeNet)
-	if isFreeNet && isConn {
-		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в композитном режиме (Комплексный режим + Игра)...", preset.Name))
-	} else if isFreeNet {
-		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в режиме «Комплексный режим» (YouTube/Discord/Web)...", preset.Name))
-	} else {
-		e.log(fmt.Sprintf("[INFO] Запуск winws2.exe (%s) в селективном игровом режиме...", preset.Name))
-	}
-
-	deps.HealWinDivertService(e.log)
-	_ = deps.EnsureLogsDir()
-	logPath := filepath.Join(deps.GetLogsDir(), "winws2.log")
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		if attempt > 1 {
-			deps.HealWinDivertService(e.log)
-			// Only kill the process — NOT StopWinDivertService().
-			// sc delete WinDivert sets DeleteFlag=1 in the registry causing
-			// ERROR_BAD_DEVICE (433) on all subsequent WinDivertOpen() calls until reboot.
-			_ = scanner.KillProcess("winws2.exe")
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		zCmd := exec.Command(winwsPath, args...)
-		zCmd.Dir = filepath.Dir(winwsPath)
-		zCmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:    true,
-			CreationFlags: 0x08000000,
-		}
-		logFile, errOpen := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-		if errOpen == nil {
-			zCmd.Stdout = logFile
-			zCmd.Stderr = logFile
-		}
-		if err := zCmd.Start(); err != nil {
-			if logFile != nil {
-				_ = logFile.Close()
-			}
-			lastErr = fmt.Errorf("ошибка запуска winws2: %w", err)
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		if logFile != nil {
-			_ = logFile.Close()
-		}
-
-		_ = deps.AssignProcessToJob(zCmd.Process.Pid)
-
-		e.mu.Lock()
-		e.zapretCmd = zCmd
-		pid := zCmd.Process.Pid
-		e.mu.Unlock()
-
-		// Wait up to 2.5s for winws2 to either stay alive (success) or exit (failure).
-		// winws2 loads 32k+ ipset entries before calling WinDivertOpen, which takes ~1-1.5s.
-		// A 100ms tasklist check is a false positive — the process appears alive but exits a moment later.
-		winwsReady := false
-		startTime := time.Now()
-		deadline := startTime.Add(2500 * time.Millisecond)
-		for time.Now().Before(deadline) {
-			time.Sleep(150 * time.Millisecond)
-			h, err := syscall.OpenProcess(0x1000, false, uint32(pid))
-			if err != nil {
-				// Process already gone
-				break
-			}
-			var code uint32
-			alive := syscall.GetExitCodeProcess(h, &code) == nil && code == 259
-			syscall.CloseHandle(h)
-			if alive {
-				// Require at least 1.2s of uptime so lists finish loading before WinDivertOpen
-				if time.Since(startTime) >= 1200*time.Millisecond {
-					winwsReady = true
-					break
-				}
-				// Still loading — keep waiting
-				continue
-			}
-			// Process exited
-			break
-		}
-
-
-		if winwsReady {
-			e.log("[OK] Сетевой фильтр WinDivert и winws2 активны")
-			return nil
-		}
-
-		// Collect diagnostics from winws2.log
-		diagMsg := "winws2.exe завершился с ошибкой"
-		if logBytes, err := os.ReadFile(logPath); err == nil {
-			lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
-			for i := len(lines) - 1; i >= 0 && i >= len(lines)-3; i-- {
-				if strings.TrimSpace(lines[i]) != "" {
-					diagMsg = strings.TrimSpace(lines[i])
-					break
-				}
-			}
-		}
-		lastErr = fmt.Errorf("winws2.exe не отвечает: %s", diagMsg)
-	}
-
-	return lastErr
-}
-
-
-func (e *Engine) stopWinws() error {
-	e.winwsStopping.Store(true)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.log("[INFO] Завершение сетевого фильтра (winws2.exe)...")
-	_ = scanner.KillProcess("winws2.exe")
-	_ = scanner.KillProcess("winws.exe")
-
-	if e.zapretCmd != nil && e.zapretCmd.Process != nil {
-		pid := e.zapretCmd.Process.Pid
-		_ = e.zapretCmd.Process.Kill()
-		killCmd := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
-		killCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		_ = killCmd.Run()
-		_ = e.zapretCmd.Process.Release()
-		e.zapretCmd = nil
-	}
-
-	// WinDivert.dll releases its kernel driver handle when winws2.exe exits — no sc.exe calls needed.
-	// Calling sc stop/delete here sets DeleteFlag=1 in the registry and poisons the driver for all
-	// subsequent starts until reboot.
-	time.Sleep(350 * time.Millisecond)
-	return nil
-}
-
 
 func (e *Engine) setProgress(percent int, current, total int, cfgName, msg string, isRunning bool) {
 	e.mu.Lock()
@@ -470,23 +279,16 @@ func (e *Engine) FindAvailableAlts() []string {
 	return desync.GetAvailablePresetNames()
 }
 
-// SetSelectedAlt updates the chosen DPI desync profile in memory and reloads winws2 if running.
+// SetSelectedAlt updates the chosen profile in memory.
 func (e *Engine) SetSelectedAlt(alt string) {
 	cleanAlt := strings.TrimSuffix(strings.TrimSpace(alt), ".bat")
 	e.mu.Lock()
 	e.selectedAlt = cleanAlt
 	e.cfg.SelectedAlt = cleanAlt
 	_ = e.cfg.Save()
-	isRunning := e.zapretCmd != nil && e.zapretCmd.Process != nil
-	isFreeNet := e.freeInternetActive
-	isConn := e.isConnected
 	e.mu.Unlock()
 
-	e.log(fmt.Sprintf("[CONFIG] Профиль обхода DPI изменен: %s", cleanAlt))
-	if isRunning || isFreeNet || isConn {
-		_ = e.stopWinws()
-		_ = e.EnsureWinwsRunning()
-	}
+	e.log(fmt.Sprintf("[CONFIG] Профиль: %s", cleanAlt))
 }
 
 // GetBestAlt returns the selected alt or chooses the default optimal profile.
@@ -512,7 +314,7 @@ func (e *Engine) getBestAltLocked() string {
 	return "Автокалибровка (Circular Adaptive)"
 }
 
-// ConnectPipeline runs the full 5-stage unified connect pipeline.
+// ConnectPipeline runs the unified connect pipeline.
 func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	e.transitionMu.Lock()
 	defer e.transitionMu.Unlock()
@@ -525,10 +327,6 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	e.isConnecting = true
 	e.mu.Unlock()
 
-	// Ensure no stale winws is running from a previous crash/manual run
-	_ = scanner.KillProcess("winws2.exe")
-	_ = scanner.KillProcess("winws.exe")
-
 	defer func() {
 		e.mu.Lock()
 		e.isConnecting = false
@@ -536,19 +334,9 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	}()
 
 	// ==========================================
-	// STAGE 1: ПРЕДСТАРТОВАЯ ДИАГНОСТИКА (0% - 15%)
+	// STAGE 1: ПРЕДСТАРТОВАЯ ДИАГНОСТИКА СИСТЕМЫ (0% - 25%)
 	// ==========================================
-	// 1.0 Ensure desync files are downloaded and extracted
-	if !deps.HasZapret() {
-		e.setProgress(1, 0, 0, "", "Загрузка компонентов сетевой оптимизации...", true)
-		e.log("[INFO] Компоненты сетевого фильтра отсутствуют на диске. Первичная загрузка с GitHub...")
-		if err := deps.PrepareZapret(e.log); err != nil {
-			e.setProgress(0, 0, 0, "", "Ошибка загрузки компонентов", false)
-			return fmt.Errorf("ошибка загрузки компонентов сетевой оптимизации: %w", err)
-		}
-	}
-
-	e.setProgress(3, 0, 0, "", "Диагностика: зачистка конфликтов...", true)
+	e.setProgress(5, 0, 0, "", "Диагностика: зачистка сетевых конфликтов...", true)
 	e.log("[INFO] Старт предстартовой диагностики системы...")
 
 	// 1.1 Kill conflicts and sanitize startup / broken proxies
@@ -560,27 +348,16 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	}
 	deps.SanitizeStartupAndNetwork(e.log)
 
-	// 1.2 Clean up stale WinDivert state.
-	// If a previous run called sc delete WinDivert while handles were open, the registry gets
-	// DeleteFlag=1 which causes ERROR_BAD_DEVICE (433) on WinDivertOpen — recoverable without reboot.
-	// CleanWinDivertDeleteFlag removes this flag (requires admin — WarLink runs as elevated).
-	// StopWinDivertService only cleans WinDivert14 (from third-party tools), never our own driver.
-	scanner.CleanWinDivertDeleteFlag()
-	scanner.StopWinDivertService()
-
-	// 1.3 Restore ipset-all.txt if damaged
-	deps.RestoreIpsetIfNeeded(e.log)
-
-	// 1.4 Check basic internet connectivity
-	e.setProgress(8, 0, 0, "", "Диагностика: проверка доступа к сети...", true)
+	// 1.2 Check basic internet connectivity
+	e.setProgress(15, 0, 0, "", "Диагностика: проверка доступа к сети...", true)
 	if !deps.CheckInternetConnection() {
 		e.log("[WARN] Базовая сеть недоступна или нет ответа от DNS. Попытка продолжить...")
 	} else {
 		e.log("[OK] Сетевой адаптер и интернет активны")
 	}
 
-	// 1.5 Ensure sing-box and WinTun components
-	e.setProgress(15, 0, 0, "", "Диагностика: проверка компонентов sing-box...", true)
+	// 1.4 Ensure sing-box and WinTun components
+	e.setProgress(25, 0, 0, "", "Диагностика: проверка компонентов sing-box...", true)
 	if err := deps.EnsureSingBoxFiles(e.log); err != nil {
 		e.setProgress(0, 0, 0, "", "Ошибка компонентов sing-box", false)
 		return fmt.Errorf("ошибка компонентов sing-box: %w", err)
@@ -588,34 +365,10 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	e.log("[OK] Игровой селективный роутер sing-box и WinTun готовы")
 
 	// ==========================================
-	// STAGE 2: АНАЛИЗ И ВЫБОР ПРОФИЛЯ ОБХОДА DPI (15% - 60%)
+	// STAGE 2: ЗАПУСК ИГРОВОГО ШЛЮЗА HYSTERIA 2 (25% - 85%)
 	// ==========================================
-	bestAlt := e.GetBestAlt()
-	e.log(fmt.Sprintf("[INFO] Выбран оптимальный профиль десинхронизации: %s", bestAlt))
-	e.setProgress(60, 0, 0, bestAlt, fmt.Sprintf("Профиль: %s", bestAlt), true)
-	time.Sleep(100 * time.Millisecond)
-
-	// ==========================================
-	// STAGE 3: ЗАПУСК СЕТЕВОГО ФИЛЬТРА (ТИХИЙ РЕЖИМ)
-	// ==========================================
-	e.setProgress(65, 0, 0, bestAlt, fmt.Sprintf("Запуск сетевого фильтра (%s)...", bestAlt), true)
-	e.log(fmt.Sprintf("[INFO] Тихий запуск сетевого фильтра WinDivert: %s...", bestAlt))
-
-	startErr := e.EnsureWinwsRunning()
-
-	if startErr != nil {
-		_ = e.disconnectInternal()
-		e.setProgress(0, 0, 0, "", "winws2.exe не отвечает", false)
-		return fmt.Errorf("winws2.exe не запустился: %w", startErr)
-	}
-	e.setProgress(75, 0, 0, bestAlt, "Сетевой фильтр winws2 и WinDivert активны", true)
-	e.log("[OK] winws2.exe успешно обнаружен в процессах, драйвер WinDivert активен")
-
-	// ==========================================
-	// STAGE 4: ЗАПУСК ИГРОВОГО СЕЛЕКТИВНОГО РОУТЕРА SING-BOX (75% - 92%)
-	// ==========================================
-	e.setProgress(80, 0, 0, bestAlt, "Запуск игрового шлюза Стокгольм (Hysteria 2)...", true)
-	e.log("[INFO] Инициализация нативного игрового L3 туннеля Hysteria 2 (Стокгольм, 27 мс)...")
+	e.setProgress(50, 0, 0, "", "Подключение к игровому шлюзу (Hysteria 2)...", true)
+	e.log("[INFO] Инициализация нативного игрового L3 туннеля Hysteria 2...")
 
 	targetGameProcess := "WardogsClient-Win64-Shipping.exe"
 	selectedGame := e.cfg.GetSelectedGame()
@@ -641,6 +394,10 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	if isFreeNet {
 		selectedGameID = selectedGameID + " (гибрид)"
 	}
+
+	// Clean zombie Wintun adapter if left by previous unclean termination
+	deps.CleanupZombieWintunAdapter(e.log)
+
 	if err := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID); err != nil {
 		_ = e.disconnectInternal()
 		e.setProgress(0, 0, 0, "", "Ошибка запуска sing-box", false)
@@ -660,8 +417,11 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 		return fmt.Errorf("ошибка запуска sing-box: %w", err)
 	}
 
-	e.setProgress(92, 0, 0, bestAlt, "Игровой туннель активен. Стабилизация сетевого адаптера...", true)
-	time.Sleep(500 * time.Millisecond)
+	// ==========================================
+	// STAGE 3: СТАБИЛИЗАЦИЯ И ФИНАЛЬНАЯ НАСТРОЙКА (85% - 100%)
+	// ==========================================
+	e.setProgress(90, 0, 0, "", "Игровой туннель активен. Стабилизация сетевого адаптера...", true)
+	time.Sleep(300 * time.Millisecond)
 
 	e.mu.Lock()
 	e.isConnected = true
@@ -687,7 +447,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 		e.beacon.Start(g.ID, pName)
 	}
 
-	e.setProgress(100, 0, 0, bestAlt, "Сетевой туннель полностью активен!", false)
+	e.setProgress(100, 0, 0, "", "Сетевой туннель полностью активен!", false)
 	e.log("[OK] Сетевой туннель полностью активен! Готово к игре")
 
 	// Apply Windows network stack and DSCP 46 optimizations for competitive low latency
@@ -709,7 +469,6 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 			gameCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 			_ = gameCmd.Start()
 		}
-
 	}
 
 	if onSuccess != nil {
@@ -719,7 +478,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	return nil
 }
 
-// Disconnect gracefully disconnects Hysteria 2 and Zapret without holding the mutex during I/O.
+// Disconnect gracefully disconnects Hysteria 2 without holding the mutex during I/O.
 func (e *Engine) Disconnect() error {
 	e.transitionMu.Lock()
 	defer e.transitionMu.Unlock()
@@ -742,33 +501,8 @@ func (e *Engine) disconnectInternal() error {
 	freeActive := e.freeInternetActive
 	e.mu.Unlock()
 
-	// 1. If Free Internet is NOT active, stop winws completely.
-	// If Free Internet IS active, seamlessly restart winws in Web-Only mode!
 	if !freeActive {
 		e.stopWatchdog()
-		e.log("[INFO] Завершение процесса Zapret (winws2.exe)...")
-		_ = scanner.KillProcess("winws2.exe")
-		_ = scanner.KillProcess("winws.exe")
-
-		e.mu.Lock()
-		if e.zapretCmd != nil && e.zapretCmd.Process != nil {
-			pid := e.zapretCmd.Process.Pid
-			_ = e.zapretCmd.Process.Kill()
-			killCmd := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
-			killCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-			_ = killCmd.Run()
-			e.zapretCmd = nil
-		}
-		e.mu.Unlock()
-		// No sc stop/delete — WinDivert releases its handle when winws2.exe exits.
-	} else {
-		e.log("[INFO] Игра закрыта. Режим «Комплексный режим» переведен в базовый веб-профиль")
-		_ = e.stopWinws()
-		_ = e.EnsureWinwsRunning()
-	}
-
-	// 2. Disconnect sing-box (unless Free Internet mode is active)
-	if !freeActive {
 		e.singboxStopping.Store(true)
 		if e.singboxMgr != nil {
 			e.log("[INFO] Остановка игрового туннеля sing-box...")
@@ -785,7 +519,7 @@ func (e *Engine) disconnectInternal() error {
 			_ = e.singboxMgr.Start(nil, true, e.log, "free_internet")
 		}
 		e.singboxStopping.Store(false)
-		e.log("[INFO] Селективный туннель Hysteria 2 остается активным для Telegram, Meta и WhatsApp")
+		e.log("[INFO] Селективный туннель Hysteria 2 остается активным для Discord, YouTube и мессенджеров")
 	}
 
 	e.mu.Lock()
@@ -857,11 +591,6 @@ func (e *Engine) Shutdown() {
 		_ = e.singboxMgr.Stop()
 	}
 	_ = singbox.ReleaseSession()
-
-	_ = scanner.KillProcess("winws2.exe")
-	_ = scanner.KillProcess("winws.exe")
-	// WinDivert driver handle is released automatically when winws2.exe exits.
-	// sc delete is never called — on next startup WinDivert.dll self-registers cleanly.
 
 	deps.RestoreWindowsNetworkStack(e.log)
 }
@@ -935,57 +664,34 @@ func (e *Engine) checkProcessHealth() {
 		return
 	}
 
-	// 1. Check winws.exe
-	winwsAlive := false
-	if e.winwsStopping.Load() {
-		winwsAlive = true // intentionally stopping/restarting, do not treat as crash
-	} else {
-		e.mu.Lock()
-		if e.zapretCmd != nil && e.zapretCmd.Process != nil {
-			pid := e.zapretCmd.Process.Pid
-			e.mu.Unlock()
-			h, err := syscall.OpenProcess(0x1000, false, uint32(pid))
-			if err == nil {
-				var code uint32
-				if syscall.GetExitCodeProcess(h, &code) == nil && code == 259 {
-					winwsAlive = true
-				}
-				syscall.CloseHandle(h)
-			}
-		} else {
-			e.mu.Unlock()
-		}
-	}
-
-	if !winwsAlive && (isConn || isFreeNet) && !e.winwsStopping.Load() {
-		e.log("[WARN] Обнаружено неожиданное завершение winws2.exe. Автоматическое восстановление сетевого фильтра...")
-		ReportEngineCrash("winws2_crash", "Неожиданное завершение winws2.exe во время активной сессии", map[string]interface{}{
-			"is_connected": isConn,
-			"is_free_net":  isFreeNet,
-		})
-		_ = e.EnsureWinwsRunning()
-	}
-
-	// 2. Check sing-box.exe if connected or free internet
+	// Check sing-box.exe if connected or free internet
 	needRestart := false
 	if (isConn || isFreeNet) && e.singboxMgr != nil && !e.singboxStopping.Load() {
 		if !e.singboxMgr.IsProcessAlive() {
 			exitCode, stderrTail := e.singboxMgr.GetLastExitInfo()
 			e.log(fmt.Sprintf("[WARN] Обнаружено неожиданное завершение sing-box.exe (код: %d). Перезапуск туннеля...", exitCode))
-			ReportEngineCrash("singbox_crash", fmt.Sprintf("Неожиданное завершение sing-box.exe во время активного подключения (код: %d)", exitCode), map[string]interface{}{
-				"is_connected": isConn,
-				"is_free_net":  isFreeNet,
-				"exit_code":    exitCode,
-				"stderr":       stderrTail,
-			})
+			if e.shouldSendCrashReport() {
+				ReportEngineCrash("singbox_crash", fmt.Sprintf("Неожиданное завершение sing-box.exe во время активного подключения (код: %d)", exitCode), map[string]interface{}{
+					"is_connected": isConn,
+					"is_free_net":  isFreeNet,
+					"exit_code":    exitCode,
+					"stderr":       stderrTail,
+				})
+			}
 			needRestart = true
 		} else if e.singboxMgr.HasAuthError() {
 			e.log("[WARN] Обнаружен сбой авторизации шлюза Hysteria 2 (404/expired). Обновление сессии и перезапуск туннеля...")
 			needRestart = true
 		}
 	}
+
 	if needRestart {
-		if e.singboxRestartAttempts > 0 && time.Since(e.singboxLastRestart) < time.Duration(e.singboxRestartAttempts*4)*time.Second {
+		backoffDelays := []time.Duration{0, 3 * time.Second, 8 * time.Second, 15 * time.Second}
+		delay := 15 * time.Second
+		if e.singboxRestartAttempts < len(backoffDelays) {
+			delay = backoffDelays[e.singboxRestartAttempts]
+		}
+		if e.singboxRestartAttempts > 0 && time.Since(e.singboxLastRestart) < delay {
 			return
 		}
 		e.singboxLastRestart = time.Now()
@@ -1005,12 +711,10 @@ func (e *Engine) checkProcessHealth() {
 				}
 			}
 		}
-		// Stop first to reset isRunning flag — Manager.Start is a no-op if isRunning==true.
-		// Invalidate cached token so AcquireSession fetches a fresh one with the correct
-		// client IP (stale token was issued to 127.0.0.1 and would be rejected by Hysteria2).
+
 		_ = e.singboxMgr.Stop()
 		deps.CleanupZombieWintunAdapter(e.log)
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		singbox.InvalidateSession()
 		selectedGameID := "free_internet"
 		if isConn {
@@ -1026,9 +730,11 @@ func (e *Engine) checkProcessHealth() {
 		startErr := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID)
 		if startErr != nil && strings.Contains(startErr.Error(), "already exists") {
 			e.log("[WARN] Обнаружена задержка освобождения Wintun-интерфейса Windows. Принудительный сброс адаптера...")
-			ReportEngineCrash("wintun_driver", "Задержка освобождения Wintun-интерфейса: "+startErr.Error(), map[string]interface{}{
-				"game_id": selectedGameID,
-			})
+			if e.shouldSendCrashReport() {
+				ReportEngineCrash("wintun_driver", "Задержка освобождения Wintun-интерфейса: "+startErr.Error(), map[string]interface{}{
+					"game_id": selectedGameID,
+				})
+			}
 			deps.CleanupZombieWintunAdapter(e.log)
 			time.Sleep(2000 * time.Millisecond)
 			startErr = e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID)
@@ -1037,9 +743,11 @@ func (e *Engine) checkProcessHealth() {
 		if startErr != nil {
 			e.singboxRestartAttempts++
 			e.log(fmt.Sprintf("[ERROR] Не удалось перезапустить туннель (попытка %d/3): %v", e.singboxRestartAttempts, startErr))
-			ReportEngineCrash("singbox_restart_failed", fmt.Sprintf("Ошибка перезапуска sing-box: %v", startErr), map[string]interface{}{
-				"attempts": e.singboxRestartAttempts,
-			})
+			if e.shouldSendCrashReport() {
+				ReportEngineCrash("singbox_restart_failed", fmt.Sprintf("Ошибка перезапуска sing-box: %v", startErr), map[string]interface{}{
+					"attempts": e.singboxRestartAttempts,
+				})
+			}
 			if e.singboxRestartAttempts >= 3 {
 				e.log("[ERROR] Превышен лимит попыток восстановления туннеля (шлюз перегружен или недоступен). Сессия отключена.")
 				e.singboxRestartAttempts = 0

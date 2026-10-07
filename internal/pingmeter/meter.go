@@ -4,29 +4,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 )
 
 const (
-	WINDIVERT_LAYER_NETWORK = 0
-	WINDIVERT_FLAG_SNIFF    = 0x0001
-	// Minimum physically plausible RTT for our topology:
-	// client -> Stockholm VPS (27ms) + VPS -> AWS match server (~50ms) = ~77ms minimum.
-	// We use 15ms as lower bound to reject pure TUN loopback artifacts while allowing legitimate fast replies.
 	minPlausibleRTT = 15
 )
 
-// MatchSample represents a measured live match round-trip time.
-type MatchSample struct {
-	MeasuredAt   time.Time
-}
-
-// Meter passively tracks UDP latency to game match servers on ports 4000-4500.
+// Meter tracks UDP latency to game match servers on ports 4000-4500.
 type Meter struct {
 	mu           sync.RWMutex
 	stopChan     chan struct{}
@@ -36,41 +22,15 @@ type Meter struct {
 	latestRTT    int // in milliseconds
 	samples      []int
 
-	// burstStart records when the client began sending this burst of packets.
-	// We preserve the initial outbound timestamp until a matching inbound packet
-	// arrives, calculating true wire RTT instead of overwriting with sub-frame noise.
-	burstStart map[string]time.Time
-	// awaitingReply indicates an outbound burst is in-flight awaiting server response.
+	burstStart    map[string]time.Time
 	awaitingReply map[string]bool
-
-	dllDir   string
-	handle   uintptr
 
 	lastCallback time.Time
 	onPingUpdate func(server string, wireRttMs int, inGameEstMs int)
 }
 
-func New(optionalDllDir ...string) *Meter {
-	dir := ""
-	if len(optionalDllDir) > 0 {
-		dir = optionalDllDir[0]
-	}
-	if dir == "" {
-		// Default to embedded zapret bin directory if exists
-		candidates := []string{
-			filepath.Join("warlink_core", "zapret", "bin"),
-			filepath.Join("..", "..", "warlink_core", "zapret", "bin"),
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(filepath.Join(c, "WinDivert.dll")); err == nil {
-				dir = c
-				break
-			}
-		}
-	}
-
+func New(_ ...string) *Meter {
 	return &Meter{
-		dllDir:        dir,
 		burstStart:    make(map[string]time.Time),
 		awaitingReply: make(map[string]bool),
 		samples:       make([]int, 0, 10),
@@ -84,7 +44,7 @@ func (m *Meter) SetUpdateCallback(cb func(server string, wireRttMs int, inGameEs
 	m.onPingUpdate = cb
 }
 
-// Start begins passive UDP sniffing for match servers on ports 4000-4500.
+// Start marks the meter as running.
 func (m *Meter) Start() error {
 	m.mu.Lock()
 	if m.isRunning {
@@ -94,12 +54,10 @@ func (m *Meter) Start() error {
 	m.stopChan = make(chan struct{})
 	m.isRunning = true
 	m.mu.Unlock()
-
-	go m.sniffLoop()
 	return nil
 }
 
-// Stop stops packet monitoring and closes open handles.
+// Stop stops packet monitoring.
 func (m *Meter) Stop() {
 	m.mu.Lock()
 	if !m.isRunning {
@@ -110,7 +68,6 @@ func (m *Meter) Stop() {
 	if m.stopChan != nil {
 		close(m.stopChan)
 	}
-	m.closeHandleLocked()
 	m.activeServer = ""
 	m.activePort = 0
 	m.latestRTT = 0
@@ -171,124 +128,6 @@ func (m *Meter) GetDetailedStats() (server string, wireRttMs int, inGameEstMs in
 	return srv, m.latestRTT, inGame, jitter, minRTT, maxRTT, true
 }
 
-func (m *Meter) closeHandleLocked() {
-	if m.handle != 0 && m.handle != ^uintptr(0) {
-		h := m.handle
-		m.handle = 0
-		dllPath := filepath.Join(m.dllDir, "WinDivert.dll")
-		if dll, err := syscall.LoadDLL(dllPath); err == nil {
-			defer dll.Release()
-			if proc, err := dll.FindProc("WinDivertClose"); err == nil {
-				proc.Call(h)
-			}
-		}
-	}
-}
-
-func (m *Meter) sniffLoop() {
-	dllPath := filepath.Join(m.dllDir, "WinDivert.dll")
-	if _, err := os.Stat(dllPath); err != nil {
-		m.mu.Lock()
-		m.isRunning = false
-		m.mu.Unlock()
-		return
-	}
-
-	dll, err := syscall.LoadDLL(dllPath)
-	if err != nil {
-		m.mu.Lock()
-		m.isRunning = false
-		m.mu.Unlock()
-		return
-	}
-	defer dll.Release()
-
-	procOpen, err := dll.FindProc("WinDivertOpen")
-	if err != nil {
-		m.mu.Lock()
-		m.isRunning = false
-		m.mu.Unlock()
-		return
-	}
-	procRecv, err := dll.FindProc("WinDivertRecv")
-	if err != nil {
-		m.mu.Lock()
-		m.isRunning = false
-		m.mu.Unlock()
-		return
-	}
-
-	filter := "!loopback and ip and udp and (udp.DstPort >= 4000 and udp.DstPort <= 4500 or udp.SrcPort >= 4000 and udp.SrcPort <= 4500)"
-	filterPtr, _ := syscall.BytePtrFromString(filter)
-
-	prio := int64(-1000) // Lower priority so filter engines run first
-	r1, _, _ := procOpen.Call(
-		uintptr(unsafe.Pointer(filterPtr)),
-		uintptr(WINDIVERT_LAYER_NETWORK),
-		uintptr(prio),
-		uintptr(WINDIVERT_FLAG_SNIFF),
-	)
-
-	handle := r1
-	if handle == 0 || handle == ^uintptr(0) {
-		m.mu.Lock()
-		m.isRunning = false
-		m.mu.Unlock()
-		return
-	}
-
-	// Limit queue retention so packets older than 100ms are discarded instead of causing latency spikes
-	if procSetParam, sErr := dll.FindProc("WinDivertSetParam"); sErr == nil {
-		_, _, _ = procSetParam.Call(handle, 1, 100)  // WINDIVERT_PARAM_QUEUE_TIME = 100ms
-		_, _, _ = procSetParam.Call(handle, 0, 2048) // WINDIVERT_PARAM_QUEUE_LENGTH = 2048 packets
-	}
-
-	m.mu.Lock()
-	m.handle = handle
-	m.mu.Unlock()
-
-	packetBuf := make([]byte, 2048)
-	addrBuf := make([]byte, 128)
-	var readLen uint32
-
-	defer func() {
-		m.mu.Lock()
-		m.closeHandleLocked()
-		m.mu.Unlock()
-	}()
-
-	for {
-		select {
-		case <-m.stopChan:
-			return
-		default:
-		}
-
-		r1, _, _ := procRecv.Call(
-			handle,
-			uintptr(unsafe.Pointer(&packetBuf[0])),
-			uintptr(len(packetBuf)),
-			uintptr(unsafe.Pointer(&readLen)),
-			uintptr(unsafe.Pointer(&addrBuf[0])),
-		)
-
-		if r1 == 0 {
-			m.mu.Lock()
-			running := m.isRunning
-			m.mu.Unlock()
-			if !running {
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
-
-		if readLen > 0 {
-			m.processPacket(packetBuf[:readLen])
-		}
-	}
-}
-
 // processPacket parses IPv4/UDP headers and calculates round-trip latency.
 func (m *Meter) processPacket(pkt []byte) {
 	if len(pkt) < 28 {
@@ -326,9 +165,6 @@ func (m *Meter) processPacket(pkt []byte) {
 	// Outbound: client sending to match server.
 	if dstPort >= 4000 && dstPort <= 4500 {
 		key := fmt.Sprintf("%s:%d", dstIP, dstPort)
-		// Only start a new burst if we are not currently awaiting a reply or if the in-flight burst has timed out.
-		// This preserves the initial outbound packet timestamp of the transaction,
-		// measuring true network round-trip time instead of sub-tick overwrite artifacts.
 		if !m.awaitingReply[key] || now.Sub(m.burstStart[key]) > time.Second {
 			m.burstStart[key] = now
 			m.awaitingReply[key] = true
@@ -349,10 +185,8 @@ func (m *Meter) processPacket(pkt []byte) {
 			return
 		}
 
-		// Clear awaiting flag so the next client outbound starts a fresh round-trip sample.
 		m.awaitingReply[key] = false
 
-		// Guard: discard if the burst is too old (> 2.5s)
 		if now.Sub(sentAt) > 2500*time.Millisecond {
 			delete(m.burstStart, key)
 			return
@@ -363,7 +197,6 @@ func (m *Meter) processPacket(pkt []byte) {
 
 		if rtt > 0 && rtt < 2*time.Second {
 			rttMs := int(rtt.Milliseconds())
-			// Filter out sub-threshold values (< 15ms)
 			if rttMs < minPlausibleRTT {
 				return
 			}
@@ -387,7 +220,6 @@ func (m *Meter) addSample(rttMs int) {
 		m.samples = m.samples[1:]
 	}
 
-	// Calculate average of sliding window
 	sum := 0
 	for _, s := range m.samples {
 		sum += s

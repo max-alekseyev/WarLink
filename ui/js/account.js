@@ -450,12 +450,65 @@ function openDonateModalWithTab(tab, e) {
         if (modalBody) {
             modalBody.scrollTop = 0;
         }
+        applyDonateMethodsVisibility();
         switchDonateTab(tab || 'boosty');
         loadBoostyGoal();
         if (tab === 'server') {
             selectDonateMethod('sbp');
             selectDonatePreset(100);
         }
+    }
+}
+
+window.donateMethodsConfig = window.donateMethodsConfig || {
+    boosty: true,
+    sbp: false, // Boosty is prioritised by default per instructions
+    crypto: false
+};
+
+function updateDonateMethodsState(cfg) {
+    if (!cfg) return;
+    if (typeof cfg.donate_boosty_enabled === 'boolean') window.donateMethodsConfig.boosty = cfg.donate_boosty_enabled;
+    if (typeof cfg.donate_sbp_enabled === 'boolean') window.donateMethodsConfig.sbp = cfg.donate_sbp_enabled;
+    if (typeof cfg.donate_crypto_enabled === 'boolean') window.donateMethodsConfig.crypto = cfg.donate_crypto_enabled;
+    if (typeof cfg.donate_paused_notice === 'string') window.donateMethodsConfig.notice = cfg.donate_paused_notice;
+    applyDonateMethodsVisibility();
+}
+
+function applyDonateMethodsVisibility() {
+    const isBoostyOn = window.donateMethodsConfig.boosty !== false;
+    const isSbpOn = window.donateMethodsConfig.sbp !== false;
+    const isCryptoOn = window.donateMethodsConfig.crypto !== false;
+
+    if (window.donateMethodsConfig.notice && window.donateMethodsConfig.notice.trim() !== '') {
+        const descServer = document.querySelector('#donate-stub-server .donate-stub-desc');
+        if (descServer) descServer.textContent = window.donateMethodsConfig.notice;
+        const descCrypto = document.querySelector('#donate-stub-crypto .donate-stub-desc');
+        if (descCrypto) descCrypto.textContent = window.donateMethodsConfig.notice;
+    }
+
+    // Server / SBP Tab
+    const panelServerContent = document.getElementById('donate-panel-server-content');
+    const stubServer = document.getElementById('donate-stub-server');
+    if (panelServerContent && stubServer) {
+        panelServerContent.style.display = isSbpOn ? 'block' : 'none';
+        stubServer.style.display = isSbpOn ? 'none' : 'flex';
+    }
+
+    // Crypto Tab
+    const panelCryptoContent = document.getElementById('donate-panel-crypto-content');
+    const stubCrypto = document.getElementById('donate-stub-crypto');
+    if (panelCryptoContent && stubCrypto) {
+        panelCryptoContent.style.display = isCryptoOn ? 'flex' : 'none';
+        stubCrypto.style.display = isCryptoOn ? 'none' : 'flex';
+    }
+
+    // Boosty Tab
+    const panelBoostyContent = document.getElementById('donate-panel-boosty-content');
+    const stubBoosty = document.getElementById('donate-stub-boosty');
+    if (panelBoostyContent && stubBoosty) {
+        panelBoostyContent.style.display = isBoostyOn ? 'flex' : 'none';
+        stubBoosty.style.display = isBoostyOn ? 'none' : 'flex';
     }
 }
 
@@ -488,11 +541,14 @@ function switchDonateTab(tab) {
         tabCrypto.classList.toggle('tab-crypto-active', currentDonateTab === 'crypto');
     }
 
+    // Apply visibility of active forms vs priority stubs
+    applyDonateMethodsVisibility();
+
     if (panelServer) panelServer.style.display = currentDonateTab === 'server' ? 'block' : 'none';
     if (panelBoosty) panelBoosty.style.display = currentDonateTab === 'boosty' ? 'flex' : 'none';
     if (panelCrypto) {
         panelCrypto.style.display = currentDonateTab === 'crypto' ? 'flex' : 'none';
-        if (currentDonateTab === 'crypto') {
+        if (currentDonateTab === 'crypto' && window.donateMethodsConfig.crypto !== false) {
             renderCryptoQR();
         }
     }

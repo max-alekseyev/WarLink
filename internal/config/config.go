@@ -27,7 +27,7 @@ type GameProfile struct {
 	Autolaunch   bool     `json:"autolaunch"`
 }
 
-var DefaultServerIP = "138.124.103.99"
+var DefaultServerIP = "api-warlink.max-alekseyev.com"
 
 const (
 	RouteModeTransit         = "transit"          // 1. Клиент — Москва — Франкфурт — Игра
@@ -158,6 +158,24 @@ func DefaultGames() []GameProfile {
 			IsDefault:    true,
 			Autolaunch:   true,
 		},
+		{
+			ID:           "aion2",
+			Title:        "AION 2",
+			SteamAppID:   "3393110",
+			ProcessNames: []string{
+				"AION2.exe",
+				"aion2.exe",
+				"CrashReportClient.exe",
+				"CrashReportClientEditor.exe",
+				"EpicWebHelper.exe",
+			},
+			PreferredAlt: "Автокалибровка (Circular Adaptive)",
+			LaunchCount:  0,
+			IconURL:      "aion2_icon.png",
+			LastPlayed:   time.Now().Unix() - 50,
+			IsDefault:    true,
+			Autolaunch:   true,
+		},
 	}
 }
 
@@ -239,6 +257,11 @@ func Load() *Config {
 				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") {
 					cfg.Games[i].IconURL = "dark_and_darker_icon.png"
 				}
+			} else if g.ID == "aion2" {
+				cfg.Games[i].SteamAppID = "3393110"
+				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") {
+					cfg.Games[i].IconURL = "aion2_icon.png"
+				}
 			}
 		}
 		for _, defG := range DefaultGames() {
@@ -251,17 +274,18 @@ func Load() *Config {
 				if cfg.Games[idx].SteamAppID == "" {
 					cfg.Games[idx].SteamAppID = defG.SteamAppID
 				}
-				if len(cfg.Games[idx].ProcessNames) == 0 {
+				if len(cfg.Games[idx].ProcessNames) == 0 || defG.IsDefault {
 					cfg.Games[idx].ProcessNames = defG.ProcessNames
 				}
 			}
 		}
 
-		// Enforce canonical priority order: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker, then custom games
+		// Enforce canonical priority order: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker, 4. AION 2, then custom games
 		priorityOrder := map[string]int{
 			"wardogs":         1,
 			"arc_raiders":     2,
 			"dark_and_darker": 3,
+			"aion2":           4,
 		}
 		sort.SliceStable(cfg.Games, func(i, j int) bool {
 			pI := priorityOrder[cfg.Games[i].ID]

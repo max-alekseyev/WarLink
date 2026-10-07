@@ -51,7 +51,7 @@ var embeddedAdminDialogsHTML string
 
 
 const (
-	ServerAppVersion     = "v2.2.2"
+	ServerAppVersion     = "v2.2.3"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
@@ -297,6 +297,10 @@ type AppState struct {
 	enableVoting        bool
 	enableCommunityGoal bool
 	drainMode           bool
+	donateBoostyEnabled bool
+	donateSbpEnabled    bool
+	donateCryptoEnabled bool
+	donatePausedNotice  string
 	lastSettingsLoad    time.Time
 	featureMu           sync.RWMutex
 
@@ -602,6 +606,10 @@ func main() {
 		enableDonate:        true,
 		enableVoting:        true,
 		enableCommunityGoal: true,
+		donateBoostyEnabled: true,
+		donateSbpEnabled:    false, // Default: Boosty is in priority per user instruction
+		donateCryptoEnabled: false,
+		donatePausedNotice:  "В настоящий момент все сборы и финансовая поддержка проекта консолидированы на платформе Boosty.",
 		startTime:           time.Now(),
 		geoCache:       make(map[string]GeoInfo),
 		prevHyTraffic:  make(map[string]UserTrafficStats),
@@ -1389,6 +1397,10 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 	enDonate := s.enableDonate
 	enVoting := s.enableVoting
 	enCommunityGoal := s.enableCommunityGoal
+	enBoosty := s.donateBoostyEnabled
+	enSbp := s.donateSbpEnabled
+	enCrypto := s.donateCryptoEnabled
+	donateNotice := s.donatePausedNotice
 	s.featureMu.RUnlock()
 
 	s.mu.RLock()
@@ -1445,6 +1457,10 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"enable_donate":                    enDonate,
 		"enable_voting":                    enVoting,
 		"enable_community_goal":            enCommunityGoal,
+		"donate_boosty_enabled":            enBoosty,
+		"donate_sbp_enabled":               enSbp,
+		"donate_crypto_enabled":            enCrypto,
+		"donate_paused_notice":             donateNotice,
 		"october_pool_rub":                 octoberPoolRub,
 	})
 }
@@ -2197,6 +2213,7 @@ var (
 		1867240: "WARDOGS",
 		1808500: "ARC Raiders",
 		2016590: "Dark and Darker",
+		3393110: "AION 2",
 	}
 )
 
@@ -2341,6 +2358,7 @@ func (s *AppState) handleVotes(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.db.Query(`
 			SELECT steam_app_id, title, icon_url, votes_count, status, created_at
 			FROM game_suggestions
+			WHERE status IN ('voting', 'queue_integration')
 			ORDER BY 
 				CASE WHEN status = 'queue_integration' THEN 1 ELSE 2 END,
 				votes_count DESC, 
@@ -3494,7 +3512,7 @@ func (s *AppState) initDatabase() {
 	_, _ = s.db.Exec(`
 		INSERT INTO feature_flags (name, description, enabled, rollout_pct, strategy, target_accounts, payload)
 		VALUES 
-		  ('experimental_zapret_strategy', 'Канареечное тестирование экспериментальной стратегии Zapret на 10% аудитории', false, 10, 'percentage', '[]'::jsonb, '{"preset":"ultra_desync_v2","override_default":false}'::jsonb),
+		  ('experimental_hy2_strategy', 'Канареечное тестирование экспериментальной стратегии Hysteria 2 на 10% аудитории', false, 10, 'percentage', '[]'::jsonb, '{"preset":"ultra_hy2_v2","override_default":false}'::jsonb),
 		  ('canary_frankfurt_direct', 'Канареечный прямой маршрут Франкфурт для пользователей с низким RTT', false, 10, 'percentage', '[]'::jsonb, '{"route_mode":"direct_frankfurt"}'::jsonb),
 		  ('troubleshooter_deep_scan', 'Глубокое сканирование системных конфликтов в модуле сетевой диагностики', true, 100, 'percentage', '[]'::jsonb, '{}'::jsonb)
 		ON CONFLICT (name) DO NOTHING;
@@ -3757,19 +3775,37 @@ func (s *AppState) loadFeatureSettings() {
 		enableDonate        bool
 		enableVoting        bool
 		enableCommunityGoal bool
+		donateBoostyEn      sql.NullBool
+		donateSbpEn         sql.NullBool
+		donateCryptoEn      sql.NullBool
+		donatePausedNotice  sql.NullString
 	)
 	err := s.db.QueryRow(`
 		SELECT drain_mode, max_sessions, dedicated_sponsor_slots, donate_amount_rub, 
-		       enable_donate, enable_voting, enable_community_goal 
+		       enable_donate, enable_voting, enable_community_goal,
+		       donate_boosty_enabled, donate_sbp_enabled, donate_crypto_enabled, donate_paused_notice
 		FROM server_config WHERE id = 1
 	`).Scan(&drainMode, &maxSessions, &dedicatedSponsor, &donateAmountRub, 
-	        &enableDonate, &enableVoting, &enableCommunityGoal)
+	        &enableDonate, &enableVoting, &enableCommunityGoal,
+	        &donateBoostyEn, &donateSbpEn, &donateCryptoEn, &donatePausedNotice)
 	if err == nil {
 		s.featureMu.Lock()
 		s.drainMode = drainMode
 		s.enableDonate = enableDonate
 		s.enableVoting = enableVoting
 		s.enableCommunityGoal = enableCommunityGoal
+		if donateBoostyEn.Valid {
+			s.donateBoostyEnabled = donateBoostyEn.Bool
+		}
+		if donateSbpEn.Valid {
+			s.donateSbpEnabled = donateSbpEn.Bool
+		}
+		if donateCryptoEn.Valid {
+			s.donateCryptoEnabled = donateCryptoEn.Bool
+		}
+		if donatePausedNotice.Valid && donatePausedNotice.String != "" {
+			s.donatePausedNotice = donatePausedNotice.String
+		}
 		s.lastSettingsLoad = time.Now()
 		s.featureMu.Unlock()
 
@@ -3784,7 +3820,6 @@ func (s *AppState) loadFeatureSettings() {
 			s.cfg.DonateAmountRub = donateAmountRub
 		}
 		s.mu.Unlock()
-		return
 	}
 
 	rows, err := s.db.Query("SELECT key, value FROM server_settings")
@@ -3808,6 +3843,16 @@ func (s *AppState) loadFeatureSettings() {
 				s.enableCommunityGoal = (v == "true" || v == "1")
 			case "drain_mode":
 				s.drainMode = (v == "true" || v == "1")
+			case "donate_boosty_enabled":
+				s.donateBoostyEnabled = (v == "true" || v == "1")
+			case "donate_sbp_enabled":
+				s.donateSbpEnabled = (v == "true" || v == "1")
+			case "donate_crypto_enabled":
+				s.donateCryptoEnabled = (v == "true" || v == "1")
+			case "donate_paused_notice":
+				if v != "" {
+					s.donatePausedNotice = v
+				}
 			case "donate_amount_rub":
 				if amt, err := strconv.Atoi(v); err == nil && amt > 0 {
 					s.mu.Lock()
@@ -3885,10 +3930,14 @@ func (s *AppState) loadTelemetryCounters() {
 }
 
 type AdminFeaturesPayload struct {
-	EnableDonate        *bool `json:"enable_donate"`
-	EnableVoting        *bool `json:"enable_voting"`
-	EnableCommunityGoal *bool `json:"enable_community_goal"`
-	DrainMode           *bool `json:"drain_mode"`
+	EnableDonate        *bool   `json:"enable_donate"`
+	EnableVoting        *bool   `json:"enable_voting"`
+	EnableCommunityGoal *bool   `json:"enable_community_goal"`
+	DrainMode           *bool   `json:"drain_mode"`
+	DonateBoostyEnabled *bool   `json:"donate_boosty_enabled"`
+	DonateSbpEnabled    *bool   `json:"donate_sbp_enabled"`
+	DonateCryptoEnabled *bool   `json:"donate_crypto_enabled"`
+	DonatePausedNotice  *string `json:"donate_paused_notice"`
 }
 
 func (s *AppState) checkAdminAuth(r *http.Request) bool {
@@ -3944,6 +3993,10 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 		enVoting := s.enableVoting
 		enCommunityGoal := s.enableCommunityGoal
 		drMode := s.drainMode
+		enBoosty := s.donateBoostyEnabled
+		enSbp := s.donateSbpEnabled
+		enCrypto := s.donateCryptoEnabled
+		donateNotice := s.donatePausedNotice
 		s.featureMu.RUnlock()
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -3952,6 +4005,10 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 			"enable_voting":         enVoting,
 			"enable_community_goal": enCommunityGoal,
 			"drain_mode":            drMode,
+			"donate_boosty_enabled": enBoosty,
+			"donate_sbp_enabled":    enSbp,
+			"donate_crypto_enabled": enCrypto,
+			"donate_paused_notice":  donateNotice,
 		})
 
 	case http.MethodPost:
@@ -3975,10 +4032,26 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 		if req.DrainMode != nil {
 			s.drainMode = *req.DrainMode
 		}
+		if req.DonateBoostyEnabled != nil {
+			s.donateBoostyEnabled = *req.DonateBoostyEnabled
+		}
+		if req.DonateSbpEnabled != nil {
+			s.donateSbpEnabled = *req.DonateSbpEnabled
+		}
+		if req.DonateCryptoEnabled != nil {
+			s.donateCryptoEnabled = *req.DonateCryptoEnabled
+		}
+		if req.DonatePausedNotice != nil {
+			s.donatePausedNotice = *req.DonatePausedNotice
+		}
 		currentDonate := s.enableDonate
 		currentVoting := s.enableVoting
 		currentGoal := s.enableCommunityGoal
 		currentDrain := s.drainMode
+		curBoosty := s.donateBoostyEnabled
+		curSbp := s.donateSbpEnabled
+		curCrypto := s.donateCryptoEnabled
+		curNotice := s.donatePausedNotice
 		s.featureMu.Unlock()
 
 		if s.db != nil {
@@ -4026,9 +4099,49 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 				`, val)
 			}
+			if req.DonateBoostyEnabled != nil {
+				val := "false"
+				if *req.DonateBoostyEnabled {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value)
+					VALUES ('donate_boosty_enabled', $1)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, val)
+			}
+			if req.DonateSbpEnabled != nil {
+				val := "false"
+				if *req.DonateSbpEnabled {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value)
+					VALUES ('donate_sbp_enabled', $1)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, val)
+			}
+			if req.DonateCryptoEnabled != nil {
+				val := "false"
+				if *req.DonateCryptoEnabled {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value)
+					VALUES ('donate_crypto_enabled', $1)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, val)
+			}
+			if req.DonatePausedNotice != nil {
+				_, _ = s.db.Exec(`
+					INSERT INTO server_settings (key, value)
+					VALUES ('donate_paused_notice', $1)
+					ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+				`, *req.DonatePausedNotice)
+			}
 		}
 
-		log.Printf("[ADMIN] Dynamic feature toggles updated: Donate=%v, Voting=%v, CommunityGoal=%v, DrainMode=%v", currentDonate, currentVoting, currentGoal, currentDrain)
+		log.Printf("[ADMIN] Dynamic feature toggles updated: Donate=%v, Voting=%v, CommunityGoal=%v, DrainMode=%v, Boosty=%v, SBP=%v, Crypto=%v", currentDonate, currentVoting, currentGoal, currentDrain, curBoosty, curSbp, curCrypto)
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":               true,
@@ -4036,6 +4149,10 @@ func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
 			"enable_voting":         currentVoting,
 			"enable_community_goal": currentGoal,
 			"drain_mode":            currentDrain,
+			"donate_boosty_enabled": curBoosty,
+			"donate_sbp_enabled":    curSbp,
+			"donate_crypto_enabled": curCrypto,
+			"donate_paused_notice":  curNotice,
 		})
 
 	default:
@@ -4327,6 +4444,10 @@ type AdminSettingsPayload struct {
 	EnableVoting          *bool   `json:"enable_voting,omitempty"`
 	EnableCommunityGoal   *bool   `json:"enable_community_goal,omitempty"`
 	DrainMode             *bool   `json:"drain_mode,omitempty"`
+	DonateBoostyEnabled   *bool   `json:"donate_boosty_enabled,omitempty"`
+	DonateSbpEnabled      *bool   `json:"donate_sbp_enabled,omitempty"`
+	DonateCryptoEnabled   *bool   `json:"donate_crypto_enabled,omitempty"`
+	DonatePausedNotice    *string `json:"donate_paused_notice,omitempty"`
 	DonateAmountRub       *int    `json:"donate_amount_rub,omitempty"`
 	MaxSessions           *int    `json:"max_sessions,omitempty"`
 	DedicatedSponsorSlots *int    `json:"dedicated_sponsor_slots,omitempty"`
@@ -4361,6 +4482,10 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		enVoting := s.enableVoting
 		enCommunityGoal := s.enableCommunityGoal
 		drMode := s.drainMode
+		enBoosty := s.donateBoostyEnabled
+		enSbp := s.donateSbpEnabled
+		enCrypto := s.donateCryptoEnabled
+		donateNotice := s.donatePausedNotice
 		s.featureMu.RUnlock()
 
 		s.mu.RLock()
@@ -4404,6 +4529,10 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			"enable_voting":           enVoting,
 			"enable_community_goal":   enCommunityGoal,
 			"drain_mode":              drMode,
+			"donate_boosty_enabled":   enBoosty,
+			"donate_sbp_enabled":      enSbp,
+			"donate_crypto_enabled":   enCrypto,
+			"donate_paused_notice":    donateNotice,
 			"donate_amount_rub":       donateAmt,
 			"max_sessions":            maxSess,
 			"dedicated_sponsor_slots": dedicatedSponsor,
@@ -4484,6 +4613,54 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[SETTINGS] DrainMode set to %v by admin", *req.DrainMode)
 		}
 
+		if req.DonateBoostyEnabled != nil {
+			s.featureMu.Lock()
+			s.donateBoostyEnabled = *req.DonateBoostyEnabled
+			s.featureMu.Unlock()
+			if s.db != nil {
+				val := "false"
+				if *req.DonateBoostyEnabled {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('donate_boosty_enabled', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+			}
+		}
+
+		if req.DonateSbpEnabled != nil {
+			s.featureMu.Lock()
+			s.donateSbpEnabled = *req.DonateSbpEnabled
+			s.featureMu.Unlock()
+			if s.db != nil {
+				val := "false"
+				if *req.DonateSbpEnabled {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('donate_sbp_enabled', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+			}
+		}
+
+		if req.DonateCryptoEnabled != nil {
+			s.featureMu.Lock()
+			s.donateCryptoEnabled = *req.DonateCryptoEnabled
+			s.featureMu.Unlock()
+			if s.db != nil {
+				val := "false"
+				if *req.DonateCryptoEnabled {
+					val = "true"
+				}
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('donate_crypto_enabled', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+			}
+		}
+
+		if req.DonatePausedNotice != nil {
+			s.featureMu.Lock()
+			s.donatePausedNotice = *req.DonatePausedNotice
+			s.featureMu.Unlock()
+			if s.db != nil {
+				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('donate_paused_notice', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, *req.DonatePausedNotice)
+			}
+		}
+
 		if req.DonateAmountRub != nil && *req.DonateAmountRub > 0 {
 			s.mu.Lock()
 			s.cfg.DonateAmountRub = *req.DonateAmountRub
@@ -4556,6 +4733,10 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		enVoting := s.enableVoting
 		enCommunityGoal := s.enableCommunityGoal
 		drMode := s.drainMode
+		enBoosty := s.donateBoostyEnabled
+		enSbp := s.donateSbpEnabled
+		enCrypto := s.donateCryptoEnabled
+		donateNotice := s.donatePausedNotice
 		s.featureMu.RUnlock()
 
 		s.mu.RLock()
@@ -4587,8 +4768,8 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.RUnlock()
 
-		log.Printf("[ADMIN] Settings updated live: Donate=%v, Voting=%v, CommunityGoal=%v, DrainMode=%v, MaxSessions=%d, DedicatedSponsorSlots=%d, FreeSlotsLimit=%d",
-			enDonate, enVoting, enCommunityGoal, drMode, maxSess, dedicatedSponsor, freeSlotsLimit)
+		log.Printf("[ADMIN] Settings updated live: Donate=%v, Voting=%v, CommunityGoal=%v, DrainMode=%v, MaxSessions=%d, DedicatedSponsorSlots=%d, FreeSlotsLimit=%d, Boosty=%v, SBP=%v, Crypto=%v",
+			enDonate, enVoting, enCommunityGoal, drMode, maxSess, dedicatedSponsor, freeSlotsLimit, enBoosty, enSbp, enCrypto)
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":                 true,
@@ -4596,6 +4777,10 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			"enable_voting":           enVoting,
 			"enable_community_goal":   enCommunityGoal,
 			"drain_mode":              drMode,
+			"donate_boosty_enabled":   enBoosty,
+			"donate_sbp_enabled":      enSbp,
+			"donate_crypto_enabled":   enCrypto,
+			"donate_paused_notice":    donateNotice,
 			"donate_amount_rub":       donateAmt,
 			"max_sessions":            maxSess,
 			"dedicated_sponsor_slots": dedicatedSponsor,
@@ -4690,13 +4875,13 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	var gameVoteList []gameVoteMetric
 	if s.db != nil {
-		_ = s.db.QueryRow("SELECT COALESCE(SUM(votes_count), 0) FROM game_suggestions").Scan(&totalVotes)
+		_ = s.db.QueryRow("SELECT COALESCE(SUM(votes_count), 0) FROM game_suggestions WHERE status IN ('voting', 'queue_integration')").Scan(&totalVotes)
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM game_suggestions WHERE status = 'voting'").Scan(&gamesVoting)
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM game_suggestions WHERE status = 'queue_integration'").Scan(&gamesGraduated)
 		_ = s.db.QueryRow("SELECT COUNT(*) FROM daily_active_devices WHERE seen_date = CURRENT_DATE").Scan(&dau)
 		_ = s.db.QueryRow("SELECT COUNT(DISTINCT device_id) FROM daily_active_devices WHERE seen_date >= CURRENT_DATE - INTERVAL '7 days'").Scan(&wau)
 
-		if vRows, err := s.db.Query("SELECT title, status, votes_count FROM game_suggestions ORDER BY votes_count DESC LIMIT 10"); err == nil {
+		if vRows, err := s.db.Query("SELECT title, status, votes_count FROM game_suggestions WHERE status IN ('voting', 'queue_integration') ORDER BY votes_count DESC LIMIT 10"); err == nil {
 			defer vRows.Close()
 			for vRows.Next() {
 				var gvm gameVoteMetric
@@ -7903,7 +8088,7 @@ func (s *AppState) handleDiscordProfileLookup(w http.ResponseWriter, r *http.Req
 }
 
 func (s *AppState) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "https://warlink-hub.duckdns.org:8055/admin/", http.StatusFound)
+	http.Redirect(w, r, "https://hub-warlink.max-alekseyev.com/admin/", http.StatusFound)
 }
 
 // -----------------------------------------------------------------------------
@@ -10721,7 +10906,7 @@ func (s *AppState) handleAdminDialogsWeb(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *AppState) handleAdminRoutingFeedbackWeb(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "https://warlink-hub.duckdns.org:8055/admin/content/routing_feedback", http.StatusFound)
+	http.Redirect(w, r, "https://hub-warlink.max-alekseyev.com/admin/content/routing_feedback", http.StatusFound)
 }
 
 // handleReloadFilters hot-reloads Steam game blacklist and nickname rules from PostgreSQL

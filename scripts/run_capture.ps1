@@ -62,14 +62,7 @@ try {
     }
     Write-Host "[OK] Gateway session token successfully acquired." -ForegroundColor Green
 
-    # Ensure gateway IP is excluded from Zapret WinDivert
-    $zapretExclude = "$root\warlink_core\zapret\lists\ipset-exclude-user.txt"
-    if (Test-Path $zapretExclude) {
-        $excLines = @(Get-Content $zapretExclude | Where-Object { $_ -notmatch "# warlink-gateway" -and $_.Trim() -ne "" })
-        $excLines += "$serverHost/32 # warlink-gateway"
-        $excLines | Set-Content $zapretExclude -Encoding UTF8
-        Write-Host "[OK] Gateway IP ($serverHost) added to Zapret WinDivert exclusion list." -ForegroundColor Green
-    }
+
 
     # Fetch game profiles dynamically from server
     $targetProcs = @(
@@ -249,9 +242,7 @@ $procsFormatted
       },
       {
         "process_name": [
-          "sing-box.exe",
-          "winws2.exe",
-          "winws.exe"
+          "sing-box.exe"
         ],
         "outbound": "direct"
       },

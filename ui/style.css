@@ -2501,20 +2501,30 @@ html, body {
 }
 
 .crypto-qr-card {
-    display: flex;
+    display: inline-flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    align-self: center;
+    width: fit-content;
+    max-width: fit-content;
     background: #ffffff;
-    padding: 6px;
+    padding: 8px;
     border-radius: var(--radius-strict);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    margin: 2px auto;
+}
+
+#crypto-qr-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .crypto-qr-card svg {
     display: block;
-    width: 120px;
-    height: 120px;
+    width: 124px;
+    height: 124px;
 }
 
 .crypto-addr-box {
@@ -2593,6 +2603,94 @@ html, body {
 .crypto-warning-box svg {
     flex-shrink: 0;
     margin-top: 1px;
+}
+/* --- Donation Priority Stub Cards (Dark Cloudflare Utility) --- */
+.donate-stub-card {
+    width: 100%;
+    background-color: #161616;
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-strict);
+    padding: 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-sizing: border-box;
+    margin-top: 4px;
+}
+
+.donate-stub-badge-row {
+    display: flex;
+    align-items: center;
+}
+
+.donate-stub-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--action);
+    background: rgba(255, 94, 31, 0.08);
+    border: 1px solid rgba(255, 94, 31, 0.28);
+    border-radius: var(--radius-strict);
+    padding: 2px 7px;
+}
+
+.donate-stub-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+}
+
+.donate-stub-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.45;
+}
+
+.donate-stub-reassurance {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background-color: #121212;
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-strict);
+    padding: 7px 9px;
+    font-size: 10px;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+
+.donate-stub-reassurance svg {
+    flex-shrink: 0;
+    width: 12px;
+    height: 12px;
+}
+
+.btn-donate-stub-redirect {
+    height: 32px;
+    width: 100%;
+    background-color: var(--action);
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    border: none;
+    border-radius: var(--radius-strict);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: background-color 0.15s ease;
+    margin-top: 2px;
+}
+
+.btn-donate-stub-redirect:hover {
+    background-color: #e05219;
 }
 
 /* --- Dedicated Sleek Header Button for Boosty Donate --- */
@@ -6217,6 +6315,175 @@ html, body {
     font-size: 10px;
     color: var(--text-muted, #666666);
 }
+
+/* --- Settings Subtabs --- */
+.settings-nav-tabs {
+    display: flex;
+    align-items: center;
+    background-color: #111111;
+    border-bottom: 1px solid var(--border-base);
+    padding: 0 14px;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.settings-tab-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 8px 10px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+    outline: none;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.settings-tab-btn:hover {
+    color: var(--text-bright);
+}
+
+.settings-tab-btn.active {
+    color: var(--text-bright);
+    border-bottom-color: var(--action);
+}
+
+.tab-badge-accent {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    background-color: rgba(255, 94, 31, 0.15);
+    color: var(--action);
+    border: 1px solid rgba(255, 94, 31, 0.3);
+    border-radius: var(--radius-strict);
+    line-height: 1;
+}
+
+.settings-tab-panel {
+    animation: fadeInTab 0.12s ease;
+}
+
+/* --- Tweak Cards & UI (Clean Dark Cloudflare Utility) --- */
+.tweak-disclaimer-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background-color: #141414;
+    border: 1px solid var(--border-base);
+    border-left: 2px solid var(--action);
+    padding: 7px 10px;
+    border-radius: var(--radius-strict);
+    margin-bottom: 8px;
+    line-height: 1.35;
+}
+
+.tweak-disclaimer-banner svg {
+    color: var(--action);
+    flex-shrink: 0;
+}
+
+.tweak-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background-color: #141414;
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-strict);
+    padding: 9px 12px;
+    transition: border-color 0.15s ease;
+}
+
+.tweak-row:hover {
+    border-color: #2a2a2a;
+}
+
+.tweak-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.tweak-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-bright);
+}
+
+.tweak-tag {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    background-color: #1a1a1a;
+    color: var(--text-muted);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-strict);
+}
+
+.tweak-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.3;
+}
+
+.tweak-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    background-color: #1a1a1a;
+    color: var(--text-muted);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-strict);
+}
+
+.tweak-badge.active {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+.tweak-switch {
+    padding: 3px 8px;
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.tweak-switch-label {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    min-width: 24px;
+    text-align: center;
+}
+
+.free-net-toggle.active .tweak-switch-label {
+    color: var(--action);
+}
+
+.tweak-alert-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: rgba(255, 94, 31, 0.08);
+    border: 1px solid rgba(255, 94, 31, 0.25);
+    border-radius: var(--radius-strict);
+    padding: 6px 10px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: #ffaa80;
+}
+
 
 
 

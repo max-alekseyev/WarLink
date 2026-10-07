@@ -174,9 +174,13 @@ func validateIPorCIDR(target string) error {
 		}
 	}
 
-	// Forbidden open ports for all
-	if strings.HasPrefix(target, "53") || strings.HasPrefix(target, "80") || strings.HasPrefix(target, "443") {
-		return fmt.Errorf("broad port '%s' without IP address is forbidden", target)
+	// Forbidden bare port numbers without an IP prefix (e.g. "80", "443", "53").
+	// Must not trigger on IP addresses whose first octet happens to be 80, 53, or 443.
+	if !strings.Contains(target, ".") && !strings.Contains(target, ":") {
+		if target == "53" || target == "80" || target == "443" ||
+			strings.HasPrefix(target, "53/") || strings.HasPrefix(target, "80/") || strings.HasPrefix(target, "443/") {
+			return fmt.Errorf("broad port '%s' without IP address is forbidden", target)
+		}
 	}
 
 	if strings.Contains(target, "/") {

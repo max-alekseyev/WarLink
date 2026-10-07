@@ -450,7 +450,7 @@ func TestProcessRoutingPriority(t *testing.T) {
 	dnsDirectDomainsRuleIdx := -1
 
 	for idx, r := range parsed.DNS.Rules {
-		if r.Server == "dns-fakeip" && len(r.ProcessName) > 0 {
+		if r.Server == "dns-remote" && len(r.ProcessName) > 0 {
 			for _, p := range r.ProcessName {
 				if p == "DungeonCrawler.exe" || p == "PioneerGame.exe" {
 					dnsProcessRuleIdx = idx
@@ -469,10 +469,95 @@ func TestProcessRoutingPriority(t *testing.T) {
 	}
 
 	if dnsProcessRuleIdx == -1 {
-		t.Fatalf("expected allProcesses DNS rule to dns-fakeip, none found")
+		t.Fatalf("expected allProcesses DNS rule to dns-remote, none found")
 	}
 	if dnsDirectDomainsRuleIdx != -1 && dnsProcessRuleIdx > dnsDirectDomainsRuleIdx {
 		t.Errorf("game process DNS rule (idx %d) must precede DirectGameDomains rule (idx %d)", dnsProcessRuleIdx, dnsDirectDomainsRuleIdx)
 	}
 }
+
+func TestRegionProbeAndICMPPriority(t *testing.T) {
+	testProfiles := []Profile{
+		{
+			ID:        "aion2",
+			Name:      "AION 2",
+			Processes: []string{"AION2.exe"},
+			Domains:   []string{"aion2.com"},
+		},
+	}
+
+	cfgBytes, err := GenerateSingBoxConfig(testProfiles, []string{"AION2.exe"}, false, "138.124.103.99", "443", "dummy_obfs", "dummy_token")
+	if err != nil {
+		t.Fatalf("GenerateSingBoxConfig failed: %v", err)
+	}
+
+	var parsed SingBoxFullConfig
+	if err := json.Unmarshal(cfgBytes, &parsed); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+
+	// 1. Verify game process rule has top priority over general region probe rules
+	icmpRuleIdx := -1
+	processRuleIdx := -1
+	regionProbeRuleIdx := -1
+
+	for idx, r := range parsed.Route.Rules {
+		if r.Network == "icmp" && r.Outbound == "direct" {
+			icmpRuleIdx = idx
+		}
+		if r.Outbound == "direct" && len(r.DomainSuffix) > 0 {
+			for _, d := range r.DomainSuffix {
+				if d == "dynamodb.us-east-1.amazonaws.com" {
+					regionProbeRuleIdx = idx
+					break
+				}
+			}
+		}
+		if r.Outbound == "hy2-gateway" && len(r.ProcessName) > 0 {
+			for _, p := range r.ProcessName {
+				if p == "AION2.exe" {
+					processRuleIdx = idx
+					break
+				}
+			}
+		}
+	}
+
+	if icmpRuleIdx == -1 {
+		t.Errorf("expected ICMP direct rule in route rules")
+	}
+	if processRuleIdx == -1 {
+		t.Errorf("expected AION2.exe route rule to hy2-gateway")
+	}
+	if regionProbeRuleIdx == -1 {
+		t.Errorf("expected DynamoDB region probe direct rule")
+	}
+	// Game process rule MUST precede general region probe rules so AION 2 UDP ping probes (#$#$) are routed through hy2-gateway
+	if processRuleIdx > regionProbeRuleIdx {
+		t.Errorf("game process rule (idx %d) must precede region probe direct rule (idx %d) to prevent probe packet leakage", processRuleIdx, regionProbeRuleIdx)
+	}
+
+	// 2. Verify RouteExcludeAddress contains RFC1918 private subnets and does not leak game cloud subnets
+	if len(parsed.Inbounds) == 0 {
+		t.Fatalf("expected inbounds in config")
+	}
+	inbound := parsed.Inbounds[0]
+	hasRFC1918 := false
+	hasAWSLeak := false
+	for _, addr := range inbound.RouteExcludeAddress {
+		if addr == "10.0.0.0/8" || addr == "192.168.0.0/16" {
+			hasRFC1918 = true
+		}
+		if addr == "35.71.0.0/16" {
+			hasAWSLeak = true
+		}
+	}
+	if !hasRFC1918 {
+		t.Errorf("RouteExcludeAddress must contain RFC1918 private subnets")
+	}
+	if hasAWSLeak {
+		t.Errorf("RouteExcludeAddress must not bypass public AWS subnets from TUN")
+	}
+}
+
 

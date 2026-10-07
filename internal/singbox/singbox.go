@@ -28,21 +28,80 @@ import (
 )
 
 const (
-	MoscowIngressIP = "45.12.63.85"
-	FrankfurtEdgeIP = "85.192.24.254"
-	StockholmCoreIP = "138.124.103.99"
+	MoscowIngressDomain = "ru.warlink.max-alekseyev.com"
+	FrankfurtEdgeDomain = "de.warlink.max-alekseyev.com"
+	StockholmCoreDomain = "api-warlink.max-alekseyev.com"
+
+	// Backward compatibility constants
+	MoscowIngressIP = MoscowIngressDomain
+	FrankfurtEdgeIP = FrankfurtEdgeDomain
+	StockholmCoreIP = StockholmCoreDomain
 )
 
 var (
-	ClientVersion       = "v2.2.1"
-	DefaultServerIP     = "138.124.103.99"
-	DefaultServerAPI    = "http://138.124.103.99"
+	ClientVersion       = "v2.2.3"
+	DefaultServerIP     = "api-warlink.max-alekseyev.com"
+	DefaultServerAPI    = "https://api-warlink.max-alekseyev.com"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
 	// Never commit real values here — binary built from source without CI
 	// will have empty secrets and will fail auth (gateway rejects empty HMAC).
 	DefaultHMACSecret   = ""
 	DefaultObfsPassword = ""
 )
+
+var (
+	resolvedIPv4Cache = make(map[string]string)
+	resolvedIPv4Mu    sync.RWMutex
+)
+
+// ResolveDomainIPv4 resolves a domain name to its first IPv4 address, with embedded fallback.
+func ResolveDomainIPv4(domainOrIP string) string {
+	if domainOrIP == "" {
+		return ""
+	}
+	if ip := net.ParseIP(domainOrIP); ip != nil {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			return ipv4.String()
+		}
+		return domainOrIP
+	}
+
+	// 1. Instant static mapping for primary infrastructure nodes
+	switch domainOrIP {
+	case MoscowIngressDomain:
+		return "45.12.63.85"
+	case FrankfurtEdgeDomain:
+		return "85.192.24.254"
+	case StockholmCoreDomain:
+		return "138.124.103.99"
+	}
+
+	// 2. Thread-safe in-memory cache
+	resolvedIPv4Mu.RLock()
+	if cached, ok := resolvedIPv4Cache[domainOrIP]; ok {
+		resolvedIPv4Mu.RUnlock()
+		return cached
+	}
+	resolvedIPv4Mu.RUnlock()
+
+	// 3. Short timeout DNS lookup
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	var r net.Resolver
+	ips, err := r.LookupIP(ctx, "ip4", domainOrIP)
+	if err == nil && len(ips) > 0 {
+		for _, ip := range ips {
+			if ipv4 := ip.To4(); ipv4 != nil {
+				res := ipv4.String()
+				resolvedIPv4Mu.Lock()
+				resolvedIPv4Cache[domainOrIP] = res
+				resolvedIPv4Mu.Unlock()
+				return res
+			}
+		}
+	}
+	return domainOrIP
+}
 
 func GetNetworkRouteMode() string {
 	cfg := config.Load()
@@ -63,16 +122,16 @@ func GetActiveGatewayTarget() (host string, port int, apiURL string) {
 	mode := GetNetworkRouteMode()
 	switch mode {
 	case config.RouteModeDirectFrankfurt:
-		return FrankfurtEdgeIP, 443, "http://" + FrankfurtEdgeIP
+		return FrankfurtEdgeDomain, 443, DefaultServerAPI
 	case config.RouteModeDirectMoscow:
-		return MoscowIngressIP, 8443, "http://" + MoscowIngressIP
+		return MoscowIngressDomain, 8443, DefaultServerAPI
 	case config.RouteModeDirectStockholm:
 		// Stockholm is purified into Master-only: redirect European gaming edge to Frankfurt
-		return FrankfurtEdgeIP, 443, "http://" + FrankfurtEdgeIP
+		return FrankfurtEdgeDomain, 443, DefaultServerAPI
 	case config.RouteModeTransit:
 		fallthrough
 	default:
-		return MoscowIngressIP, 443, "http://" + MoscowIngressIP
+		return MoscowIngressDomain, 443, DefaultServerAPI
 	}
 }
 
@@ -88,8 +147,7 @@ func GetServerAPI() string {
 	if envAPI := os.Getenv("WARLINK_SERVER_API"); envAPI != "" {
 		return envAPI
 	}
-	_, _, apiURL := GetActiveGatewayTarget()
-	return apiURL
+	return DefaultServerAPI
 }
 
 func GetHMACSecret() string {
@@ -183,6 +241,10 @@ type InboundConfig struct {
 	StrictRoute         bool     `json:"strict_route"`
 	Stack               string   `json:"stack"`
 	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
+	UDPTimeout          string   `json:"udp_timeout,omitempty"`
+	UDPMapping          string   `json:"udp_mapping,omitempty"`
+	UDPFiltering        string   `json:"udp_filtering,omitempty"`
+	UDPNATMax           int      `json:"udp_nat_max,omitempty"`
 }
 
 type OutboundTLSOptions struct {
@@ -197,17 +259,19 @@ type Hysteria2Obfs struct {
 }
 
 type Outbound struct {
-	Type        string              `json:"type"`
-	Tag         string              `json:"tag"`
-	Server      string              `json:"server,omitempty"`
-	ServerPort  int                 `json:"server_port,omitempty"`
-	ServerPorts []string            `json:"server_ports,omitempty"`
-	HopInterval string              `json:"hop_interval,omitempty"`
-	UpMbps      int                 `json:"up_mbps,omitempty"`
-	DownMbps    int                 `json:"down_mbps,omitempty"`
-	Password    string              `json:"password,omitempty"`
-	Obfs        *Hysteria2Obfs      `json:"obfs,omitempty"`
-	TLS         *OutboundTLSOptions `json:"tls,omitempty"`
+	Type                string              `json:"type"`
+	Tag                 string              `json:"tag"`
+	Server              string              `json:"server,omitempty"`
+	ServerPort          int                 `json:"server_port,omitempty"`
+	ServerPorts         []string            `json:"server_ports,omitempty"`
+	HopInterval         string              `json:"hop_interval,omitempty"`
+	UpMbps              int                 `json:"up_mbps,omitempty"`
+	DownMbps            int                 `json:"down_mbps,omitempty"`
+	Password            string              `json:"password,omitempty"`
+	Obfs                *Hysteria2Obfs      `json:"obfs,omitempty"`
+	TLS                 *OutboundTLSOptions `json:"tls,omitempty"`
+	DisableChromeParrot bool                `json:"disable_chrome_parrot,omitempty"`
+	InitialPacketSize   int                 `json:"initial_packet_size,omitempty"`
 }
 
 type RouteConfig struct {
@@ -238,6 +302,114 @@ var BlockedServiceIPs = []string{
 	"91.108.16.0/22",
 	"91.108.20.0/22",
 	"91.108.56.0/22",
+	"91.105.192.0/23",
+}
+
+// DiscordDomains contains all official Discord API, gateway, CDN, and RTC endpoints.
+var DiscordDomains = []string{
+	"discord.com",
+	"discord.gg",
+	"discordapp.com",
+	"discordapp.net",
+	"discord.media",
+	"gateway.discord.gg",
+	"status.discord.com",
+	"discordstatus.com",
+	"dis.gd",
+	"discord-attachments-uploads-prd.storage.googleapis.com",
+	"discordcdn.com",
+	"cdn.discordapp.com",
+	"voice.discord.gg",
+	"discord.app",
+	"discord.dev",
+	"discord.gift",
+	"discord.gifts",
+	"discord.design",
+	"discord.new",
+	"discord.store",
+	"discord-activities.com",
+	"discordactivities.com",
+	"discordmerch.com",
+	"discordpartygames.com",
+	"discordsays.com",
+	"discordsez.com",
+	"stable.dl2.discordapp.net",
+}
+
+// YouTubeDomains contains YouTube video streaming, player API, and thumbnail CDN domains.
+var YouTubeDomains = []string{
+	"youtube.com",
+	"youtu.be",
+	"googlevideo.com",
+	"ytimg.com",
+	"ytimg.l.google.com",
+	"yt3.ggpht.com",
+	"yt4.ggpht.com",
+	"yt3.googleusercontent.com",
+	"jnn-pa.googleapis.com",
+	"wide-youtube.l.google.com",
+	"youtube-nocookie.com",
+	"youtube-ui.l.google.com",
+	"youtubeembeddedplayer.googleapis.com",
+	"youtubekids.com",
+	"youtube.googleapis.com",
+	"youtubei.googleapis.com",
+	"yt-video-upload.l.google.com",
+	"play.google.com",
+}
+
+// SocialMessengerDomains contains social media, instant messengers, and stream chat extensions.
+var SocialMessengerDomains = []string{
+	// X (Twitter)
+	"x.com",
+	"twitter.com",
+	"twimg.com",
+	"t.co",
+	"abs.twimg.com",
+	"pbs.twimg.com",
+	"api.twitter.com",
+	"api.x.com",
+	// Meta (Instagram / Facebook / Threads)
+	"instagram.com",
+	"cdninstagram.com",
+	"threads.net",
+	"facebook.com",
+	"fbcdn.net",
+	"fbsbx.com",
+	"messenger.com",
+	"meta.com",
+	// Telegram
+	"web.telegram.org",
+	"telegram.org",
+	"t.me",
+	"telegra.ph",
+	"telegram.me",
+	"telesco.pe",
+	"tdesktop.com",
+	"aurora.web.telegram.org",
+	"flora.web.telegram.org",
+	"pluto.web.telegram.org",
+	"venus.web.telegram.org",
+	"vesta.web.telegram.org",
+	"stel.com",
+	// WhatsApp & Viber
+	"web.whatsapp.com",
+	"whatsapp.com",
+	"whatsapp.net",
+	"whatsapp.org",
+	"wa.me",
+	"viber.com",
+	"api.viber.com",
+	"media.viber.com",
+	"share.viber.com",
+	"download.viber.com",
+	// Twitch chat extensions
+	"7tv.app",
+	"7tv.io",
+	"betterttv.net",
+	"frankerfacez.com",
+	"ffzap.com",
+	"klipy.com",
 }
 
 // BlockedServiceDomains contains domains that require tunneling through Stockholm GPN.
@@ -261,6 +433,11 @@ var BlockedServiceDomains = []string{
 	"twitter.com",
 	"twimg.com",
 	"t.co",
+	// Gaming matchmaking & DGS services blocked by Russian ISP / TSPU
+	"azurefd.net",
+	"tm-azurefd.net",
+	"trafficmanager.net",
+	"playfabapi.com",
 }
 
 // CRLDomains contains Certificate Revocation List (CRL) and OCSP domains that must
@@ -345,11 +522,25 @@ var (
 		"54.239.0.0/16",
 		"3.218.0.0/16",
 	}
+
+	// ValveSDRSubnets contains Steam Datagram Relay (SDR) relay clusters used by Steamworks for ping estimation.
+	ValveSDRSubnets = []string{
+		"155.133.0.0/16",
+		"162.254.192.0/18",
+		"146.66.152.0/21",
+		"185.25.180.0/22",
+		"45.121.184.0/23",
+		"89.222.108.0/24",
+		"205.196.6.0/24",
+		"103.10.124.0/23",
+		"103.28.54.0/23",
+		"152.233.52.0/23",
+	}
 )
 
-// GetRegionProbeExcludeAddresses returns AWS Anycast subnets and resolved regional endpoint IPs.
+// GetRegionProbeExcludeAddresses returns AWS Anycast subnets, Valve SDR subnets, and resolved regional endpoint IPs.
 func GetRegionProbeExcludeAddresses() []string {
-	excludes := append([]string{}, AWSRegionProbeSubnets...)
+	excludes := append(append([]string{}, AWSRegionProbeSubnets...), ValveSDRSubnets...)
 	resolvedRegionMu.Lock()
 	defer resolvedRegionMu.Unlock()
 	if time.Since(resolvedRegionTime) < 10*time.Minute && len(resolvedRegionIPs) > 0 {
@@ -464,6 +655,10 @@ type GatewayStatus struct {
 	EnableDonate          *bool  `json:"enable_donate,omitempty"`
 	EnableVoting          *bool  `json:"enable_voting,omitempty"`
 	EnableCommunityGoal   *bool  `json:"enable_community_goal,omitempty"`
+	DonateBoostyEnabled   *bool  `json:"donate_boosty_enabled,omitempty"`
+	DonateSbpEnabled      *bool  `json:"donate_sbp_enabled,omitempty"`
+	DonateCryptoEnabled   *bool  `json:"donate_crypto_enabled,omitempty"`
+	DonatePausedNotice    string `json:"donate_paused_notice,omitempty"`
 	OctoberPoolRub        int    `json:"october_pool_rub,omitempty"`
 }
 
@@ -532,7 +727,22 @@ func AcquireSession(game ...string) (string, error) {
 		return "", fmt.Errorf("в сборке отсутствует ключ авторизации шлюза (HMAC). Запустите официальный релиз с GitHub или задайте переменную окружения WARLINK_HMAC_SECRET")
 	}
 
-	client := &http.Client{Timeout: 7 * time.Second}
+	dialer := &net.Dialer{
+		Timeout:   4 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
+		TLSHandshakeTimeout:   4 * time.Second,
+		ResponseHeaderTimeout: 6 * time.Second,
+		ForceAttemptHTTP2:     true,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   8 * time.Second,
+	}
 
 	cfg := config.Load()
 	accountNumber := ""
@@ -572,7 +782,17 @@ func AcquireSession(game ...string) (string, error) {
 		return client.Do(req)
 	}
 
-	resp, err := attemptAuth()
+	var resp *http.Response
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		resp, err = attemptAuth()
+		if err == nil && resp != nil {
+			break
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt*500) * time.Millisecond)
+		}
+	}
 	if err != nil {
 		return "", fmt.Errorf("шлюз Стокгольм временно недоступен: %w", err)
 	}
@@ -780,26 +1000,66 @@ func RetractVote(deviceID string, appID int) (bool, error) {
 }
 
 
-// GetServerGatewayStatus queries real-time status of Stockholm VPS.
+var (
+	cachedGatewayStatus    *GatewayStatus
+	cachedGatewayStatusMu  sync.RWMutex
+	cachedGatewayStatusExp time.Time
+)
+
+// GetServerGatewayStatus queries real-time status of Stockholm VPS with in-memory caching.
 func GetServerGatewayStatus() (*GatewayStatus, error) {
+	cachedGatewayStatusMu.RLock()
+	if cachedGatewayStatus != nil && time.Now().Before(cachedGatewayStatusExp) {
+		st := *cachedGatewayStatus
+		cachedGatewayStatusMu.RUnlock()
+		return &st, nil
+	}
+	cachedGatewayStatusMu.RUnlock()
+
 	serverAPI := GetServerAPI()
 	if serverAPI == "" {
 		return nil, fmt.Errorf("server API not configured")
 	}
 	apiURL := fmt.Sprintf("%s/api/v1/status?route_mode=%s&device_id=%s", serverAPI, url.QueryEscape(GetNetworkRouteMode()), url.QueryEscape(GetMachineGUID()))
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(apiURL)
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/v2.2.3")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		cachedGatewayStatusMu.RLock()
+		if cachedGatewayStatus != nil {
+			st := *cachedGatewayStatus
+			cachedGatewayStatusMu.RUnlock()
+			return &st, nil
+		}
+		cachedGatewayStatusMu.RUnlock()
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		cachedGatewayStatusMu.RLock()
+		if cachedGatewayStatus != nil {
+			st := *cachedGatewayStatus
+			cachedGatewayStatusMu.RUnlock()
+			return &st, nil
+		}
+		cachedGatewayStatusMu.RUnlock()
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var st GatewayStatus
 	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
 		return nil, err
 	}
+
+	cachedGatewayStatusMu.Lock()
+	cachedGatewayStatus = &st
+	cachedGatewayStatusExp = time.Now().Add(6 * time.Second)
+	cachedGatewayStatusMu.Unlock()
+
 	return &st, nil
 }
 
@@ -960,9 +1220,9 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			procSet[pClean] = struct{}{}
 		}
 	}
-	if includeWebServices {
-		procSet["Telegram.exe"] = struct{}{}
-		procSet["telegram.exe"] = struct{}{}
+	// Always include Discord and Telegram processes into tunnel
+	for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
+		procSet[dp] = struct{}{}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -1051,7 +1311,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		// 1. Exclude core daemons, local DNS proxies, WarLink, and Antigravity IDE from TUN routing
 		{
 			ProcessName: []string{
-				"sing-box.exe", "winws2.exe", "winws.exe", "WarLink.exe", "warlink.exe",
+				"sing-box.exe", "WarLink.exe", "warlink.exe",
 				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe", "dnsproxy.exe", "cloudflared.exe", "stubby.exe", "AdGuardSvc.exe",
 				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
 			},
@@ -1106,15 +1366,23 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	}
 
 	if targetServer != "" {
-		rules = append(rules, RouteRule{
-			IPCIDR:   []string{targetServer + "/32"},
-			Outbound: "direct",
-		})
+		if ip := ResolveDomainIPv4(targetServer); ip != "" && net.ParseIP(ip) != nil {
+			rules = append(rules, RouteRule{
+				IPCIDR:   []string{ip + "/32"},
+				Outbound: "direct",
+			})
+		}
+		if net.ParseIP(targetServer) == nil {
+			rules = append(rules, RouteRule{
+				Domain:   []string{targetServer},
+				Outbound: "direct",
+			})
+		}
 	}
 
-	// 8. Route specified target game processes to hy2-gateway with HIGHEST PRIORITY!
-	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
-	// MUST go through tunnel!
+	// 8. Route specified target game processes to hy2-gateway with TOP PRIORITY for game TCP/UDP!
+	// Every single packet from game processes (AION2.exe, WardogsClient-Win64-Shipping.exe, etc.)
+	// including UDP ping probes (#$#$), lobby TCP TLS handshakes, STUN, and match UDP MUST go through hy2-gateway!
 	if len(allProcesses) > 0 {
 		rules = append(rules, RouteRule{
 			ProcessName: allProcesses,
@@ -1122,46 +1390,90 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		})
 	}
 
-	// 9. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
+	// 9. ICMP ping/echo always routes direct. Hysteria 2 QUIC proxy only carries TCP/UDP streams.
+	// Game ICMP latency probes must never be captured by hy2-gateway proxy.
+	rules = append(rules, RouteRule{
+		Network:  "icmp",
+		Outbound: "direct",
+	})
+
+	// 10. DynamoDB and AWS region ping endpoints must route direct so region evaluation reflects real physical latency
+	rules = append(rules, RouteRule{
+		DomainSuffix: DynamoDBRegionProbeDomains,
+		Outbound:     "direct",
+	})
+
+	// 11. Route AION 2 / NCSoft region ping gateways through the accelerated gateway tunnel
+	// regardless of process identification (covers NCGPA.dll injected thread edge cases).
+	//   193.202.112.0/24 - Cloudflare Spectrum proxy for NCSoft login/ping servers (Dublin IE)
+	//   216.107.254.0/24 - NCSoft Korea direct (Seongnam-si KR)
+	//   80.239.138.0/24  - Arelion Sweden (Stockholm) EU region game server
+	//   212.101.4.0/24   - STUN relay for AION 2 NAT traversal (stun.solnet.ch)
+	rules = append(rules, RouteRule{
+		IPCIDR: []string{
+			"193.202.112.0/24",
+			"216.107.254.0/24",
+			"80.239.138.0/24",
+			"212.101.4.0/24",
+		},
+		Outbound: "hy2-gateway",
+	})
+
+	// 12. AWS Anycast & Valve SDR region probe subnets route direct for real ping
+	regionProbeSubnets := append(append([]string{}, AWSRegionProbeSubnets...), ValveSDRSubnets...)
+	rules = append(rules, RouteRule{
+		IPCIDR:   regionProbeSubnets,
+		Outbound: "direct",
+	})
+
+	// 13. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
 	rules = append(rules, RouteRule{
 		DomainSuffix: CRLDomains,
 		Port:         []int{80},
 		Outbound:     "direct",
 	})
 
-	// 10. DynamoDB region probes route direct with real physical DNS
-	// so the game measures true wire RTT to each AWS region (Frankfurt ~35ms, US ~110ms, Asia ~200ms)
-	rules = append(rules, RouteRule{
-		DomainSuffix: DynamoDBRegionProbeDomains,
-		Outbound:     "direct",
-	})
-
-	// 11. Direct game & anti-cheat domains for non-game processes route direct
+	// 13. Direct game & anti-cheat domains for non-game processes route direct
 	rules = append(rules, RouteRule{
 		DomainSuffix: DirectGameDomains,
 		Outbound:     "direct",
 	})
 
-	if includeWebServices {
-		// Reject QUIC (HTTP/3 over UDP 443) only for target blocked web domains to force TCP HTTP/2
-		rules = append(rules, RouteRule{
-			Action:       "reject",
-			Network:      "udp",
-			Port:         []int{443},
-			DomainSuffix: BlockedServiceDomains,
-		})
+	// Reject QUIC (HTTP/3 over UDP 443) for YouTube and web services to force TCP HTTP/2 (enabling 1080p pacing and stability)
+	// Reject QUIC (HTTP/3 over UDP 443) only for YouTube to force TCP HTTP/2.
+	// BlockedServiceDomains (azurefd.net, trafficmanager.net, playfabapi.com etc.) are excluded
+	// because AION 2 and other games use UDP probes on these domains for ping measurement.
+	quicRejectDomains := append([]string{}, YouTubeDomains...)
+	rules = append(rules, RouteRule{
+		Action:       "reject",
+		Network:      "udp",
+		Port:         []int{443},
+		DomainSuffix: quicRejectDomains,
+	})
 
-		rules = append(rules,
-			RouteRule{
-				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-gateway",
-			},
-			RouteRule{
-				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-gateway",
-			},
-		)
-	}
+	// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+	rules = append(rules,
+		RouteRule{
+			DomainSuffix: YouTubeDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			DomainSuffix: DiscordDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			DomainSuffix: SocialMessengerDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			DomainSuffix: BlockedServiceDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			IPCIDR:   BlockedServiceIPs,
+			Outbound: "hy2-gateway",
+		},
+	)
 
 	// Route profile domains
 	if len(allDomains) > 0 {
@@ -1186,29 +1498,21 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) strictly for Discord processes routes direct
-	// with WinDivert desync to avoid server UDP port limits and ensure minimum audio latency
+	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
 	rules = append(rules,
 		RouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
 			Port:        []int{3478},
-			Outbound:    "direct",
+			Outbound:    "hy2-gateway",
 		},
 		RouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
 			PortRange:   []string{"19294:19344", "50000:65535"},
-			Outbound:    "direct",
+			Outbound:    "hy2-gateway",
 		},
 	)
-
-	// Steam Datagram Relay (SDR) ping relays stay direct for non-game processes
-	rules = append(rules, RouteRule{
-		Network:   "udp",
-		PortRange: []string{"27000:27200"},
-		Outbound:  "direct",
-	})
 
 	// Default fallback to direct
 	rules = append(rules, RouteRule{
@@ -1225,6 +1529,15 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: DynamoDBRegionProbeDomains,
 		Server:       "dns-local",
+	})
+	// Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP
+	targetTunnelDomains := append([]string{}, YouTubeDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: targetTunnelDomains,
+		Server:       "dns-fakeip",
 	})
 	// Google / Antigravity / AI domains must resolve locally to real IPs without FakeIP
 	dnsRules = append(dnsRules, DNSRule{
@@ -1251,11 +1564,12 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		},
 	)
 
-	// Target game processes resolve through FakeIP to tunnel remote DNS
+	// Target game processes resolve through encrypted remote DNS to real public IPs
+	// (critical: never use FakeIP for games, as FakeIP breaks ICMP ping, STUN, QoS probes, and anti-cheat)
 	if len(allProcesses) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
 			ProcessName: allProcesses,
-			Server:      "dns-fakeip",
+			Server:      "dns-remote",
 		})
 	}
 
@@ -1265,10 +1579,8 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		Server:       "dns-local",
 	})
 
-	var fakeDomains []string
-	if includeWebServices {
-		fakeDomains = append(fakeDomains, BlockedServiceDomains...)
-	}
+	// Game domains resolve through encrypted remote DNS to real IPs
+	var remoteGameDomains []string
 	if len(allDomains) > 0 {
 		for _, d := range allDomains {
 			isDirect := false
@@ -1278,15 +1590,23 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 					break
 				}
 			}
-			if isDirect || strings.HasSuffix(d, "vivox.com") {
+			if isDirect || strings.HasSuffix(d, "vivox.com") || strings.HasSuffix(d, "amazonaws.com") {
 				continue
 			}
-			fakeDomains = append(fakeDomains, d)
+			remoteGameDomains = append(remoteGameDomains, d)
 		}
 	}
-	if len(fakeDomains) > 0 {
+	if len(remoteGameDomains) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
-			DomainSuffix: fakeDomains,
+			DomainSuffix: remoteGameDomains,
+			Server:       "dns-remote",
+		})
+	}
+
+	// ONLY web browsing bypass services (YouTube, Discord web, Social/Messengers) resolve via FakeIP
+	if len(targetTunnelDomains) > 0 {
+		dnsRules = append(dnsRules, DNSRule{
+			DomainSuffix: targetTunnelDomains,
 			Server:       "dns-fakeip",
 		})
 	}
@@ -1325,18 +1645,20 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	}
 
 	routeExclude := []string{
-		"162.159.0.0/16",
 		"10.0.0.0/8",
 		"172.16.0.0/12",
 		"192.168.0.0/16",
 		"127.0.0.0/8",
-		MoscowIngressIP + "/32",
-		FrankfurtEdgeIP + "/32",
-		StockholmCoreIP + "/32",
 	}
-	routeExclude = append(routeExclude, GetRegionProbeExcludeAddresses()...)
+	for _, node := range []string{MoscowIngressDomain, FrankfurtEdgeDomain, StockholmCoreDomain} {
+		if ip := ResolveDomainIPv4(node); ip != "" && net.ParseIP(ip) != nil {
+			routeExclude = append(routeExclude, ip+"/32")
+		}
+	}
 	if targetServer != "" && !strings.Contains(targetServer, ":") {
-		routeExclude = append(routeExclude, targetServer+"/32")
+		if resolved := ResolveDomainIPv4(targetServer); resolved != "" && net.ParseIP(resolved) != nil {
+			routeExclude = append(routeExclude, resolved+"/32")
+		}
 	}
 
 	gwHost, gwPort, _ := GetActiveGatewayTarget()
@@ -1366,9 +1688,13 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Address:             []string{"172.28.192.1/30"},
 				MTU:                 1320,
 				AutoRoute:           true,
-				StrictRoute:         false,
+				StrictRoute:         true,
 				Stack:               "mixed",
 				RouteExcludeAddress: routeExclude,
+				UDPTimeout:          "3m",
+				UDPMapping:          "endpoint_independent",
+				UDPFiltering:        "endpoint_independent",
+				UDPNATMax:           8192,
 			},
 		},
 		Outbounds: []Outbound{
@@ -1388,6 +1714,8 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 					ServerName: "gateway.warlink.network",
 					Insecure:   true,
 				},
+				DisableChromeParrot: true,
+				InitialPacketSize:   1320,
 			},
 			{
 				Type: "direct",
@@ -1459,9 +1787,9 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	for _, wb := range WardogsGameProcesses {
 		procSet[wb] = struct{}{}
 	}
-	if includeWebServices {
-		procSet["Telegram.exe"] = struct{}{}
-		procSet["telegram.exe"] = struct{}{}
+	// Always include Discord and Telegram processes into tunnel
+	for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
+		procSet[dp] = struct{}{}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -1533,7 +1861,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		// 1. Exclude core daemons, local DNS proxies, WarLink, and Antigravity IDE from TUN routing
 		{
 			ProcessName: []string{
-				"sing-box.exe", "winws2.exe", "winws.exe", "WarLink.exe", "warlink.exe",
+				"sing-box.exe", "WarLink.exe", "warlink.exe",
 				"ag_dns.exe", "agunlocker.exe", "AGUnlocker.exe", "dnsproxy.exe", "cloudflared.exe", "stubby.exe", "AdGuardSvc.exe",
 				"Antigravity.exe", "antigravity.exe", "antigravity-tools.exe", "language_server.exe",
 			},
@@ -1602,15 +1930,23 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	}
 
 	if targetServer != "" {
-		rules = append(rules, RouteRule{
-			IPCIDR:   []string{targetServer + "/32"},
-			Outbound: "direct",
-		})
+		if ip := ResolveDomainIPv4(targetServer); ip != "" && net.ParseIP(ip) != nil {
+			rules = append(rules, RouteRule{
+				IPCIDR:   []string{ip + "/32"},
+				Outbound: "direct",
+			})
+		}
+		if net.ParseIP(targetServer) == nil {
+			rules = append(rules, RouteRule{
+				Domain:   []string{targetServer},
+				Outbound: "direct",
+			})
+		}
 	}
 
-	// 8. Route specified target game processes to hy2-gateway with HIGHEST PRIORITY!
-	// All game TCP and UDP traffic (game servers, STUN, Vivox voice, match lobbies, HTTP 80/443 auth, EOS)
-	// MUST go through tunnel!
+	// 8. Route specified target game processes to hy2-gateway with TOP PRIORITY for game TCP/UDP!
+	// Every single packet from game processes (AION2.exe, WardogsClient-Win64-Shipping.exe, etc.)
+	// including UDP ping probes (#$#$), lobby TCP TLS handshakes, STUN, and match UDP MUST go through hy2-gateway!
 	if len(allProcesses) > 0 {
 		rules = append(rules, RouteRule{
 			ProcessName: allProcesses,
@@ -1618,44 +1954,86 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		})
 	}
 
-	// 9. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
+	// 9. ICMP ping/echo always routes direct. Hysteria 2 QUIC proxy only carries TCP/UDP streams.
+	// Game ICMP latency probes must never be captured by hy2-gateway proxy.
+	rules = append(rules, RouteRule{
+		Network:  "icmp",
+		Outbound: "direct",
+	})
+
+	// 10. DynamoDB and AWS region ping endpoints must route direct so region evaluation reflects real physical latency
+	rules = append(rules, RouteRule{
+		DomainSuffix: DynamoDBRegionProbeDomains,
+		Outbound:     "direct",
+	})
+
+	// 11. Route AION 2 / NCSoft region ping gateways through the accelerated gateway tunnel
+	// regardless of process identification (covers NCGPA.dll injected thread edge cases).
+	rules = append(rules, RouteRule{
+		IPCIDR: []string{
+			"193.202.112.0/24",
+			"216.107.254.0/24",
+			"80.239.138.0/24",
+			"212.101.4.0/24",
+		},
+		Outbound: "hy2-gateway",
+	})
+
+	// 12. AWS Anycast & Valve SDR region probe subnets route direct for real ping
+	regionProbeSubnets := append(append([]string{}, AWSRegionProbeSubnets...), ValveSDRSubnets...)
+	rules = append(rules, RouteRule{
+		IPCIDR:   regionProbeSubnets,
+		Outbound: "direct",
+	})
+
+	// 13. Plain HTTP (port 80) routes direct ONLY for CRL/OCSP certificate revocation checks
 	rules = append(rules, RouteRule{
 		DomainSuffix: CRLDomains,
 		Port:         []int{80},
 		Outbound:     "direct",
 	})
 
-	// 10. DynamoDB region probes route direct with real physical DNS
-	// so the game measures true wire RTT to each AWS region (Frankfurt ~35ms, US ~110ms, Asia ~200ms)
-	rules = append(rules, RouteRule{
-		DomainSuffix: DynamoDBRegionProbeDomains,
-		Outbound:     "direct",
-	})
-
-	// 11. Direct game & anti-cheat domains for non-game processes route direct
+	// 13. Direct game & anti-cheat domains for non-game processes route direct
 	rules = append(rules, RouteRule{
 		DomainSuffix: DirectGameDomains,
 		Outbound:     "direct",
 	})
 
-	if includeWebServices {
-		rules = append(rules, RouteRule{
-			Action:       "reject",
-			Network:      "udp",
-			Port:         []int{443},
+	// Reject QUIC (HTTP/3 over UDP 443) for YouTube and web services to force TCP HTTP/2 (enabling 1080p pacing and stability)
+	// Reject QUIC (HTTP/3 over UDP 443) only for YouTube to force TCP HTTP/2.
+	// BlockedServiceDomains (azurefd.net, trafficmanager.net, playfabapi.com etc.) are excluded
+	// because AION 2 and other games use UDP probes on these domains for ping measurement.
+	quicRejectDomains := append([]string{}, YouTubeDomains...)
+	rules = append(rules, RouteRule{
+		Action:       "reject",
+		Network:      "udp",
+		Port:         []int{443},
+		DomainSuffix: quicRejectDomains,
+	})
+
+	// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+	rules = append(rules,
+		RouteRule{
+			DomainSuffix: YouTubeDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			DomainSuffix: DiscordDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			DomainSuffix: SocialMessengerDomains,
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
 			DomainSuffix: BlockedServiceDomains,
-		})
-		rules = append(rules,
-			RouteRule{
-				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-gateway",
-			},
-			RouteRule{
-				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-gateway",
-			},
-		)
-	}
+			Outbound:     "hy2-gateway",
+		},
+		RouteRule{
+			IPCIDR:   BlockedServiceIPs,
+			Outbound: "hy2-gateway",
+		},
+	)
 
 	// Route profile domains & AWS GameLift / DynamoDB telemetry to gateway
 	if len(allDomains) > 0 {
@@ -1680,28 +2058,21 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media strictly for Discord processes routes direct with WinDivert desync
+	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
 	rules = append(rules,
 		RouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
 			Port:        []int{3478},
-			Outbound:    "direct",
+			Outbound:    "hy2-gateway",
 		},
 		RouteRule{
 			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 			Network:     "udp",
 			PortRange:   []string{"19294:19344", "50000:65535"},
-			Outbound:    "direct",
+			Outbound:    "hy2-gateway",
 		},
 	)
-
-	// Steam Datagram Relay (SDR) ping relays stay direct for non-game processes
-	rules = append(rules, RouteRule{
-		Network:   "udp",
-		PortRange: []string{"27000:27200"},
-		Outbound:  "direct",
-	})
 
 	// Default fallback to direct
 	rules = append(rules, RouteRule{
@@ -1717,6 +2088,15 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: DynamoDBRegionProbeDomains,
 		Server:       "dns-local",
+	})
+	// Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP
+	targetTunnelDomains := append([]string{}, YouTubeDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
+	targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
+	dnsRules = append(dnsRules, DNSRule{
+		DomainSuffix: targetTunnelDomains,
+		Server:       "dns-fakeip",
 	})
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: []string{
@@ -1740,22 +2120,22 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		},
 	)
 
+	// Target game processes resolve through encrypted remote DNS to real public IPs
 	if len(allProcesses) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
 			ProcessName: allProcesses,
-			Server:      "dns-fakeip",
+			Server:      "dns-remote",
 		})
 	}
 
+	// Game & launcher direct domains (for non-game processes, e.g. steam.exe) resolve locally to real IPs
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: DirectGameDomains,
 		Server:       "dns-local",
 	})
 
-	var fakeDomains []string
-	if includeWebServices {
-		fakeDomains = append(fakeDomains, BlockedServiceDomains...)
-	}
+	// Game domains resolve through encrypted remote DNS to real IPs
+	var remoteGameDomains []string
 	if len(allDomains) > 0 {
 		for _, d := range allDomains {
 			isDirect := false
@@ -1768,12 +2148,20 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 			if isDirect || strings.HasSuffix(d, "vivox.com") || strings.HasSuffix(d, "amazonaws.com") {
 				continue
 			}
-			fakeDomains = append(fakeDomains, d)
+			remoteGameDomains = append(remoteGameDomains, d)
 		}
 	}
-	if len(fakeDomains) > 0 {
+	if len(remoteGameDomains) > 0 {
 		dnsRules = append(dnsRules, DNSRule{
-			DomainSuffix: fakeDomains,
+			DomainSuffix: remoteGameDomains,
+			Server:       "dns-remote",
+		})
+	}
+
+	// ONLY web browsing bypass services (YouTube, Discord web, Social/Messengers) resolve via FakeIP
+	if len(targetTunnelDomains) > 0 {
+		dnsRules = append(dnsRules, DNSRule{
+			DomainSuffix: targetTunnelDomains,
 			Server:       "dns-fakeip",
 		})
 	}
@@ -1811,18 +2199,20 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	}
 
 	routeExclude := []string{
-		"162.159.0.0/16",
 		"10.0.0.0/8",
 		"172.16.0.0/12",
 		"192.168.0.0/16",
 		"127.0.0.0/8",
-		MoscowIngressIP + "/32",
-		FrankfurtEdgeIP + "/32",
-		StockholmCoreIP + "/32",
 	}
-	routeExclude = append(routeExclude, GetRegionProbeExcludeAddresses()...)
+	for _, node := range []string{MoscowIngressDomain, FrankfurtEdgeDomain, StockholmCoreDomain} {
+		if ip := ResolveDomainIPv4(node); ip != "" && net.ParseIP(ip) != nil {
+			routeExclude = append(routeExclude, ip+"/32")
+		}
+	}
 	if targetServer != "" && !strings.Contains(targetServer, ":") {
-		routeExclude = append(routeExclude, targetServer+"/32")
+		if resolved := ResolveDomainIPv4(targetServer); resolved != "" && net.ParseIP(resolved) != nil {
+			routeExclude = append(routeExclude, resolved+"/32")
+		}
 	}
 
 	gwHost, gwPort, _ := GetActiveGatewayTarget()
@@ -1854,9 +2244,13 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Address:       []string{"172.28.192.1/30"},
 				MTU:           1320, // Standard safe MTU (1320) avoiding UDP packet fragmentation across PPPoE and regional ISP tunnels
 				AutoRoute:     true,
-				StrictRoute:   false,
+				StrictRoute:   true,
 				Stack:         "mixed", // Mixed stack: native kernel UDP for gaming fastpath, gVisor TCP for honest end-to-end RTT
 				RouteExcludeAddress: routeExclude,
+				UDPTimeout:    "3m",
+				UDPMapping:    "endpoint_independent",
+				UDPFiltering:  "endpoint_independent",
+				UDPNATMax:     8192,
 			},
 		},
 		Outbounds: []Outbound{
@@ -1876,6 +2270,8 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 					ServerName: "gateway.warlink.network",
 					Insecure:   true,
 				},
+				DisableChromeParrot: true,
+				InitialPacketSize:   1320,
 			},
 			{
 				Type: "direct",
@@ -2023,7 +2419,7 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 			m.cmd = nil
 		}
 		_ = killProcessByName("sing-box.exe")
-		cleanupWintunAdapter()
+		CleanupWintunAdapter()
 		m.isRunning = false
 		time.Sleep(1200 * time.Millisecond)
 	}
@@ -2110,10 +2506,9 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	}
 
 	// Clean up any stale instances and ensure kernel Wintun driver releases the interface
-	if errKill := killProcessByName("sing-box.exe"); errKill == nil {
-		cleanupWintunAdapter()
-		time.Sleep(1200 * time.Millisecond)
-	}
+	_ = killProcessByName("sing-box.exe")
+	CleanupWintunAdapter()
+	time.Sleep(300 * time.Millisecond)
 
 	cmd := exec.Command(m.GetExePath(), "run", "-c", cfgPath)
 	cmd.Dir = m.GetBinDir()
@@ -2201,7 +2596,7 @@ func (m *Manager) Stop() error {
 	}
 
 	_ = killProcessByName("sing-box.exe")
-	cleanupWintunAdapter()
+	CleanupWintunAdapter()
 
 	return nil
 }
@@ -2432,8 +2827,8 @@ func killProcessByName(name string) error {
 	return cmd.Run()
 }
 
-// cleanupWintunAdapter removes residual WarLink-Tun / Wintun virtual interfaces via pnputil and netsh.
-func cleanupWintunAdapter() {
+// CleanupWintunAdapter removes residual WarLink-Tun / Wintun virtual interfaces via pnputil and netsh.
+func CleanupWintunAdapter() {
 	cmdEnum := exec.Command("pnputil", "/enum-devices", "/class", "Net")
 	cmdEnum.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if out, err := cmdEnum.Output(); err == nil {
@@ -2446,19 +2841,27 @@ func cleanupWintunAdapter() {
 				if len(parts) >= 3 {
 					currentInstanceID = parts[2]
 				}
-			} else if (strings.Contains(line, "sing-tun") || strings.Contains(line, "WarLink") || strings.Contains(line, "Wintun")) && strings.HasPrefix(currentInstanceID, "SWD\\Wintun\\") {
-				cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
-				cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-				_ = cmdRm.Run()
-				currentInstanceID = ""
+			} else if strings.HasPrefix(strings.ToUpper(currentInstanceID), "SWD\\WINTUN\\") {
+				lineLower := strings.ToLower(line)
+				if strings.Contains(lineLower, "sing-tun") ||
+					strings.Contains(lineLower, "warlink") ||
+					strings.Contains(lineLower, "wintun") ||
+					strings.Contains(lineLower, "throne") {
+					cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
+					cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+					_ = cmdRm.Run()
+					currentInstanceID = ""
+				}
 			}
 		}
 	}
 
-	cmd := exec.Command("netsh", "interface", "delete", "interface", "name=WarLink-Tun")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000,
+	for _, iface := range []string{"WarLink-Tun", "throne-tun", "sing-tun"} {
+		cmd := exec.Command("netsh", "interface", "delete", "interface", "name="+iface)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000,
+		}
+		_ = cmd.Run()
 	}
-	_ = cmd.Run()
 }

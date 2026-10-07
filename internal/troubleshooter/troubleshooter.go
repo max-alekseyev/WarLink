@@ -56,7 +56,7 @@ func RunFullDiagnostics() DiagnosticReport {
 		}
 	}
 
-	// 1. Driver & Service checks (WinDivert, Wintun, third-party conflicts)
+	// 1. Driver & Service checks (Wintun, sing-box, third-party conflicts)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -250,7 +250,7 @@ func FixAllIssues() FixIssuesResult {
 
 	// 1. Flush DNS resolver cache
 	cmdFlush := exec.Command("ipconfig", "/flushdns")
-	cmdFlush.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmdFlush.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if err := cmdFlush.Run(); err == nil {
 		res.Actions = append(res.Actions, "Кэш DNS успешно очищен (ipconfig /flushdns)")
 	} else {

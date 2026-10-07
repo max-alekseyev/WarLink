@@ -67,7 +67,7 @@
       "title": "Панель управления (Directus)",
       "tooltip": "Административный портал параметров ядра, лимитов слотов и депеш",
       "type": "link",
-      "url": "https://warlink-hub.duckdns.org:8055/admin"
+      "url": "https://hub-warlink.max-alekseyev.com/admin"
     },
     {
       "asDropdown": false,
@@ -78,7 +78,7 @@
       "title": "Служба поддержки (Тикеты)",
       "tooltip": "Разбор инцидентов, журналов сбоев и отправка ответов игрокам",
       "type": "link",
-      "url": "https://warlink-hub.duckdns.org:8055/admin/content/support_tickets"
+      "url": "https://hub-warlink.max-alekseyev.com/admin/content/support_tickets"
     }
   ],
   "liveNow": false,
@@ -1115,7 +1115,7 @@
                 "value": [
                   {
                     "title": "Открыть спонсора в Directus",
-                    "url": "https://warlink-hub.duckdns.org:8055/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "url": "https://hub-warlink.max-alekseyev.com/admin/content/accounts/${__data.fields['Номер аккаунта']}",
                     "targetBlank": true
                   }
                 ]
@@ -4696,7 +4696,7 @@
                 "value": [
                   {
                     "title": "Открыть профиль игрока в Directus",
-                    "url": "https://warlink-hub.duckdns.org:8055/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "url": "https://hub-warlink.max-alekseyev.com/admin/content/accounts/${__data.fields['Номер аккаунта']}",
                     "targetBlank": true
                   }
                 ]

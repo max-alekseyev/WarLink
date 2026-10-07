@@ -35,19 +35,19 @@ import (
 	"github.com/jchv/go-webview2/pkg/edge"
 	"warlink/internal/config"
 	"warlink/internal/deps"
-	"warlink/internal/desync"
 	"warlink/internal/engine"
 	"warlink/internal/features"
 	"warlink/internal/progression"
 	"warlink/internal/scanner"
 	"warlink/internal/singbox"
+	"warlink/internal/system"
 	"warlink/internal/tray"
 	"warlink/internal/troubleshooter"
 	"warlink/internal/updater"
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.2"
+var AppVersion = "v2.2.3"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -125,6 +125,7 @@ var (
 		1867240: "WARDOGS",
 		1808500: "ARC Raiders",
 		2016590: "Dark and Darker",
+		3393110: "AION 2",
 	}
 )
 
@@ -621,7 +622,7 @@ func validatePath() {
 	}
 
 	if hasCyrillicOrSpecial {
-		msg := fmt.Sprintf("ВНИМАНИЕ:\nПуть к программе содержит кириллицу или специальные символы:\n\n%s\n\nЭто может привести к сбою сетевого драйвера WinDivert.\nРекомендуется переместить папку программы в корень диска, например:\nC:\\WarLink\n\nПродолжить запуск?", dir)
+		msg := fmt.Sprintf("ВНИМАНИЕ:\nПуть к программе содержит кириллицу или специальные символы:\n\n%s\n\nЭто может привести к сбоям системных служб.\nРекомендуется переместить папку программы в корень диска, например:\nC:\\WarLink\n\nПродолжить запуск?", dir)
 		res := showNativeDialog("WarLink: Предупреждение о пути", msg, MB_OKCANCEL|MB_ICONEXCLAMATION)
 		if res != IDOK {
 			os.Exit(0)
@@ -891,8 +892,11 @@ func main() {
 		}
 	}()
 
-	// 0. Ensure Admin privileges for WinDivert and WinTun kernel drivers
+	// 0. Ensure Admin privileges for Wintun virtual adapter and network routing
 	ensureAdminElevation()
+
+	// 0a. Purge ghost Wintun / sing-tun / throne-tun adapters and clean zombie routes on startup
+	singbox.CleanupWintunAdapter()
 
 	// 0b. Initialize Windows Job Object to guarantee child daemon termination on exit
 	_ = deps.InitGlobalJobObject()
@@ -1019,12 +1023,9 @@ func main() {
 	appendLog("[OK] Проверка пути и рабочего окружения пройдена")
 	appendLog(fmt.Sprintf("[OK] Журнал работы сохраняется в: %s", logFilePath))
 
-	// Ensure core embedded desync components exist on disk synchronously (~15ms)
-	if !deps.HasZapret() {
-		appendLog("[INFO] Первичная инициализация компонентов сетевого фильтра...")
-		if err := deps.PrepareZapret(appendLog); err != nil {
-			appendLog(fmt.Sprintf("[ERROR] Ошибка распаковки компонентов: %v", err))
-		}
+	// Ensure core embedded components exist on disk synchronously (~15ms)
+	if err := deps.EnsureSingBoxFiles(appendLog); err != nil {
+		appendLog(fmt.Sprintf("[ERROR] Ошибка распаковки компонентов sing-box: %v", err))
 	}
 
 	appendLog("[INFO] Очистка автозапуска и сетевых настроек...")
@@ -1035,7 +1036,7 @@ func main() {
 
 	// Background startup orchestrator:
 	// 1. Check for updates (blocking in-place updater)
-	// 2. Initial component check & setup (WinDivert/singbox/Wintun) with blocking UI overlay
+	// 2. Initial component check & setup (singbox/Wintun) with blocking UI overlay
 	// 3. Free Internet sync (if enabled)
 	go func() {
 		time.Sleep(300 * time.Millisecond)
@@ -1090,38 +1091,22 @@ func main() {
 		}
 
 		// 2. Initial component check & setup with blocking UI overlay
-		needsInit := !deps.HasZapret()
 		needsBenchmark := !state.cfg.BenchmarkCompleted
-		if needsInit || needsBenchmark {
-			appendLog("[INIT] Обнаружен первый запуск или неинициализированные компоненты...")
+		if needsBenchmark {
+			appendLog("[INIT] Первичная настройка WarLink...")
 			state.mu.Lock()
 			state.isInitializing = true
 			state.initTitle = "Первичная настройка WarLink..."
-			state.initPct = 5
-			state.initMsg = "Подготовка системных компонентов..."
-			state.mu.Unlock()
-
-			// 2.1 Prepare WinDivert / zapret files
-			if !deps.HasZapret() {
-				state.mu.Lock()
-				state.initPct = 10
-				state.initMsg = "Распаковка сетевого фильтра WinDivert..."
-				state.mu.Unlock()
-				if err := deps.PrepareZapret(appendLog); err != nil {
-					appendLog(fmt.Sprintf("[ERROR] Ошибка распаковки WinDivert: %v", err))
-				}
-			}
-
-			// 2.2 Prepare sing-box & wintun
-			state.mu.Lock()
-			state.initPct = 30
+			state.initPct = 20
 			state.initMsg = "Подготовка игрового роутера sing-box..."
 			state.mu.Unlock()
+
+			// 2.1 Prepare sing-box & wintun
 			if err := deps.EnsureSingBoxFiles(appendLog); err != nil {
 				appendLog(fmt.Sprintf("[ERROR] Ошибка проверки компонентов sing-box: %v", err))
 			}
 
-			// 2.3 Check Gateway cluster connectivity
+			// 2.2 Check Gateway cluster connectivity
 			state.mu.Lock()
 			state.initPct = 60
 			state.initMsg = "Проверка связи с игровым кластером..."
@@ -1133,52 +1118,39 @@ func main() {
 				appendLog(fmt.Sprintf("[OK] Игровой кластер доступен (слоты: %d/%d, аренда: %d дн.)", gw.ActiveSessions, gw.MaxSessions, gw.DaysLeft))
 			}
 
-			// 2.4 Fetch latest desync strategies from gateway dynamically
-			if remotePresets, rErr := desync.FetchRemoteDesyncConfig(singbox.GetServerAPI()); rErr == nil && len(remotePresets) > 0 {
-				appendLog(fmt.Sprintf("[OK] Загружено %d актуальных стратегий Запрета со шлюза", len(remotePresets)))
-			}
-
-			// 2.5 Fetch remote feature flags and canary experiment toggles
+			// 2.3 Fetch remote feature flags and canary experiment toggles
 			if fErr := features.FetchRemoteFlags(singbox.GetServerAPI(), state.cfg.AccountNumber, singbox.GetMachineGUID(), AppVersion); fErr == nil {
 				appendLog(fmt.Sprintf("[OK] Загружено %d удаленных параметров и фиче-флагов", len(features.GetAll())))
 			}
 
-			// 2.4 Run full 22-profile DPI benchmark on first run
-			if !state.cfg.BenchmarkCompleted && deps.HasZapret() {
-				state.mu.Lock()
-				state.initTitle = "Глобальное тестирование профилей DPI..."
-				state.initPct = 75
-				state.initMsg = "Запуск автотестирования 22 профилей под вашу сеть..."
-				state.mu.Unlock()
+			// 2.4 Quick network calibration
+			state.mu.Lock()
+			state.initPct = 85
+			state.initMsg = "Калибровка сетевых маршрутов..."
+			state.mu.Unlock()
 
-				winner, _, err := scanner.RunFullBenchmark(
-					deps.GetZapretDir(),
-					func(curr, total int, presetName, logLine string) {
-						pct := 75 + int(float64(curr)/float64(total)*24.0)
-						state.mu.Lock()
-						state.initPct = pct
-						state.initMsg = logLine
-						state.mu.Unlock()
-					},
-					appendLog,
-				)
+			winner, _, _ := scanner.RunFullBenchmark(
+				deps.GetCoreDir(),
+				func(curr, total int, presetName, logLine string) {
+					state.mu.Lock()
+					state.initMsg = logLine
+					state.mu.Unlock()
+				},
+				appendLog,
+			)
 
-				state.mu.Lock()
-				if err == nil && winner != "" {
-					state.cfg.SelectedAlt = winner
-					state.cfg.BenchmarkCompleted = true
-					_ = state.cfg.Save()
-				} else {
-					state.cfg.BenchmarkCompleted = true
-					_ = state.cfg.Save()
-				}
-				state.mu.Unlock()
-
-				if err == nil && winner != "" {
-					state.eng.SetSelectedAlt(winner)
-					appendLog(fmt.Sprintf("[OK] Установлен лучший профиль обхода: %s", winner))
-				}
+			state.mu.Lock()
+			if winner != "" {
+				state.cfg.SelectedAlt = winner
+			} else {
+				state.cfg.SelectedAlt = "Автокалибровка (Circular Adaptive)"
 			}
+			state.cfg.BenchmarkCompleted = true
+			_ = state.cfg.Save()
+			state.mu.Unlock()
+
+			state.eng.SetSelectedAlt(state.cfg.SelectedAlt)
+			appendLog(fmt.Sprintf("[OK] Установлен оптимальный маршрут: %s", state.cfg.SelectedAlt))
 
 			state.mu.Lock()
 			state.initPct = 100
@@ -1202,60 +1174,70 @@ func main() {
 	}()
 
 
-	measureGatewayRTT := func(targetIP string) int {
-		if targetIP == "" {
+	measureGatewayRTT := func(targetHost string) int {
+		if targetHost == "" {
 			return 0
 		}
-		// 1. Fast Native TCP handshake (dial port 80 first, open across all cluster nodes)
-		// Zero process spawning overhead, bypasses local TUN, measures real round-trip in ~15-40ms.
-		start := time.Now()
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, "80"), 450*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			ms := int(time.Since(start).Milliseconds())
-			if ms < 1 {
-				return 1
+		// Resolve target domain to raw IPv4 to eliminate DNS resolution overhead
+		targetIP := targetHost
+		if net.ParseIP(targetHost) == nil {
+			if resolved := singbox.ResolveDomainIPv4(targetHost); resolved != "" {
+				targetIP = resolved
 			}
-			return ms
 		}
 
-		// 2. Try port 443 with a clean timer
-		start = time.Now()
-		conn, err = net.DialTimeout("tcp", net.JoinHostPort(targetIP, "443"), 450*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			ms := int(time.Since(start).Milliseconds())
-			if ms < 1 {
-				return 1
+		// 1. Fast Native TCP handshake probe
+		for _, port := range []string{"443", "80"} {
+			start := time.Now()
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetIP, port), 200*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				ms := int(time.Since(start).Milliseconds())
+				if ms < 1 {
+					return 1
+				}
+				return ms
 			}
-			return ms
 		}
 
-		// 3. Fallback to ICMP ping only if TCP handshake failed or was blocked
-		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "800")
+		// 2. Native ICMP ping
+		cmd := exec.Command("ping", targetIP, "-n", "1", "-w", "600")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			HideWindow:    true,
 			CreationFlags: 0x08000000,
 		}
 		if out, err := cmd.Output(); err == nil {
 			outStr := string(out)
-			idx := strings.Index(strings.ToLower(outStr), "time=")
-			if idx == -1 {
-				idx = strings.Index(strings.ToLower(outStr), "время=")
+			lowered := strings.ToLower(outStr)
+
+			// Sub-millisecond response on Windows: "time<1ms" or "время<1мс" or "<1ms"
+			if strings.Contains(lowered, "<1ms") || strings.Contains(lowered, "<1 мс") || strings.Contains(lowered, "<1мс") {
+				return 1
 			}
-			if idx != -1 {
-				rem := outStr[idx:]
-				eqIdx := strings.Index(rem, "=")
-				if eqIdx != -1 {
-					rem = strings.TrimSpace(rem[eqIdx+1:])
+
+			// Parse per-packet RTT: "time=XXms" or "время=XXмс"
+			for _, prefix := range []string{"time=", "время=", "time =", "время ="} {
+				if idx := strings.Index(lowered, prefix); idx != -1 {
+					rem := strings.TrimSpace(lowered[idx+len(prefix):])
 					var rttVal int
-					if _, scanErr := fmt.Sscanf(rem, "%dms", &rttVal); scanErr == nil && rttVal > 0 {
+					if _, scanErr := fmt.Sscanf(rem, "%d", &rttVal); scanErr == nil {
+						if rttVal == 0 {
+							return 1
+						}
 						return rttVal
 					}
-					if _, scanErr := fmt.Sscanf(rem, "%dмс", &rttVal); scanErr == nil && rttVal > 0 {
-						return rttVal
-					}
-					if _, scanErr := fmt.Sscanf(rem, "%d", &rttVal); scanErr == nil && rttVal > 0 {
+				}
+			}
+
+			// Parse summary RTT: "average = XXms" or "среднее = XXмс"
+			for _, prefix := range []string{"average = ", "average=", "среднее = ", "среднее="} {
+				if idx := strings.Index(lowered, prefix); idx != -1 {
+					rem := strings.TrimSpace(lowered[idx+len(prefix):])
+					var rttVal int
+					if _, scanErr := fmt.Sscanf(rem, "%d", &rttVal); scanErr == nil {
+						if rttVal == 0 {
+							return 1
+						}
 						return rttVal
 					}
 				}
@@ -1268,41 +1250,54 @@ func main() {
 	// Background periodic poller for Stockholm/Frankfurt Gateway status & real ping
 	go func() {
 		pollGateway := func() {
-			serverIP := singbox.GetServerIP()
-			if serverIP != "" {
-				rtt := measureGatewayRTT(serverIP)
-				state.mu.Lock()
-				if rtt > 0 {
-					// Outlier filter: if sudden jump >400ms while baseline was low (<150ms),
-					// re-probe once immediately to discard isolated network drops or timeouts.
-					if rtt > 400 && state.gatewayRealPing > 0 && state.gatewayRealPing < 150 {
-						state.mu.Unlock()
-						recheck := measureGatewayRTT(serverIP)
-						state.mu.Lock()
-						if recheck > 0 && recheck < 250 {
-							rtt = recheck
+			var wg sync.WaitGroup
+			wg.Add(2)
+
+			// 1. Measure RTT in parallel
+			go func() {
+				defer wg.Done()
+				serverIP := singbox.GetServerIP()
+				if serverIP != "" {
+					rtt := measureGatewayRTT(serverIP)
+					state.mu.Lock()
+					if rtt > 0 {
+						// Outlier filter: if sudden jump >400ms while baseline was low (<150ms),
+						// re-probe once immediately to discard isolated network drops or timeouts.
+						if rtt > 400 && state.gatewayRealPing > 0 && state.gatewayRealPing < 150 {
+							state.mu.Unlock()
+							recheck := measureGatewayRTT(serverIP)
+							state.mu.Lock()
+							if recheck > 0 && recheck < 250 {
+								rtt = recheck
+							} else {
+								// Filter out single anomaly
+								rtt = (state.gatewayRealPing*2 + rtt) / 3
+							}
+						}
+						if state.gatewayRealPing > 0 {
+							// Exponential moving average: smooth out jitter
+							state.gatewayRealPing = int(float64(state.gatewayRealPing)*0.7 + float64(rtt)*0.3)
 						} else {
-							// Filter out single anomaly
-							rtt = (state.gatewayRealPing*2 + rtt) / 3
+							state.gatewayRealPing = rtt
 						}
 					}
-					if state.gatewayRealPing > 0 {
-						// Exponential moving average: smooth out jitter
-						state.gatewayRealPing = int(float64(state.gatewayRealPing)*0.7 + float64(rtt)*0.3)
-					} else {
-						state.gatewayRealPing = rtt
-					}
+					state.mu.Unlock()
 				}
+			}()
+
+			// 2. Query Stockholm/Frankfurt Gateway Status in parallel
+			go func() {
+				defer wg.Done()
+				st, err := singbox.GetServerGatewayStatus()
+				state.mu.Lock()
+				if err == nil && st != nil {
+					state.gatewayStatus = st
+				}
+				// Do not wipe state.gatewayStatus on transient network error - keep last known status
 				state.mu.Unlock()
-			}
-			st, err := singbox.GetServerGatewayStatus()
-			state.mu.Lock()
-			if err == nil && st != nil {
-				state.gatewayStatus = st
-			} else {
-				state.gatewayStatus = nil
-			}
-			state.mu.Unlock()
+			}()
+
+			wg.Wait()
 		}
 		pollGateway()
 		ticker := time.NewTicker(4 * time.Second)
@@ -1465,7 +1460,7 @@ func main() {
 		// 3. Proxy from gateway server static API and cache locally
 		serverAPI := singbox.GetServerAPI()
 		if serverAPI == "" {
-			serverAPI = "http://138.124.103.99"
+			serverAPI = "https://api-warlink.max-alekseyev.com"
 		}
 		targetURL := fmt.Sprintf("%s/static/%s", strings.TrimRight(serverAPI, "/"), relPath)
 		client := &http.Client{Timeout: 10 * time.Second}
@@ -1580,6 +1575,10 @@ func main() {
 		enableDonate := true
 		enableVoting := true
 		enableCommunityGoal := true
+		donateBoostyEnabled := true
+		donateSbpEnabled := false
+		donateCryptoEnabled := false
+		donatePausedNotice := ""
 		if state.gatewayStatus != nil {
 			if state.gatewayStatus.EnableDonate != nil {
 				enableDonate = *state.gatewayStatus.EnableDonate
@@ -1590,6 +1589,16 @@ func main() {
 			if state.gatewayStatus.EnableCommunityGoal != nil {
 				enableCommunityGoal = *state.gatewayStatus.EnableCommunityGoal
 			}
+			if state.gatewayStatus.DonateBoostyEnabled != nil {
+				donateBoostyEnabled = *state.gatewayStatus.DonateBoostyEnabled
+			}
+			if state.gatewayStatus.DonateSbpEnabled != nil {
+				donateSbpEnabled = *state.gatewayStatus.DonateSbpEnabled
+			}
+			if state.gatewayStatus.DonateCryptoEnabled != nil {
+				donateCryptoEnabled = *state.gatewayStatus.DonateCryptoEnabled
+			}
+			donatePausedNotice = state.gatewayStatus.DonatePausedNotice
 		}
 
 		octoberPoolRub := 0
@@ -1639,6 +1648,10 @@ func main() {
 			"enable_donate":         enableDonate,
 			"enable_voting":         enableVoting,
 			"enable_community_goal": enableCommunityGoal,
+			"donate_boosty_enabled": donateBoostyEnabled,
+			"donate_sbp_enabled":    donateSbpEnabled,
+			"donate_crypto_enabled": donateCryptoEnabled,
+			"donate_paused_notice":  donatePausedNotice,
 			"last_error":            state.lastConnectError,
 			"network_route_mode":    state.cfg.GetNetworkRouteMode(),
 			"account_number":        state.cfg.AccountNumber,
@@ -2179,6 +2192,57 @@ func main() {
 		})
 	})
 
+	// --- WARDOGS Gaming Tweaks ---
+	mux.HandleFunc("/api/tweaks/wardogs/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		status := system.GetWardogsShadowStatus()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"status":  status,
+		})
+	})
+
+	mux.HandleFunc("/api/tweaks/wardogs/shadows", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			DisableShadows bool `json:"disable_shadows"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid body", http.StatusBadRequest)
+			return
+		}
+		if err := system.SetWardogsShadowsDisabled(req.DisableShadows); err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+			})
+			return
+		}
+		updated := system.GetWardogsShadowStatus()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"status":  updated,
+		})
+	})
+
+	mux.HandleFunc("/api/tweaks/wardogs/open-folder", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := system.OpenWardogsConfigFolder(); err != nil {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+		})
+	})
+
 	mux.HandleFunc("/api/open-external-url", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2323,7 +2387,8 @@ func main() {
 	mux.HandleFunc("/api/games/catalog", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		client := &http.Client{Timeout: 4 * time.Second}
-		resp, err := client.Get("http://138.124.103.99/api/v1/games/catalog")
+		apiBase := singbox.GetServerAPI()
+		resp, err := client.Get(apiBase + "/api/v1/games/catalog")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -2357,7 +2422,8 @@ func main() {
 	mux.HandleFunc("/api/announcements", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		client := &http.Client{Timeout: 3 * time.Second}
-		resp, err := client.Get("http://138.124.103.99/api/v1/announcements")
+		apiBase := singbox.GetServerAPI()
+		resp, err := client.Get(apiBase + "/api/v1/announcements")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "announcement": nil})
 			return
@@ -2369,7 +2435,8 @@ func main() {
 	mux.HandleFunc("/api/sponsors/tiers", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		client := &http.Client{Timeout: 3 * time.Second}
-		resp, err := client.Get("http://138.124.103.99/api/v1/sponsors/tiers")
+		apiBase := singbox.GetServerAPI()
+		resp, err := client.Get(apiBase + "/api/v1/sponsors/tiers")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -2424,7 +2491,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		serverAPI := singbox.GetServerAPI()
 		if serverAPI == "" {
-			serverAPI = "http://138.124.103.99"
+			serverAPI = "https://api-warlink.max-alekseyev.com"
 		}
 		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Get(serverAPI + "/api/v1/market/gold")
@@ -3102,14 +3169,14 @@ func main() {
 			return
 		}
 		state.isInitializing = true
-		state.initTitle = "Тестирование профилей DPI..."
+		state.initTitle = "Калибровка сети и шлюзов..."
 		state.initPct = 5
-		state.initMsg = "Подготовка к тестированию..."
+		state.initMsg = "Подготовка к калибровке..."
 		state.mu.Unlock()
 
 		go func() {
 			winner, _, err := scanner.RunFullBenchmark(
-				deps.GetZapretDir(),
+				deps.GetCoreDir(),
 				func(curr, total int, presetName, logLine string) {
 					pct := 5 + int(float64(curr)/float64(total)*90.0)
 					state.mu.Lock()
@@ -4180,7 +4247,7 @@ func main() {
 	procShowWindow.Call(hwnd, uintptr(SW_HIDE))
 	appTray.Hide()
 
-	// 2. Full unconditional teardown of all network tunnels, processes and WinDivert drivers on application exit
+	// 2. Full unconditional teardown of all network tunnels and processes on application exit
 	state.eng.Shutdown()
 	deps.RestoreWindowsNetworkStack(appendLog)
 	deps.CloseGlobalJobObject()

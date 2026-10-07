@@ -57,7 +57,18 @@ func ApplyCompetitiveGamingTweaks(logFn func(string)) {
 		logFn("[SYS] Баг NLA устранен, аппаратная маркировка DSCP разблокирована в домашних сетях")
 	}
 
-	// 4. Configure NetQoS Policy for WARDOGS processes (DSCP 46 Expedited Forwarding)
+	// 4. Winsock Fast Datagram Send Threshold (Afd Parameters)
+	// Bypasses intermediate I/O request packet buffering for UDP datagrams under MTU
+	if err := setDwordValue(
+		registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\Afd\Parameters`,
+		"FastSendDatagramThreshold",
+		1500,
+	); err == nil {
+		logFn("[SYS] Включена прямая передача дейтаграмм Winsock (FastSendDatagramThreshold = 1500)")
+	}
+
+	// 5. Configure NetQoS Policy for WARDOGS and sing-box processes (DSCP 46 Expedited Forwarding)
 	go applyNetQoSPolicies(logFn)
 }
 
@@ -80,14 +91,16 @@ func setStringValue(root registry.Key, path, name, value string) error {
 }
 
 func applyNetQoSPolicies(logFn func(string)) {
-	// Register QoS policy for WARDOGS client and shipping executables to mark UDP packets with DSCP 46 (EF)
+	// Register QoS policy for WARDOGS client and sing-box tunnel daemon to mark UDP packets with DSCP 46 (EF)
 	psScript := `
 Get-NetQosPolicy -Name "WardogsQoS" -ErrorAction SilentlyContinue | Remove-NetQosPolicy -Confirm:$false -ErrorAction SilentlyContinue
 New-NetQosPolicy -Name "WardogsQoS" -AppPathNameMatchCondition "WardogsClient-Win64-Shipping.exe" -IPProtocolMatchCondition UDP -DSCPAction 46 -NetworkProfile All -ErrorAction SilentlyContinue | Out-Null
+Get-NetQosPolicy -Name "WarLinkTunnelQoS" -ErrorAction SilentlyContinue | Remove-NetQosPolicy -Confirm:$false -ErrorAction SilentlyContinue
+New-NetQosPolicy -Name "WarLinkTunnelQoS" -AppPathNameMatchCondition "sing-box.exe" -IPProtocolMatchCondition UDP -DSCPAction 46 -NetworkProfile All -ErrorAction SilentlyContinue | Out-Null
 `
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psScript)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if err := cmd.Run(); err == nil {
-		logFn("[SYS] Назначена политика качества обслуживания QoS (DSCP 46 / Expedited Forwarding для WARDOGS)")
+		logFn("[SYS] Назначена политика качества обслуживания QoS (DSCP 46 / Expedited Forwarding для WARDOGS и туннеля)")
 	}
 }

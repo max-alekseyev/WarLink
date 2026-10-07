@@ -1,16 +1,18 @@
 package deps
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows/registry"
-	"warlink/internal/embedded"
 	"warlink/internal/singbox"
 )
 
@@ -31,6 +33,15 @@ func GetCoreDir() string {
 		parentDir := filepath.Dir(dir)
 		if _, pErr := os.Stat(filepath.Join(parentDir, "warlink_core")); pErr == nil {
 			return filepath.Join(parentDir, "warlink_core")
+		}
+		if cwd, cErr := os.Getwd(); cErr == nil {
+			if _, wErr := os.Stat(filepath.Join(cwd, "warlink_core")); wErr == nil {
+				return filepath.Join(cwd, "warlink_core")
+			}
+			parentCwd := filepath.Dir(cwd)
+			if _, pwErr := os.Stat(filepath.Join(parentCwd, "warlink_core")); pwErr == nil {
+				return filepath.Join(parentCwd, "warlink_core")
+			}
 		}
 	}
 	return filepath.Join(dir, "warlink_core")
@@ -115,10 +126,12 @@ func RotateLogs() error {
 		}
 	}
 
-	// 4. Cap sizes of active logs
+	// 4. Clean legacy winws2.log if present
+	_ = os.Remove(filepath.Join(logsDir, "winws2.log"))
+
+	// 5. Cap sizes of active logs
 	logFiles := []string{
 		filepath.Join(logsDir, "singbox.log"),
-		filepath.Join(logsDir, "winws2.log"),
 		filepath.Join(logsDir, "game.log"),
 		filepath.Join(logsDir, "warlink.prev.log"),
 	}
@@ -200,114 +213,6 @@ func FetchWardogsGameLog() error {
 	return os.WriteFile(destLog, data, 0644)
 }
 
-func GetZapretDir() string {
-	return filepath.Join(GetCoreDir(), "zapret")
-}
-
-func HasZapret() bool {
-	zapretDir := GetZapretDir()
-	binFile := filepath.Join(zapretDir, "bin", "winws2.exe")
-	divertFile := filepath.Join(zapretDir, "bin", "WinDivert64.sys")
-	luaFile := filepath.Join(zapretDir, "lua", "zapret-lib.lua")
-	if _, err := os.Stat(binFile); err == nil {
-		if _, err := os.Stat(divertFile); err == nil {
-			if _, err := os.Stat(luaFile); err == nil {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-
-// RestoreIpsetIfNeeded checks if ipset-all.txt is corrupted/too small (like the 18-byte stub) and restores it.
-// Also ensures all required user list files exist so winws.exe doesn't abort.
-func RestoreIpsetIfNeeded(logFn func(string)) bool {
-	zapretDir := GetZapretDir()
-	listsDir := filepath.Join(zapretDir, "lists")
-	_ = os.MkdirAll(listsDir, 0755)
-
-	// Ensure user lists exist (fresh download from Flowseal doesn't include user files until service.bat runs)
-	userFiles := map[string]string{
-		"ipset-exclude-user.txt": "203.0.113.113/32\n",
-		"list-general-user.txt":  "domain.example.abc\n",
-		"list-exclude-user.txt":  "domain.example.abc\n",
-	}
-	for fname, defaultContent := range userFiles {
-		fpath := filepath.Join(listsDir, fname)
-		if _, err := os.Stat(fpath); os.IsNotExist(err) {
-			_ = os.WriteFile(fpath, []byte(defaultContent), 0644)
-			if logFn != nil {
-				logFn(fmt.Sprintf("[OK] Создан обязательный список: %s", fname))
-			}
-		}
-	}
-
-	ipsetPath := filepath.Join(listsDir, "ipset-all.txt")
-	info, err := os.Stat(ipsetPath)
-	if err != nil || info.Size() < 10000 { // less than 10KB means corrupted or stub
-		if data, readErr := embedded.AssetsFS.ReadFile("assets/lists/ipset-all.txt"); readErr == nil {
-			if logFn != nil {
-				logFn("[WARN] Обнаружен повреждённый ipset-all.txt. Восстановление из встроенных ресурсов...")
-			}
-			if writeErr := os.WriteFile(ipsetPath, data, 0644); writeErr == nil {
-				if logFn != nil {
-					logFn(fmt.Sprintf("[OK] ipset-all.txt успешно восстановлен (%d байт)", len(data)))
-				}
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// AddGatewayToZapretExclude ensures ONLY the active Stockholm gateway IP is placed in ipset-exclude-user.txt
-// so that WinDivert and winws never intercept or desync Hysteria UDP tunnel traffic.
-// Any previous / stale WarLink gateway IPs are safely replaced.
-func AddGatewayToZapretExclude(serverIP string) error {
-	serverIP = strings.TrimSpace(serverIP)
-	if serverIP == "" {
-		return nil
-	}
-	if strings.Contains(serverIP, ":") {
-		serverIP = strings.Split(serverIP, ":")[0]
-	}
-	zapretDir := GetZapretDir()
-	listsDir := filepath.Join(zapretDir, "lists")
-	_ = os.MkdirAll(listsDir, 0755)
-	excludePath := filepath.Join(listsDir, "ipset-exclude-user.txt")
-
-	content, err := os.ReadFile(excludePath)
-	var preservedLines []string
-	if err == nil {
-		isNextGateway := false
-		for _, line := range strings.Split(string(content), "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed == "" {
-				continue
-			}
-			if trimmed == "# warlink-gateway" {
-				isNextGateway = true
-				continue
-			}
-			if isNextGateway {
-				isNextGateway = false
-				continue
-			}
-			if strings.Contains(trimmed, "# warlink-gateway") {
-				continue
-			}
-			if trimmed == serverIP || trimmed == serverIP+"/32" {
-				continue
-			}
-			preservedLines = append(preservedLines, trimmed)
-		}
-	}
-	preservedLines = append(preservedLines, "# warlink-gateway", serverIP)
-	newContent := strings.Join(preservedLines, "\n") + "\n"
-	return os.WriteFile(excludePath, []byte(newContent), 0644)
-}
-
 // ResetLoopbackProxy checks if a broken local loopback proxy (ProxyEnable=1 with 127.0.0.1 or localhost)
 // was left behind by third-party VPN crashes, and resets it using the Windows registry API.
 func ResetLoopbackProxy(logFn func(string)) error {
@@ -342,10 +247,124 @@ func ResetLoopbackProxy(logFn func(string)) error {
 	return nil
 }
 
-// SanitizeStartupAndNetwork ensures any broken local loopback proxy or disabled WinDivert service is safely healed.
+// PurgeLegacyZapretArtifacts automatically purges any legacy winws, zapret, or WinDivert
+// files, services, drivers, and directories left behind by older versions of WarLink.
+func PurgeLegacyZapretArtifacts(logFn func(string)) {
+	coreDir := GetCoreDir()
+	logsDir := GetLogsDir()
+
+	// 1. Stop and remove leftover WinDivert driver services
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, svc := range []string{"WinDivert", "WinDivert14"} {
+		cStop := exec.CommandContext(ctx, "sc.exe", "stop", svc)
+		cStop.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = cStop.Run()
+
+		cDel := exec.CommandContext(ctx, "sc.exe", "delete", svc)
+		cDel.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = cDel.Run()
+	}
+
+	// 2. Kill any stale winws/zapret processes
+	for _, proc := range []string{"winws.exe", "winws2.exe", "zapret.exe"} {
+		cKill := exec.CommandContext(ctx, "taskkill.exe", "/F", "/IM", proc)
+		cKill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = cKill.Run()
+	}
+
+	candidateCoreDirs := []string{coreDir}
+	if cwd, err := os.Getwd(); err == nil {
+		d := cwd
+		for i := 0; i < 4; i++ {
+			cCore := filepath.Join(d, "warlink_core")
+			found := false
+			for _, existing := range candidateCoreDirs {
+				if strings.EqualFold(existing, cCore) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				candidateCoreDirs = append(candidateCoreDirs, cCore)
+			}
+			parent := filepath.Dir(d)
+			if parent == d {
+				break
+			}
+			d = parent
+		}
+	}
+
+	removedAny := false
+
+	// 3. Remove legacy files and directories from candidate core dirs
+	for _, cDir := range candidateCoreDirs {
+		legacyFiles := []string{
+			filepath.Join(cDir, "winws.exe"),
+			filepath.Join(cDir, "winws2.exe"),
+			filepath.Join(cDir, "zapret.exe"),
+			filepath.Join(cDir, "WinDivert.dll"),
+			filepath.Join(cDir, "WinDivert64.sys"),
+			filepath.Join(cDir, "WinDivert32.sys"),
+			filepath.Join(cDir, "hosts.txt"),
+			filepath.Join(cDir, "autohosts.txt"),
+			filepath.Join(cDir, "ipset.txt"),
+			filepath.Join(cDir, "zapret-discord.bat"),
+			filepath.Join(cDir, "zapret-general.bat"),
+			filepath.Join(cDir, "service_install.bat"),
+			filepath.Join(cDir, "service_remove.bat"),
+			filepath.Join(cDir, "zapret-discord.log"),
+			filepath.Join(cDir, "winws2.log"),
+			filepath.Join(cDir, "windivert.log"),
+			filepath.Join(logsDir, "winws2.log"),
+			filepath.Join(logsDir, "windivert.log"),
+			filepath.Join(logsDir, "zapret.log"),
+		}
+		for _, f := range legacyFiles {
+			if _, err := os.Stat(f); err == nil {
+				if rErr := os.Remove(f); rErr == nil {
+					removedAny = true
+				}
+			}
+		}
+
+		legacyDirs := []string{
+			filepath.Join(cDir, "zapret"),
+			filepath.Join(cDir, "zapret2"),
+			filepath.Join(cDir, "lists"),
+			filepath.Join(cDir, "bin"),
+			filepath.Join(cDir, "lua"),
+		}
+		for _, d := range legacyDirs {
+			if _, err := os.Stat(d); err == nil {
+				if rErr := os.RemoveAll(d); rErr == nil {
+					removedAny = true
+				}
+			}
+		}
+	}
+
+	// Also clean up leftover previous executable if updated in-place (.old)
+	if exe, err := os.Executable(); err == nil {
+		oldExe := exe + ".old"
+		if _, err := os.Stat(oldExe); err == nil {
+			if rErr := os.Remove(oldExe); rErr == nil {
+				removedAny = true
+			}
+		}
+	}
+
+	if removedAny && logFn != nil {
+		logFn("[OK] Устаревшие компоненты WinDivert/Zapret удалены (система очищена)")
+	}
+}
+
+// SanitizeStartupAndNetwork ensures any broken local loopback proxy is safely reset
+// and legacy DPI bypass artifacts are completely purged.
 func SanitizeStartupAndNetwork(logFn func(string)) {
 	_ = ResetLoopbackProxy(logFn)
-	HealWinDivertService(logFn)
+	PurgeLegacyZapretArtifacts(logFn)
 }
 
 // CheckInternetConnection tests if basic internet/DNS is reachable.
@@ -362,32 +381,6 @@ func CheckInternetConnection() bool {
 		return true
 	}
 	return false
-}
-
-// PrepareZapret ensures DPI desync components are unpacked from embedded assets into warlink_core/zapret.
-func PrepareZapret(logFn func(string)) error {
-	if HasZapret() {
-		if logFn != nil {
-			logFn("[OK] Компоненты десинхронизации готовы к работе")
-		}
-		return nil
-	}
-
-	_ = EnsureCoreDir()
-
-	if logFn != nil {
-		logFn("[INFO] Извлечение встроенных компонентов сетевого фильтра WinDivert / winws...")
-	}
-	if err := embedded.EnsureCoreFiles(GetZapretDir()); err != nil {
-		return fmt.Errorf("ошибка распаковки компонентов сетевого фильтра: %w", err)
-	}
-
-	RestoreIpsetIfNeeded(logFn)
-
-	if logFn != nil {
-		logFn("[OK] Сетевой фильтр успешно инициализирован в warlink_core")
-	}
-	return nil
 }
 
 // EnsureSingBoxFiles ensures sing-box.exe and wintun.dll are available in warlink_core/singbox.

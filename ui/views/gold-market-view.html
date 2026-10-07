@@ -2,6 +2,7 @@
 <div id="view-gold-market" class="details-view">
     <div class="details-header">
         <div style="display: flex; align-items: center; gap: 8px;">
+            <img src="assets/currency/gold.webp" alt="Gold" style="width: 18px; height: 18px; object-fit: contain;">
             <span class="details-title font-mono">ЗОЛОТООБМЕН</span>
             <span class="votes-badge" style="font-size: 10px; color: var(--text-muted); background: #181818; border: 1px solid #282828;">Сброс в 03:00 МСК</span>
         </div>
@@ -96,10 +97,7 @@
                 <div class="gold-conv-group">
                     <label class="gold-conv-label font-mono">Слитки золота</label>
                     <div class="gold-input-wrap">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
-                            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-                        </svg>
+                        <img src="assets/currency/gold.webp" alt="Gold" style="width: 15px; height: 15px; object-fit: contain; margin-left: 2px;">
                         <input type="number" id="gold-calc-bars" min="1" step="1" value="1" oninput="calculateGoldToCash()">
                     </div>
                 </div>

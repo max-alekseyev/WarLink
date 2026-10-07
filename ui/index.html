@@ -608,89 +608,149 @@
 <!-- VIEW: Settings Panel (Progressive Disclosure) -->
 <div id="view-details" class="details-view">
     <div class="details-header">
-        <span class="details-title">Параметры маршрутизации</span>
+        <span class="details-title font-mono">Настройки</span>
         <button class="details-close" onclick="toggleDetails(event)">Закрыть</button>
     </div>
 
+    <!-- Segmented Navigation Subtabs -->
+    <div class="settings-nav-tabs">
+        <button id="tab-btn-settings-general" class="settings-tab-btn active" onclick="switchSettingsTab('general', event)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span>Сеть и система</span>
+        </button>
+        <button id="tab-btn-settings-tweaks" class="settings-tab-btn" onclick="switchSettingsTab('tweaks', event)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+            <span>Твики</span>
+            <span class="tab-badge-accent font-mono">WARDOGS</span>
+        </button>
+    </div>
+
     <div class="details-content">
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">МАРШРУТИЗАЦИЯ И СЕТЬ</span>
-                <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
-            </div>
-            <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
-                <div class="privacy-info-text">
-                    WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
+        <!-- SUBTAB 1: General & Network -->
+        <div id="settings-panel-general" class="settings-tab-panel">
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">МАРШРУТИЗАЦИЯ И СЕТЬ</span>
+                    <button id="btn-privacy-info" class="btn-privacy-info" onclick="togglePrivacyInfo(event)" title="Справка о конфиденциальности данных">информация</button>
+                </div>
+                <div id="privacy-info-box" class="privacy-info-box" style="display: none;">
+                    <div class="privacy-info-text">
+                        WarLink обрабатывает исключительно деперсонализированные идентификаторы (хэш машины, анонимный номер аккаунта) и маскированные сетевые префиксы (/24) без сбора персональных данных, ФИО и телефонов.
+                    </div>
+                </div>
+                <div class="setting-row" style="margin-top: 6px;">
+                    <span class="setting-label">Выбор маршрута:</span>
+                    <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
+                        <option value="direct_moscow">Москва (Транзит, РФ)</option>
+                        <option value="direct_frankfurt">Франкфурт (Европа)</option>
+                        <option value="transit">Москва → Франкфурт</option>
+                    </select>
+                </div>
+                <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                    <span class="info-label">Описание:</span>
+                    <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
+                </div>
+                <div class="setting-info-row" style="margin-top: 6px;">
+                    <span class="info-label">Сетевой фильтр:</span>
+                    <span class="info-value">sing-box (Wintun TUN)</span>
+                </div>
+                <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
+                    <span class="info-label">Кэш авто-доменов:</span>
+                    <span style="display: flex; gap: 8px; align-items: center;">
+                        <span id="auto-hosts-count" class="info-value">0</span>
+                        <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
+                    </span>
                 </div>
             </div>
-            <div class="setting-row" style="margin-top: 6px;">
-                <span class="setting-label">Выбор маршрута:</span>
-                <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
-                    <option value="direct_moscow">Москва (Транзит, РФ)</option>
-                    <option value="direct_frankfurt">Франкфурт (Европа)</option>
-                    <option value="transit">Москва → Франкфурт</option>
-                </select>
-            </div>
-            <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                <span class="info-label">Описание:</span>
-                <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
-            </div>
-            <div class="setting-info-row" style="margin-top: 6px;">
-                <span class="info-label">Сетевой фильтр:</span>
-                <span class="info-value">WinDivert (Автономный режим)</span>
-            </div>
-            <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                <span class="info-label">Кэш авто-доменов:</span>
-                <span style="display: flex; gap: 8px; align-items: center;">
-                    <span id="auto-hosts-count" class="info-value">0</span>
-                    <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
-                </span>
-            </div>
-        </div>
 
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">ПРИВЯЗАННЫЕ УСТРОЙСТВА</span>
-                <button id="btn-settings-reset-devices" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие ПК</button>
-            </div>
-            <div class="setting-info-row">
-                <span class="info-label">Текущий ПК:</span>
-                <span class="info-value font-mono" style="color: var(--accent); font-weight:600;">активен</span>
-            </div>
-            <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                Отвязывает все старые сессии и лишние компьютеры от вашего аккаунта (лимит: 2 ПК на аккаунт).
-            </div>
-        </div>
-
-        <div class="setting-group">
-            <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
-            <div class="setting-row" style="margin-top: 6px;">
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                    <input type="checkbox" id="check-sound-effects" checked onchange="onToggleSoundEffects(this.checked)" style="accent-color: var(--action); cursor:pointer;">
-                    <span style="font-size: 11px; color: var(--text);">Звуковые сигналы депеш и системных отказов</span>
-                </label>
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">ПРИВЯЗАННЫЕ УСТРОЙСТВА</span>
+                    <button id="btn-settings-reset-devices" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="resetOtherDevices()" title="Отвязать все остальные ПК кроме текущего">сбросить другие ПК</button>
+                </div>
+                <div class="setting-info-row">
+                    <span class="info-label">Текущий ПК:</span>
+                    <span class="info-value font-mono" style="color: var(--accent); font-weight:600;">активен</span>
+                </div>
                 <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                    Тактические аудио-сигналы при поступлении уведомлений и ошибках сети.
+                    Отвязывает все старые сессии и лишние компьютеры от вашего аккаунта (лимит: 2 ПК на аккаунт).
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <span class="setting-group-title">ИНТЕРФЕЙС И ОПОВЕЩЕНИЯ</span>
+                <div class="setting-row" style="margin-top: 6px;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                        <input type="checkbox" id="check-sound-effects" checked onchange="onToggleSoundEffects(this.checked)" style="accent-color: var(--action); cursor:pointer;">
+                        <span style="font-size: 11px; color: var(--text);">Звуковые сигналы депеш и системных отказов</span>
+                    </label>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                        Тактические аудио-сигналы при поступлении уведомлений и ошибках сети.
+                    </div>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
+                    <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                        </svg>
+                        Мастер диагностики сети
+                    </button>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
+                    <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                    <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                    <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+                    <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                    <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
                 </div>
             </div>
         </div>
 
-        <div class="setting-group">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                    </svg>
-                    Мастер диагностики сети
-                </button>
-            </div>
-            <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
-                <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
-                <span style="color: var(--text-muted); font-size: 11px;">•</span>
-                <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
-                <span style="color: var(--text-muted); font-size: 11px;">•</span>
-                <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+        <!-- SUBTAB 2: Game Tweaks -->
+        <div id="settings-panel-tweaks" class="settings-tab-panel" style="display: none;">
+            <div class="setting-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <span class="setting-group-title" style="margin-bottom: 0;">WARDOGS</span>
+                        <span id="wardogs-shadows-badge" class="tweak-badge font-mono" style="font-size: 9px;">ПРОВЕРКА...</span>
+                    </div>
+                    <button type="button" class="btn-link" onclick="openWardogsConfigFolder()" title="Открыть папку GameUserSettings.ini" style="font-size: 11px; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        папка конфига
+                    </button>
+                </div>
+
+                <div class="tweak-row">
+                    <div class="tweak-info">
+                        <div class="tweak-title">Отключение теней</div>
+                        <div class="tweak-subtitle font-mono">sg.ShadowQuality=4 в GameUserSettings.ini (только для чтения)</div>
+                    </div>
+                    <div id="wardogs-shadows-switch" class="free-net-toggle tweak-switch" onclick="toggleWardogsShadows(event)" title="Включить / отключить тени">
+                        <div class="switch-pill">
+                            <div class="switch-thumb"></div>
+                        </div>
+                        <span id="wardogs-shadows-switch-label" class="tweak-switch-label">ВЫКЛ</span>
+                    </div>
+                </div>
+
+                <div id="wardogs-running-alert" class="tweak-alert-box" style="display: none; margin-top: 8px;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span>Игра запущена. Перезапустите WARDOGS для применения изменений.</span>
+                </div>
+
+                <div class="tweak-disclaimer-note">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span>Внимание: твики изменяют файлы конфигурации игры. Используйте на свой страх и риск.</span>
+                </div>
             </div>
         </div>
     </div>
@@ -1098,6 +1158,7 @@
 <div id="view-gold-market" class="details-view">
     <div class="details-header">
         <div style="display: flex; align-items: center; gap: 8px;">
+            <img src="assets/currency/gold.webp" alt="Gold" style="width: 18px; height: 18px; object-fit: contain;">
             <span class="details-title font-mono">ЗОЛОТООБМЕН</span>
             <span class="votes-badge" style="font-size: 10px; color: var(--text-muted); background: #181818; border: 1px solid #282828;">Сброс в 03:00 МСК</span>
         </div>
@@ -1192,10 +1253,7 @@
                 <div class="gold-conv-group">
                     <label class="gold-conv-label font-mono">Слитки золота</label>
                     <div class="gold-input-wrap">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
-                            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-                        </svg>
+                        <img src="assets/currency/gold.webp" alt="Gold" style="width: 15px; height: 15px; object-fit: contain; margin-left: 2px;">
                         <input type="number" id="gold-calc-bars" min="1" step="1" value="1" oninput="calculateGoldToCash()">
                     </div>
                 </div>
@@ -1453,186 +1511,258 @@
         <div class="modal-body">
             <!-- TAB 1: Автору на Boosty (Default & Prominent) -->
             <div id="donate-panel-boosty" class="boosty-panel">
-                <!-- 1. Special Project BF6 -->
-                <div class="boosty-spec-box">
-                    <div class="boosty-spec-header">
-                        <div class="boosty-spec-title-wrap">
-                            <span class="boosty-spec-badge font-mono">СПЕЦПРОЕКТ</span>
-                            <span class="boosty-spec-title">Battlefield 6 в WarLink</span>
-                        </div>
-                        <div class="boosty-spec-price font-mono">
-                            <span id="donate-bf6-target" class="price-active">1 600 ₽</span>
-                            <span class="price-old">3 200 ₽</span>
-                        </div>
-                    </div>
-                    <div class="boosty-spec-desc">
-                        Сбор на копию игры для снятия сетевых дампов и настройки.
-                    </div>
-                    <div class="boosty-bar-wrap">
-                        <div class="boosty-bar-track">
-                            <div id="donate-bf6-fill" class="boosty-bar-fill" style="width: 0%;"></div>
-                        </div>
-                        <span id="donate-bf6-text" class="boosty-bar-pct font-mono">0% (0 / 1 600 ₽)</span>
-                    </div>
-                    <div class="boosty-spec-btns font-mono">
-                        <button type="button" class="btn-boosty-action" onclick="openBoostyLink('https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link')">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                            <span>Поддержать сбор на BF6</span>
-                        </button>
-                        <button type="button" class="btn-steam-action" onclick="openSteamLink('https://steamcommunity.com/id/MaksimPaladin/')">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.811c0 .052.005.105.005.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 14.819C1.903 20.099 6.702 24 12.021 24c6.627 0 12-5.373 12-12s-5.373-12-12.042-12zm4.463 11.891c-1.638 0-2.969-1.332-2.969-2.97 0-1.638 1.331-2.97 2.969-2.97 1.637 0 2.969 1.332 2.969 2.97 0 1.638-1.332 2.97-2.969 2.97zm-7.616 5.867c-1.023 0-1.854-.83-1.854-1.854 0-.46.168-.881.449-1.209l3.076 1.272c-.104.996-.902 1.791-1.671 1.791z"/></svg>
-                            <span>Подарить в Steam</span>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 2. Main Goal + One-Time Donate -->
-                <div class="boosty-main-goal-box">
-                    <div class="boosty-goal-top">
-                        <div class="boosty-goal-info">
-                            <span class="badge-dim font-mono">ЦЕЛЬ АВТОРА</span>
-                            <span id="boosty-goal-title" class="boosty-goal-name">WarLink | Поддержка дальнейшей разработки</span>
-                        </div>
-                        <span id="boosty-goal-target" class="boosty-goal-target font-mono">100 000 ₽</span>
-                    </div>
-                    <div class="boosty-goal-bottom">
-                        <div class="boosty-bar-wrap" style="flex: 1;">
-                            <div class="boosty-bar-track">
-                                <div id="boosty-goal-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                <div id="donate-panel-boosty-content" style="width: 100%; display: flex; flex-direction: column; gap: 6px;">
+                    <!-- 1. Special Project BF6 -->
+                    <div class="boosty-spec-box">
+                        <div class="boosty-spec-header">
+                            <div class="boosty-spec-title-wrap">
+                                <span class="boosty-spec-badge font-mono">СПЕЦПРОЕКТ</span>
+                                <span class="boosty-spec-title">Battlefield 6 в WarLink</span>
                             </div>
-                            <span id="boosty-goal-text" class="boosty-bar-pct font-mono">0% (0 / 100 000 ₽)</span>
+                            <div class="boosty-spec-price font-mono">
+                                <span id="donate-bf6-target" class="price-active">1 600 ₽</span>
+                                <span class="price-old">3 200 ₽</span>
+                            </div>
                         </div>
-                        <button type="button" class="btn-boosty-donate-now font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                            <span>ЗАДОНАТИТЬ</span>
-                        </button>
+                        <div class="boosty-spec-desc">
+                            Сбор на копию игры для снятия сетевых дампов и настройки.
+                        </div>
+                        <div class="boosty-bar-wrap">
+                            <div class="boosty-bar-track">
+                                <div id="donate-bf6-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                            </div>
+                            <span id="donate-bf6-text" class="boosty-bar-pct font-mono">0% (0 / 1 600 ₽)</span>
+                        </div>
+                        <div class="boosty-spec-btns font-mono">
+                            <button type="button" class="btn-boosty-action" onclick="openBoostyLink('https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link')">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                                <span>Поддержать сбор на BF6</span>
+                            </button>
+                            <button type="button" class="btn-steam-action" onclick="openSteamLink('https://steamcommunity.com/id/MaksimPaladin/')">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.811c0 .052.005.105.005.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 14.819C1.903 20.099 6.702 24 12.021 24c6.627 0 12-5.373 12-12s-5.373-12-12.042-12zm4.463 11.891c-1.638 0-2.969-1.332-2.969-2.97 0-1.638 1.331-2.97 2.969-2.97 1.637 0 2.969 1.332 2.969 2.97 0 1.638-1.332 2.97-2.969 2.97zm-7.616 5.867c-1.023 0-1.854-.83-1.854-1.854 0-.46.168-.881.449-1.209l3.076 1.272c-.104.996-.902 1.791-1.671 1.791z"/></svg>
+                                <span>Подарить в Steam</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 2. Main Goal + One-Time Donate -->
+                    <div class="boosty-main-goal-box">
+                        <div class="boosty-goal-top">
+                            <div class="boosty-goal-info">
+                                <span class="badge-dim font-mono">ЦЕЛЬ АВТОРА</span>
+                                <span id="boosty-goal-title" class="boosty-goal-name">WarLink | Поддержка дальнейшей разработки</span>
+                            </div>
+                            <span id="boosty-goal-target" class="boosty-goal-target font-mono">100 000 ₽</span>
+                        </div>
+                        <div class="boosty-goal-bottom">
+                            <div class="boosty-bar-wrap" style="flex: 1;">
+                                <div class="boosty-bar-track">
+                                    <div id="boosty-goal-fill" class="boosty-bar-fill" style="width: 0%;"></div>
+                                </div>
+                                <span id="boosty-goal-text" class="boosty-bar-pct font-mono">0% (0 / 100 000 ₽)</span>
+                            </div>
+                            <button type="button" class="btn-boosty-donate-now font-mono" onclick="openBoostyLink('https://boosty.to/pld1n/donate')">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                                <span>ЗАДОНАТИТЬ</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 3. Subscriptions Row -->
+                    <div class="boosty-subs-wrap">
+                        <div class="boosty-subs-label font-mono">ЕЖЕМЕСЯЧНЫЕ ПОДПИСКИ НА РАЗРАБОТКУ:</div>
+                        <div class="boosty-subs-row font-mono">
+                            <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link')">
+                                <span class="sub-card-rank">Рекрут</span>
+                                <span class="sub-card-cost">100 ₽<span class="sub-per">/мес</span></span>
+                            </div>
+                            <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link')">
+                                <span class="sub-card-rank">Оперативник</span>
+                                <span class="sub-card-cost">500 ₽<span class="sub-per">/мес</span></span>
+                            </div>
+                            <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link')">
+                                <span class="sub-card-rank">Ветеран</span>
+                                <span class="sub-card-cost">1 000 ₽<span class="sub-per">/мес</span></span>
+                            </div>
+                            <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link')">
+                                <span class="sub-card-rank">Генерал</span>
+                                <span class="sub-card-cost">5 000 ₽<span class="sub-per">/мес</span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 4. Footer Note -->
+                    <div class="boosty-footer-hint font-mono">
+                        Благодарю за поддержку! Донат на Boosty идет напрямую автору.
                     </div>
                 </div>
 
-                <!-- 3. Subscriptions Row -->
-                <div class="boosty-subs-wrap">
-                    <div class="boosty-subs-label font-mono">ЕЖЕМЕСЯЧНЫЕ ПОДПИСКИ НА РАЗРАБОТКУ:</div>
-                    <div class="boosty-subs-row font-mono">
-                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link')">
-                            <span class="sub-card-rank">Рекрут</span>
-                            <span class="sub-card-cost">100 ₽<span class="sub-per">/мес</span></span>
-                        </div>
-                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link')">
-                            <span class="sub-card-rank">Оперативник</span>
-                            <span class="sub-card-cost">500 ₽<span class="sub-per">/мес</span></span>
-                        </div>
-                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link')">
-                            <span class="sub-card-rank">Ветеран</span>
-                            <span class="sub-card-cost">1 000 ₽<span class="sub-per">/мес</span></span>
-                        </div>
-                        <div class="boosty-sub-card" onclick="openBoostyLink('https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link')">
-                            <span class="sub-card-rank">Генерал</span>
-                            <span class="sub-card-cost">5 000 ₽<span class="sub-per">/мес</span></span>
-                        </div>
+                <!-- STUB: Boosty на паузе -->
+                <div id="donate-stub-boosty" class="donate-stub-card" style="display: none;">
+                    <div class="donate-stub-badge-row">
+                        <span class="donate-stub-badge font-mono">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                            ПРИОРИТЕТ СБОРА // СЕРВЕР СБП
+                        </span>
                     </div>
-                </div>
-
-                <!-- 4. Footer Note -->
-                <div class="boosty-footer-hint font-mono">
-                    Благодарю за поддержку! Донат на Boosty идет напрямую автору.
+                    <div class="donate-stub-title">Сбор на платформе Boosty временно приостановлен</div>
+                    <div class="donate-stub-desc">
+                        В настоящий момент финансовая поддержка проекта переведена на прямое финансирование серверного пула через СБП и банковские карты РФ.
+                    </div>
+                    <div class="donate-stub-reassurance">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Оплата по QR-коду СБП через любое банковское приложение</span>
+                    </div>
+                    <button type="button" class="btn-donate-stub-redirect font-mono" onclick="switchDonateTab('server')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                        <span>ПЕРЕЙТИ К ОПЛАТЕ СЕРВЕРА (СБП)</span>
+                    </button>
                 </div>
             </div>
 
             <!-- TAB 2: Серверный шлюз (СБП, Карты) -->
             <div id="donate-panel-server" style="display: none;">
-                <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 2px; line-height: 1.3;">
-                    Софинансирование серверной инфраструктуры сообщества.
-                </div>
-                <div class="donate-perks-box">
-                    <div class="donate-perk-item">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                        <span>100 ₽ = 30 дней активного статуса «Спонсор»</span>
+                <div id="donate-panel-server-content">
+                    <div style="font-size: 10px; color: var(--text-muted); margin-bottom: 2px; line-height: 1.3;">
+                        Софинансирование серверной инфраструктуры сообщества.
                     </div>
-                    <div class="donate-perk-item">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                        <span>Выделенный слот шлюза без очередей</span>
+                    <div class="donate-perks-box">
+                        <div class="donate-perk-item">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            <span>100 ₽ = 30 дней активного статуса «Спонсор»</span>
+                        </div>
+                        <div class="donate-perk-item">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            <span>Выделенный слот шлюза без очередей</span>
+                        </div>
+                        <div class="donate-perk-item">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                            <span>Никнейм и аватарка на Доске почёта спонсоров</span>
+                        </div>
                     </div>
-                    <div class="donate-perk-item">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                        <span>Никнейм и аватарка на Доске почёта спонсоров</span>
-                    </div>
-                </div>
 
-                <div class="form-group" style="margin-top: 4px;">
-                    <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Способ оплаты:</label>
-                    <div class="donate-method-row">
-                        <button type="button" class="method-chip active" id="chip-method-sbp" onclick="selectDonateMethod('sbp')">
-                            <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect width="6" height="6" x="3" y="3" rx="1"/>
-                                <rect width="6" height="6" x="15" y="3" rx="1"/>
-                                <rect width="6" height="6" x="3" y="15" rx="1"/>
-                                <path d="M15 15h2v2h-2zM19 15h2v2h-2zM15 19h2v2h-2zM19 19h2v2h-2z"/>
-                            </svg>
-                            <span>СБП (QR-код)</span>
+                    <div class="form-group" style="margin-top: 4px;">
+                        <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Способ оплаты:</label>
+                        <div class="donate-method-row">
+                            <button type="button" class="method-chip active" id="chip-method-sbp" onclick="selectDonateMethod('sbp')">
+                                <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect width="6" height="6" x="3" y="3" rx="1"/>
+                                    <rect width="6" height="6" x="15" y="3" rx="1"/>
+                                    <rect width="6" height="6" x="3" y="15" rx="1"/>
+                                    <path d="M15 15h2v2h-2zM19 15h2v2h-2zM15 19h2v2h-2zM19 19h2v2h-2z"/>
+                                </svg>
+                                <span>СБП (QR-код)</span>
+                            </button>
+                            <button type="button" class="method-chip" id="chip-method-card" onclick="selectDonateMethod('card')">
+                                <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect width="20" height="14" x="2" y="5" rx="2"/>
+                                    <line x1="2" x2="22" y1="10" y2="10"/>
+                                </svg>
+                                <span>Банковская карта РФ</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 4px;">
+                        <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Сумма пожертвования:</label>
+                        <div id="donate-presets-container" class="donate-preset-row">
+                            <button type="button" class="preset-chip active" onclick="selectDonatePreset(100)">100 ₽</button>
+                            <button type="button" class="preset-chip" onclick="selectDonatePreset(200)">200 ₽</button>
+                            <button type="button" class="preset-chip" onclick="selectDonatePreset(500)">500 ₽</button>
+                            <button type="button" class="preset-chip" onclick="selectDonatePreset(1000)">1000 ₽</button>
+                        </div>
+                        <div class="donate-input-wrap">
+                            <input type="number" id="input-donate-custom" class="form-input donate-custom-input" min="100" max="50000" step="50" value="100" oninput="onCustomDonateInput(this.value)">
+                            <span class="donate-currency-badge">₽</span>
+                        </div>
+                        <div id="donate-method-hint" style="font-size: 9px; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">
+                            Комиссия 1% • Моментальная оплата по QR-коду СБП через любое банковское приложение
+                        </div>
+                    </div>
+
+                    <div id="donate-calc-summary" class="donate-calc-summary">
+                        Статус «Спонсор» на 30 дней
+                    </div>
+
+                    <div style="margin-top: 6px;">
+                        <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 28px; font-size: 11px;" onclick="submitCustomDonation()">
+                            Поддержать сервер
                         </button>
-                        <button type="button" class="method-chip" id="chip-method-card" onclick="selectDonateMethod('card')">
-                            <svg class="method-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect width="20" height="14" x="2" y="5" rx="2"/>
-                                <line x1="2" x2="22" y1="10" y2="10"/>
-                            </svg>
-                            <span>Банковская карта РФ</span>
-                        </button>
                     </div>
                 </div>
 
-                <div class="form-group" style="margin-top: 4px;">
-                    <label class="form-label" style="font-size: 10px; margin-bottom: 2px;">Сумма пожертвования:</label>
-                    <div id="donate-presets-container" class="donate-preset-row">
-                        <button type="button" class="preset-chip active" onclick="selectDonatePreset(100)">100 ₽</button>
-                        <button type="button" class="preset-chip" onclick="selectDonatePreset(200)">200 ₽</button>
-                        <button type="button" class="preset-chip" onclick="selectDonatePreset(500)">500 ₽</button>
-                        <button type="button" class="preset-chip" onclick="selectDonatePreset(1000)">1000 ₽</button>
+                <!-- STUB: Приоритет Boosty (когда СБП выключен) -->
+                <div id="donate-stub-server" class="donate-stub-card" style="display: none;">
+                    <div class="donate-stub-badge-row">
+                        <span class="donate-stub-badge font-mono">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            ПРИОРИТЕТ СБОРА // BOOSTY
+                        </span>
                     </div>
-                    <div class="donate-input-wrap">
-                        <input type="number" id="input-donate-custom" class="form-input donate-custom-input" min="100" max="50000" step="50" value="100" oninput="onCustomDonateInput(this.value)">
-                        <span class="donate-currency-badge">₽</span>
+                    <div class="donate-stub-title">Прием пожертвований переведен на Boosty</div>
+                    <div class="donate-stub-desc">
+                        Сейчас сбор ведется через страницу Boosty: это позволяет автору гибко распределять бюджет на развитие проекта, серверы и разработку, а не только накапливать средства на балансе одного хостинг-провайдера.
                     </div>
-                    <div id="donate-method-hint" style="font-size: 9px; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">
-                        Комиссия 1% • Моментальная оплата по QR-коду СБП через любое банковское приложение
+                    <div class="donate-stub-reassurance">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Прямая поддержка автора и проекта на официальной странице сбора</span>
                     </div>
-                </div>
-
-                <div id="donate-calc-summary" class="donate-calc-summary">
-                    Статус «Спонсор» на 30 дней
-                </div>
-
-                <div style="margin-top: 6px;">
-                    <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 28px; font-size: 11px;" onclick="submitCustomDonation()">
-                        Поддержать сервер
+                    <button type="button" class="btn-donate-stub-redirect font-mono" onclick="switchDonateTab('boosty')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                        <span>ПЕРЕЙТИ К СБОРУ НА BOOSTY</span>
                     </button>
                 </div>
             </div>
 
             <!-- TAB 3: USDT (TRC20) Crypto Donate -->
             <div id="donate-panel-crypto" class="crypto-panel" style="display: none;">
-                <div class="crypto-network-header font-mono">
-                    <span class="crypto-network-badge">TRON NETWORK (TRC20)</span>
-                    <span class="crypto-token-badge">Tether USD (USDT)</span>
-                </div>
+                <div id="donate-panel-crypto-content" style="width: 100%; display: flex; flex-direction: column; gap: 6px;">
+                    <div class="crypto-network-header font-mono">
+                        <span class="crypto-network-badge">TRON NETWORK (TRC20)</span>
+                        <span class="crypto-token-badge">Tether USD (USDT)</span>
+                    </div>
 
-                <div class="crypto-qr-card">
-                    <div id="crypto-qr-container"></div>
-                </div>
+                    <div class="crypto-qr-card" style="align-self: center; width: fit-content; margin: 2px auto;">
+                        <div id="crypto-qr-container"></div>
+                    </div>
 
-                <div class="crypto-addr-box font-mono">
-                    <label class="crypto-addr-label">Адрес кошелька TRC20 для пополнения:</label>
-                    <div class="crypto-addr-row">
-                        <input type="text" id="input-crypto-addr" class="crypto-addr-input" value="TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM" readonly onclick="this.select()">
-                        <button type="button" id="btn-copy-crypto-addr" class="btn-copy-crypto" onclick="copyCryptoAddress()">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-                            <span>Скопировать</span>
-                        </button>
+                    <div class="crypto-addr-box font-mono">
+                        <label class="crypto-addr-label">Адрес кошелька TRC20 для пополнения:</label>
+                        <div class="crypto-addr-row">
+                            <input type="text" id="input-crypto-addr" class="crypto-addr-input" value="TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM" readonly onclick="this.select()">
+                            <button type="button" id="btn-copy-crypto-addr" class="btn-copy-crypto" onclick="copyCryptoAddress()">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                                <span>Скопировать</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="crypto-warning-box font-mono">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <span>Отправляйте только USDT через сеть TRC20 (Tron). Перевод других токенов или отправка через иные сети приведет к безвозвратной потере средств.</span>
                     </div>
                 </div>
 
-                <div class="crypto-warning-box font-mono">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                    <span>Отправляйте только USDT через сеть TRC20 (Tron). Перевод других токенов или отправка через иные сети приведет к безвозвратной потере средств.</span>
+                <!-- STUB: Приоритет Boosty (когда крипта выключена) -->
+                <div id="donate-stub-crypto" class="donate-stub-card" style="display: none;">
+                    <div class="donate-stub-badge-row">
+                        <span class="donate-stub-badge font-mono">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            ПРИОРИТЕТ СБОРА // BOOSTY
+                        </span>
+                    </div>
+                    <div class="donate-stub-title">Криптовалютные переводы временно отключены</div>
+                    <div class="donate-stub-desc">
+                        Прием переводов через USDT TRC20 временно приостановлен. Вы можете поддержать проект через страницу сбора на Boosty.
+                    </div>
+                    <div class="donate-stub-reassurance">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                        <span>Поддержка автора через страницу сбора на Boosty</span>
+                    </div>
+                    <button type="button" class="btn-donate-stub-redirect font-mono" onclick="switchDonateTab('boosty')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                        <span>ПЕРЕЙТИ К СБОРУ НА BOOSTY</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -1961,7 +2091,7 @@
             <div id="tb-status-banner" class="info-card" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-left: 3px solid var(--border-base);">
                 <div style="display: flex; flex-direction: column; gap: 2px;">
                     <span id="tb-banner-title" class="font-mono" style="font-size: 12px; font-weight: 700; color: var(--text-bright);">Проверка сетевого стека...</span>
-                    <span id="tb-banner-sub" style="font-size: 11px; color: var(--text-muted);">Тестирование WinDivert, Wintun, DNS и игровых шлюзов</span>
+                    <span id="tb-banner-sub" style="font-size: 11px; color: var(--text-muted);">Тестирование Wintun, DNS и игровых шлюзов</span>
                 </div>
                 <button id="btn-tb-recheck" class="btn btn-secondary btn-sm font-mono" onclick="runTroubleshooterDiagnostics()">
                     <span>Повторить</span>

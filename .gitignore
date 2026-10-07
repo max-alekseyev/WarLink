@@ -48,6 +48,8 @@ scripts/capture_*.py
 *.pcapng
 *.cap
 *.dmp
+*.etl
+captures/
 *.log
 
 # Databases and Local Caches

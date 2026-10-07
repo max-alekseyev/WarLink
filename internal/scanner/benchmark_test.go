@@ -1,11 +1,8 @@
 package scanner
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-	"warlink/internal/desync"
 )
 
 func TestFormatResultLine(t *testing.T) {
@@ -46,17 +43,12 @@ func TestBenchmarkTargets_NonEmpty(t *testing.T) {
 	}
 }
 
-func TestPreset_Execution(t *testing.T) {
-	zapretDir := filepath.Join("..", "..", "warlink_core", "zapret")
-	presets := desync.BuiltinPresets
-	if len(presets) == 0 {
-		t.Fatal("no builtin presets")
+func TestRunFullBenchmark(t *testing.T) {
+	winner, score, err := RunFullBenchmark("", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	p := &presets[0]
-	t.Logf("Testing preset: %s", p.Name)
-	args := p.BuildModularArgs(zapretDir, true)
-	t.Logf("Args count: %d", len(args))
-	start := time.Now()
-	results := probeAllEndpoints(BenchmarkTargets)
-	t.Logf("Got %d results in %v", len(results), time.Since(start))
+	if winner == "" || score == nil {
+		t.Fatalf("expected winner and score")
+	}
 }

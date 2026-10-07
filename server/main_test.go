@@ -135,7 +135,7 @@ func TestHandleSingBoxConfigSuccess(t *testing.T) {
 	}
 
 	hasMatchTunnel := false
-	hasSDRDirect := false
+	hasWardogsTunnel := false
 	for _, rawRule := range rules {
 		rule, ok := rawRule.(map[string]interface{})
 		if !ok {
@@ -149,12 +149,10 @@ func TestHandleSingBoxConfigSuccess(t *testing.T) {
 					}
 				}
 			}
-		}
-		if rule["outbound"] == "direct" {
-			if portRanges, ok := rule["port_range"].([]interface{}); ok {
-				for _, pr := range portRanges {
-					if pr == "27000:27200" {
-						hasSDRDirect = true
+			if processes, ok := rule["process_name"].([]interface{}); ok {
+				for _, proc := range processes {
+					if proc == "WardogsClient-Win64-Shipping.exe" {
+						hasWardogsTunnel = true
 					}
 				}
 			}
@@ -164,8 +162,8 @@ func TestHandleSingBoxConfigSuccess(t *testing.T) {
 	if !hasMatchTunnel {
 		t.Errorf("expected hy2-gateway tunnel rule for UDP 4000:4500")
 	}
-	if !hasSDRDirect {
-		t.Errorf("expected direct rule for UDP 27000:27200")
+	if !hasWardogsTunnel {
+		t.Errorf("expected hy2-gateway tunnel rule for WardogsClient-Win64-Shipping.exe")
 	}
 }
 
@@ -495,7 +493,7 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	beacon := TelemetryBeaconPayload{
 		DeviceID:           "dev-123",
 		AccountNumber:      "1111-2222-3333-4444",
-		AppVersion:         "v2.2.2",
+		AppVersion:         "v2.2.3",
 		RouteMode:          "transit",
 		Status:             "beacon",
 		PingMoscowMs:       24,
