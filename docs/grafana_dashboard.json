@@ -78,7 +78,7 @@
       "title": "Служба поддержки (Тикеты)",
       "tooltip": "Разбор инцидентов, журналов сбоев и отправка ответов игрокам",
       "type": "link",
-      "url": "https://hub-warlink.max-alekseyev.com/admin/content/support_tickets"
+      "url": "https://hub-warlink.max-alekseyev.com/#view-support"
     }
   ],
   "liveNow": false,
@@ -1114,8 +1114,8 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Открыть спонсора в Directus",
-                    "url": "https://hub-warlink.max-alekseyev.com/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "title": "Открыть аккаунт в Control Plane",
+                    "url": "https://hub-warlink.max-alekseyev.com/#view-monetization?account=${__data.fields['Номер аккаунта']}",
                     "targetBlank": true
                   }
                 ]
@@ -4695,8 +4695,8 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Открыть профиль игрока в Directus",
-                    "url": "https://hub-warlink.max-alekseyev.com/admin/content/accounts/${__data.fields['Номер аккаунта']}",
+                    "title": "Открыть профиль игрока в Control Plane",
+                    "url": "https://hub-warlink.max-alekseyev.com/#view-monetization?account=${__data.fields['Номер аккаунта']}",
                     "targetBlank": true
                   }
                 ]

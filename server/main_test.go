@@ -618,8 +618,8 @@ func TestCommunityGoalsCluster(t *testing.T) {
 	if bf6.ID != "bf6" {
 		t.Errorf("expected ID 'bf6', got '%s'", bf6.ID)
 	}
-	if bf6.TargetAmountRub != 1600 {
-		t.Errorf("expected discount price 1600 RUB, got %d", bf6.TargetAmountRub)
+	if bf6.TargetAmountRub != 3200 {
+		t.Errorf("expected target price 3200 RUB, got %d", bf6.TargetAmountRub)
 	}
 	if bf6.BasePriceRub != 3200 {
 		t.Errorf("expected base price 3200 RUB, got %d", bf6.BasePriceRub)
@@ -629,6 +629,14 @@ func TestCommunityGoalsCluster(t *testing.T) {
 	}
 	if !strings.Contains(bf6.SteamURL, "MaksimPaladin") {
 		t.Errorf("expected Steam profile link, got '%s'", bf6.SteamURL)
+	}
+
+	// 4. Donate Config checks
+	if goals.DonateConfig.CryptoUSDTTRC20Address == "" {
+		t.Errorf("expected non-empty crypto address")
+	}
+	if goals.DonateConfig.DonateMinAmountRub <= 0 {
+		t.Errorf("expected positive donate min amount")
 	}
 }
 

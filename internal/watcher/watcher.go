@@ -86,6 +86,7 @@ var BuiltinAliases = map[string][]string{
 	"1808500": {"pioneergame.exe", "pioneergame-win64-shipping.exe", "discovery.exe", "discovery-win64-shipping.exe", "arcraiders.exe", "arcraiders-win64-shipping.exe"},
 	"2016590": {"dungeoncrawler.exe", "dungeoncrawler-win64-shipping.exe", "tavern.exe", "taverndart.exe", "tavernworker.exe", "blacksmith.exe"},
 	"3393110": {"aion2.exe", "aion2-win64-shipping.exe"},
+	"2406770": {"bodycam.exe", "bodycam-win64-shipping.exe"},
 }
 
 // NormalizeGameToken strips common game engine suffixes to find the root name
@@ -164,6 +165,22 @@ func GetSteamLibraryPaths() []string {
 		result = append(result, p)
 	}
 	return result
+}
+
+// IsSteamGameInstalled checks if steamapps/appmanifest_<appid>.acf exists in any discovered Steam library
+func IsSteamGameInstalled(steamAppID string) bool {
+	steamAppID = strings.TrimSpace(steamAppID)
+	if steamAppID == "" {
+		return false
+	}
+	manifestName := "appmanifest_" + steamAppID + ".acf"
+	for _, lib := range GetSteamLibraryPaths() {
+		manifestPath := filepath.Join(lib, "steamapps", manifestName)
+		if fi, err := os.Stat(manifestPath); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // FindSteamGameExecutables reads steamapps/appmanifest_<appid>.acf and extracts real executables

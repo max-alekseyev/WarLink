@@ -417,9 +417,11 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			procSet[pClean] = struct{}{}
 		}
 	}
-	// Always include Discord and Telegram processes into tunnel
-	for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
-		procSet[dp] = struct{}{}
+	// Include Discord and Telegram processes into tunnel only when web services enabled
+	if includeWebServices {
+		for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
+			procSet[dp] = struct{}{}
+		}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -610,29 +612,31 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		DomainSuffix: quicRejectDomains,
 	})
 
-	// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
-	rules = append(rules,
-		SingBoxRouteRule{
-			DomainSuffix: YouTubeDomains,
-			Outbound:     "hy2-gateway",
-		},
-		SingBoxRouteRule{
-			DomainSuffix: DiscordDomains,
-			Outbound:     "hy2-gateway",
-		},
-		SingBoxRouteRule{
-			DomainSuffix: SocialMessengerDomains,
-			Outbound:     "hy2-gateway",
-		},
-		SingBoxRouteRule{
-			DomainSuffix: BlockedServiceDomains,
-			Outbound:     "hy2-gateway",
-		},
-		SingBoxRouteRule{
-			IPCIDR:   BlockedServiceIPs,
-			Outbound: "hy2-gateway",
-		},
-	)
+	if includeWebServices {
+		// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+		rules = append(rules,
+			SingBoxRouteRule{
+				DomainSuffix: YouTubeDomains,
+				Outbound:     "hy2-gateway",
+			},
+			SingBoxRouteRule{
+				DomainSuffix: DiscordDomains,
+				Outbound:     "hy2-gateway",
+			},
+			SingBoxRouteRule{
+				DomainSuffix: SocialMessengerDomains,
+				Outbound:     "hy2-gateway",
+			},
+			SingBoxRouteRule{
+				DomainSuffix: BlockedServiceDomains,
+				Outbound:     "hy2-gateway",
+			},
+			SingBoxRouteRule{
+				IPCIDR:   BlockedServiceIPs,
+				Outbound: "hy2-gateway",
+			},
+		)
+	}
 
 	// Route profile domains
 	if len(allDomains) > 0 {
@@ -657,21 +661,23 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
-	rules = append(rules,
-		SingBoxRouteRule{
-			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
-			Network:     "udp",
-			Port:        []int{3478},
-			Outbound:    "hy2-gateway",
-		},
-		SingBoxRouteRule{
-			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
-			Network:     "udp",
-			PortRange:   []string{"19294:19344", "50000:65535"},
-			Outbound:    "hy2-gateway",
-		},
-	)
+	if includeWebServices {
+		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
+		rules = append(rules,
+			SingBoxRouteRule{
+				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+				Network:     "udp",
+				Port:        []int{3478},
+				Outbound:    "hy2-gateway",
+			},
+			SingBoxRouteRule{
+				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+				Network:     "udp",
+				PortRange:   []string{"19294:19344", "50000:65535"},
+				Outbound:    "hy2-gateway",
+			},
+		)
+	}
 
 	// Default fallback to direct
 	rules = append(rules, SingBoxRouteRule{
@@ -697,15 +703,18 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		DomainSuffix: DynamoDBRegionProbeDomains,
 		Server:       "dns-local",
 	})
-	// 3. Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP
-	targetTunnelDomains := append([]string{}, YouTubeDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
-	dnsRules = append(dnsRules, SingBoxDNSRule{
-		DomainSuffix: targetTunnelDomains,
-		Server:       "dns-fakeip",
-	})
+	// 3. Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP only when web services enabled
+	var targetTunnelDomains []string
+	if includeWebServices {
+		targetTunnelDomains = append(targetTunnelDomains, YouTubeDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
+		dnsRules = append(dnsRules, SingBoxDNSRule{
+			DomainSuffix: targetTunnelDomains,
+			Server:       "dns-fakeip",
+		})
+	}
 	// 4. Vivox voice chat -> dns-remote (resolves real IP of voice servers via 1.1.1.1 through tunnel)
 	dnsRules = append(dnsRules, SingBoxDNSRule{
 		DomainSuffix: []string{"vivox.com"},
@@ -747,14 +756,6 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		dnsRules = append(dnsRules, SingBoxDNSRule{
 			DomainSuffix: remoteGameDomains,
 			Server:       "dns-remote",
-		})
-	}
-
-	// 8. ONLY web browsing bypass services (YouTube, Discord web, Social/Messengers) resolve via FakeIP
-	if len(targetTunnelDomains) > 0 {
-		dnsRules = append(dnsRules, SingBoxDNSRule{
-			DomainSuffix: targetTunnelDomains,
-			Server:       "dns-fakeip",
 		})
 	}
 
@@ -830,7 +831,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				Address:             []string{"172.28.192.1/30"},
 				MTU:                 1320,
 				AutoRoute:           true,
-				StrictRoute:         true,
+				StrictRoute:         false,
 				Stack:               "mixed",
 				RouteExcludeAddress: routeExclude,
 				UDPTimeout:          "3m",

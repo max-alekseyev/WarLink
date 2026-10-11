@@ -1,4 +1,4 @@
-// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.2.3
+// ui/js/store.js - Frontend SWR Cache & State Store for WarLink v2.2.4
 
 class UIStoreClass {
     constructor() {
@@ -7,6 +7,26 @@ class UIStoreClass {
         this._inflight = new Map();
         this._storagePrefix = 'wl_cache_';
         this._loadPersistentCache();
+    }
+
+    _isPopulated(key, data) {
+        if (!data) return false;
+        if (key.includes('/api/notifications')) {
+            return Array.isArray(data.notifications) && data.notifications.length > 0;
+        }
+        if (key.includes('/api/sponsors')) {
+            return Array.isArray(data.sponsors) && data.sponsors.length > 0;
+        }
+        if (key.includes('/api/market/gold')) {
+            return Array.isArray(data.points) && data.points.length > 0;
+        }
+        if (key.includes('/api/user-profile')) {
+            return !!(data.account_number && data.created_at && data.created_at !== '—');
+        }
+        if (Array.isArray(data)) {
+            return data.length > 0;
+        }
+        return true;
     }
 
     _loadPersistentCache() {
@@ -20,7 +40,12 @@ class UIStoreClass {
                     if (raw) {
                         const parsed = JSON.parse(raw);
                         if (parsed && parsed.data !== undefined) {
-                            this._cache.set(endpointKey, parsed);
+                            // If persisted cache was empty placeholder, purge it so fresh skeletons reflect real loading
+                            if (this._isPopulated(endpointKey, parsed.data)) {
+                                this._cache.set(endpointKey, parsed);
+                            } else {
+                                localStorage.removeItem(k);
+                            }
                         }
                     }
                 }
@@ -96,10 +121,11 @@ class UIStoreClass {
     }
 
     async requestSWR(key, fetcher, renderFn, showSkeletonFn) {
-        const hasCached = this.has(key);
+        const cached = this._cache.get(key);
+        const hasPopulatedCache = cached && this._isPopulated(key, cached.data);
 
-        if (hasCached) {
-            const cached = this._cache.get(key);
+        if (hasPopulatedCache) {
+            // Instant 0ms render from warm populated cache (zero skeletons, zero layout shift)
             try {
                 if (typeof renderFn === 'function') {
                     renderFn(cached.data, false);
@@ -132,7 +158,7 @@ class UIStoreClass {
                 }
             })();
         } else {
-            // First run without cache: show skeleton, then await fetcher
+            // First run or empty cache: display true skeleton while network fetch is in flight
             try {
                 if (typeof showSkeletonFn === 'function') {
                     showSkeletonFn();
@@ -169,7 +195,8 @@ class UIStoreClass {
             '/api/user-profile',
             '/api/notifications',
             '/api/progression',
-            '/api/v1/boosty-goal',
+            '/api/community-goal',
+            '/api/market/gold',
             '/api/support/active'
         ];
 
@@ -178,7 +205,9 @@ class UIStoreClass {
                 const resp = await fetch(url);
                 if (resp.ok) {
                     const data = await resp.json();
-                    this.set(url, data);
+                    if (this._isPopulated(url, data)) {
+                        this.set(url, data);
+                    }
                 }
             } catch (e) {
                 // Ignore silent prefetch failures

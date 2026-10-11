@@ -99,6 +99,7 @@ type ServerConfig struct {
 	HMACSecret            string `json:"hmac_secret"`
 	ObfsPassword          string `json:"obfs_password"`
 	DashboardKey          string `json:"dashboard_key"`
+	InternalServiceToken  string `json:"internal_service_token"`
 	FallbackDueDate       string `json:"fallback_due_date"`
 	DonateURL             string `json:"donate_url"`
 	DonateAmountRub       int    `json:"donate_amount_rub"`
@@ -764,12 +765,42 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "version": ServerAppVersion})
 	})
 	publicMux.HandleFunc("/metrics", state.handleMetrics)
-	publicMux.HandleFunc("/dashboard", state.handleDashboard)
-	publicMux.HandleFunc("/dashboard/", state.handleDashboard)
-	publicMux.HandleFunc("/admin", state.handleDashboard)
-	publicMux.HandleFunc("/admin/", state.handleDashboard)
-	publicMux.HandleFunc("/control", state.handleDashboard)
-	publicMux.HandleFunc("/control/", state.handleDashboard)
+	publicMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			state.handleAdminWebSPA(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	publicMux.HandleFunc("/dashboard", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/dashboard/", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/admin", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/admin/", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/control", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/control/", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/setup", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/setup/", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/style.css", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/app.js", state.handleAdminWebSPA)
+	publicMux.HandleFunc("/admin/content/", state.handleGrafanaRedirect)
+
+	// Admin API routes
+	publicMux.HandleFunc("/api/v1/admin/auth/status", state.handleAdminAuthStatus)
+	publicMux.HandleFunc("/api/v1/admin/auth/setup/init", state.handleAdminAuthSetupInit)
+	publicMux.HandleFunc("/api/v1/admin/auth/setup/verify", state.handleAdminAuthSetupVerify)
+	publicMux.HandleFunc("/api/v1/admin/auth/login", state.handleAdminAuthLogin)
+	publicMux.HandleFunc("/api/v1/admin/auth/logout", state.handleAdminAuthLogout)
+	publicMux.HandleFunc("/api/v1/admin/nodes", state.handleAdminNodes)
+	publicMux.HandleFunc("/api/v1/admin/nodes/drain", state.handleAdminNodesDrain)
+	publicMux.HandleFunc("/api/v1/admin/nodes/slots", state.handleAdminNodesSlots)
+	publicMux.HandleFunc("/api/v1/admin/monetization", state.handleAdminMonetization)
+	publicMux.HandleFunc("/api/v1/admin/sponsors/grant", state.handleAdminSponsorsGrant)
+	publicMux.HandleFunc("/api/v1/admin/games/suggestions", state.handleAdminGamesSuggestions)
+	publicMux.HandleFunc("/api/v1/admin/games/kanban/move", state.handleAdminGamesKanbanMove)
+	publicMux.HandleFunc("/api/v1/admin/gold/sync-telemetry", state.handleAdminGoldSyncTelemetry)
+	publicMux.HandleFunc("/api/v1/admin/accounts", state.handleAdminAccountRouter)
+	publicMux.HandleFunc("/api/v1/admin/accounts/", state.handleAdminAccountRouter)
+
 	publicMux.HandleFunc("/api/v1/tickets", state.handleClientTicketSubmit)
 	publicMux.HandleFunc("/api/v1/tickets/active", state.handleClientTicketActive)
 	publicMux.HandleFunc("/api/v1/tickets/history", state.handleClientTicketsHistory)
@@ -795,6 +826,8 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/boosty-goal", state.handleAdminBoostyGoal)
 	publicMux.HandleFunc("/api/v1/community/goal", state.handleCommunityGoals)
 	publicMux.HandleFunc("/api/v1/admin/community/goal", state.handleAdminCommunityGoals)
+	publicMux.HandleFunc("/api/v1/admin/special-projects", state.handleAdminSpecialProjects)
+	publicMux.HandleFunc("/api/v1/admin/special-projects/increment", state.handleAdminSpecialProjectsIncrement)
 	publicMux.HandleFunc("/api/v1/games/catalog", state.handleGamesCatalog)
 	publicMux.HandleFunc("/api/v1/admin/games/catalog", state.handleAdminGamesCatalog)
 	publicMux.HandleFunc("/api/v1/announcements", state.handleAnnouncements)
@@ -821,12 +854,13 @@ func main() {
 
 func (s *AppState) loadConfig(path string) {
 	s.cfg = ServerConfig{
-		HMACSecret:      os.Getenv("WARLINK_HMAC_SECRET"),
-		ObfsPassword:    os.Getenv("WARLINK_OBFS_PASSWORD"),
-		DashboardKey:    os.Getenv("WARLINK_DASHBOARD_KEY"),
-		FallbackDueDate: DefaultDueDate,
-		ListenPublic:    "0.0.0.0:80",
-		ListenInternal:  "127.0.0.1:8080",
+		HMACSecret:           os.Getenv("WARLINK_HMAC_SECRET"),
+		ObfsPassword:         os.Getenv("WARLINK_OBFS_PASSWORD"),
+		DashboardKey:         os.Getenv("WARLINK_DASHBOARD_KEY"),
+		InternalServiceToken: os.Getenv("WARLINK_INTERNAL_SERVICE_TOKEN"),
+		FallbackDueDate:      DefaultDueDate,
+		ListenPublic:         "0.0.0.0:80",
+		ListenInternal:       "127.0.0.1:8080",
 	}
 
 	data, err := os.ReadFile(path)
@@ -2029,14 +2063,21 @@ func (s *AppState) handleDonate(w http.ResponseWriter, r *http.Request) {
 		minRub := 100
 		minCents := 50
 
+		if s.db != nil {
+			var v string
+			if s.db.QueryRow("SELECT value FROM server_settings WHERE key = 'donate_min_amount_rub'").Scan(&v) == nil {
+				if m, err := strconv.Atoi(v); err == nil && m > 0 {
+					minRub = m
+				}
+			}
+		}
+
 		switch reqBody.PaymentMethod {
 		case "card", "bank_card", "yookassa:bank_card":
 			aezaMethod = "yookassa:bank_card"
-			minRub = 100
 			minCents = 50
 		default:
 			aezaMethod = "yookassa:sbp"
-			minRub = 100
 			minCents = 50
 		}
 
@@ -3039,7 +3080,7 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 			normPID == normBase || normPName == normBase ||
 			strings.EqualFold(p.ID, targetGame) || strings.EqualFold(p.Name, targetGame) ||
 			strings.EqualFold(p.ID, baseGame) || strings.EqualFold(p.Name, baseGame) ||
-			p.ID == "socials" || p.ID == "wardogs" {
+			(p.ID == "socials" && includeWebServices) || p.ID == "wardogs" {
 			activeProfiles = append(activeProfiles, p)
 		}
 	}
@@ -3172,15 +3213,15 @@ func resolveSteamStoreIcon(appID int) string {
 	if appID <= 0 {
 		return ""
 	}
-	client := &http.Client{Timeout: 3500 * time.Millisecond}
+	client := &http.Client{Timeout: 4000 * time.Millisecond}
 
-	// 1. Priority 1: Steam Community App Hub square icon
+	// 1. Priority 1: Steam Community App Hub square icon (apphub_AppIcon -> community_assets/images/apps/{appID}/{hash}.jpg)
 	hubURL := fmt.Sprintf("https://steamcommunity.com/app/%d", appID)
-	req, err := http.NewRequest("GET", hubURL, nil)
+	reqHub, err := http.NewRequest("GET", hubURL, nil)
 	if err == nil {
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-		req.Header.Set("Cookie", "wants_mature_content=1; birthtime=568022401")
-		if resp, err := client.Do(req); err == nil {
+		reqHub.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+		reqHub.Header.Set("Cookie", "wants_mature_content=1; birthtime=568022401; lastagecheckage=1-0-1990; mature_content=1")
+		if resp, err := client.Do(reqHub); err == nil {
 			if resp.StatusCode == http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
@@ -3188,7 +3229,9 @@ func resolveSteamStoreIcon(appID int) string {
 				if m := re.FindSubmatch(body); len(m) > 1 {
 					icon := string(m[1])
 					icon = strings.Replace(icon, "http://", "https://", 1)
-					return icon
+					if strings.Contains(icon, "community_assets") || strings.Contains(icon, "steamstatic") {
+						return icon
+					}
 				}
 			} else {
 				_ = resp.Body.Close()
@@ -3196,7 +3239,41 @@ func resolveSteamStoreIcon(appID int) string {
 		}
 	}
 
-	// 2. Fallback: Store search
+	// 2. Priority 2: Official Steam Store appdetails API (fallback)
+	detailsURL := fmt.Sprintf("https://store.steampowered.com/api/appdetails?appids=%d&l=russian", appID)
+	reqDetails, err := http.NewRequest("GET", detailsURL, nil)
+	if err == nil {
+		reqDetails.Header.Set("User-Agent", "Valve/SteamClient")
+		if resp, err := client.Do(reqDetails); err == nil {
+			if resp.StatusCode == http.StatusOK {
+				var raw map[string]struct {
+					Success bool `json:"success"`
+					Data    struct {
+						Capsule     string `json:"capsule_image"`
+						HeaderImage string `json:"header_image"`
+					} `json:"data"`
+				}
+				if err := json.NewDecoder(resp.Body).Decode(&raw); err == nil {
+					_ = resp.Body.Close()
+					key := strconv.Itoa(appID)
+					if val, exists := raw[key]; exists && val.Success {
+						if val.Data.Capsule != "" {
+							return val.Data.Capsule
+						}
+						if val.Data.HeaderImage != "" {
+							return val.Data.HeaderImage
+						}
+					}
+				} else {
+					_ = resp.Body.Close()
+				}
+			} else {
+				_ = resp.Body.Close()
+			}
+		}
+	}
+
+	// 3. Fallback: Store search
 	u := fmt.Sprintf("https://store.steampowered.com/api/storesearch/?term=%d&l=russian&cc=US", appID)
 	resp, err := client.Get(u)
 	if err != nil {
@@ -3501,13 +3578,82 @@ func (s *AppState) initDatabase() {
 	);
 	CREATE INDEX IF NOT EXISTS idx_ff_enabled ON feature_flags(enabled);
 
+	CREATE TABLE IF NOT EXISTS special_projects (
+		id VARCHAR(64) PRIMARY KEY,
+		title VARCHAR(255) NOT NULL,
+		badge VARCHAR(64) DEFAULT 'СПЕЦПРОЕКТ',
+		description TEXT NOT NULL,
+		target_amount_rub INT NOT NULL,
+		base_price_rub INT NOT NULL,
+		discount_price_rub INT DEFAULT 0,
+		current_amount_rub INT DEFAULT 0,
+		is_completed BOOLEAN DEFAULT FALSE,
+		is_active BOOLEAN DEFAULT TRUE,
+		boosty_url TEXT,
+		boosty_label VARCHAR(128) DEFAULT 'Поддержать сбор',
+		steam_url TEXT,
+		steam_label VARCHAR(128) DEFAULT 'Подарить в Steam',
+		display_order INT DEFAULT 0,
+		created_at TIMESTAMPTZ DEFAULT NOW(),
+		updated_at TIMESTAMPTZ DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_spec_proj_active ON special_projects(is_active);
+
+	CREATE TABLE IF NOT EXISTS admin_users (
+		id SERIAL PRIMARY KEY,
+		username VARCHAR(64) UNIQUE NOT NULL,
+		password_hash VARCHAR(255) NOT NULL,
+		totp_secret VARCHAR(64) NOT NULL,
+		backup_codes JSONB DEFAULT '[]'::jsonb,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_login_at TIMESTAMPTZ
+	);
+	CREATE INDEX IF NOT EXISTS idx_admin_users_user ON admin_users(username);
+
+	CREATE TABLE IF NOT EXISTS admin_sessions (
+		id VARCHAR(64) PRIMARY KEY,
+		user_id INT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+		user_agent TEXT DEFAULT '',
+		ip_address TEXT DEFAULT '',
+		expires_at TIMESTAMPTZ NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_admin_sessions_exp ON admin_sessions(expires_at);
+
+	CREATE TABLE IF NOT EXISTS gold_market_sync_log (
+		id SERIAL PRIMARY KEY,
+		target_date DATE UNIQUE NOT NULL,
+		reset_time_msk TIMESTAMPTZ NOT NULL,
+		detected_time_msk TIMESTAMPTZ NOT NULL,
+		delay_seconds INT NOT NULL,
+		price_usd INT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_gold_sync_target ON gold_market_sync_log(target_date DESC);
+
 	DROP TABLE IF EXISTS active_sessions CASCADE;
 	`
 	if _, err := s.db.Exec(schema); err != nil {
 		log.Printf("[DB] Error initializing schema: %v", err)
 	} else {
-		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, tickets, ticket_messages, telemetry_auto, feature_flags, active sessions in RAM)")
+		log.Printf("[DB] Database tables initialized successfully (accounts, notifications, tickets, ticket_messages, telemetry_auto, feature_flags, special_projects, active sessions in RAM)")
 	}
+
+	_, _ = s.db.Exec(`
+		INSERT INTO special_projects (id, title, badge, description, target_amount_rub, base_price_rub, discount_price_rub, current_amount_rub, is_completed, is_active, boosty_url, boosty_label, steam_url, steam_label, display_order)
+		VALUES ('bf6', 'Battlefield 6 в WarLink', 'СПЕЦПРОЕКТ', 'Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.', 3200, 3200, 0, 88, false, true, 'https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link', 'Поддержать сбор на BF6', 'https://steamcommunity.com/id/MaksimPaladin/', 'Подарить в Steam', 1)
+		ON CONFLICT (id) DO NOTHING;
+
+		INSERT INTO server_settings (key, value) VALUES
+			('crypto_usdt_trc20_address', 'TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM'),
+			('donate_min_amount_rub', '100'),
+			('discord_invite_url', 'https://discord.gg/2h8nVRUBeT'),
+			('steam_author_url', 'https://steamcommunity.com/id/MaksimPaladin/'),
+			('boosty_donate_url', 'https://boosty.to/pld1n/donate'),
+			('boosty_subscription_tiers_json', '[{"id":"tier1","title":"Рекрут","price_rub":100,"url":"https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link"},{"id":"tier2","title":"Оперативник","price_rub":500,"url":"https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link"},{"id":"tier3","title":"Ветеран","price_rub":1000,"url":"https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link"},{"id":"tier4","title":"Генерал","price_rub":5000,"url":"https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link"}]'),
+			('donate_perks_json', '["100 ₽ = 30 дней активного статуса «Спонсор»","Выделенный слот шлюза без очередей","Никнейм и аватарка на Доске почёта спонсоров"]')
+		ON CONFLICT (key) DO NOTHING;
+	`)
 
 	_, _ = s.db.Exec(`
 		INSERT INTO feature_flags (name, description, enabled, rollout_pct, strategy, target_accounts, payload)
@@ -3938,43 +4084,6 @@ type AdminFeaturesPayload struct {
 	DonateSbpEnabled    *bool   `json:"donate_sbp_enabled"`
 	DonateCryptoEnabled *bool   `json:"donate_crypto_enabled"`
 	DonatePausedNotice  *string `json:"donate_paused_notice"`
-}
-
-func (s *AppState) checkAdminAuth(r *http.Request) bool {
-	if s.cfg.DashboardKey == "" {
-		return false
-	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		key = r.Header.Get("X-Dashboard-Key")
-	}
-	if key == "" {
-		auth := r.Header.Get("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") {
-			key = strings.TrimPrefix(auth, "Bearer ")
-		}
-	}
-	if key == "" {
-		if c, err := r.Cookie("admin_key"); err == nil && c != nil {
-			key = c.Value
-		}
-	}
-	if key != "" && key == s.cfg.DashboardKey {
-		return true
-	}
-
-	// Strictly allow unauthenticated access ONLY from true local CLI process on the machine itself:
-	// If X-Real-IP or X-Forwarded-For is present, it is a PROXIED request from the outside and MUST NOT be trusted as local!
-	hasProxyHeader := r.Header.Get("X-Real-IP") != "" || r.Header.Get("X-Forwarded-For") != ""
-	if !hasProxyHeader {
-		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (s *AppState) handleAdminFeatures(w http.ResponseWriter, r *http.Request) {
@@ -4454,8 +4563,13 @@ type AdminSettingsPayload struct {
 	FreeSlotsLimit        *int    `json:"free_slots_limit,omitempty"`
 	ServerName            *string `json:"server_name,omitempty"`
 	ServerLocation        *string `json:"server_location,omitempty"`
-	DonationsPaid         *uint64 `json:"donations_paid,omitempty"`
-	DonationsRub          *uint64 `json:"donations_rub,omitempty"`
+	DonationsPaid          *uint64 `json:"donations_paid,omitempty"`
+	DonationsRub           *uint64 `json:"donations_rub,omitempty"`
+	CryptoUSDTTRC20Address *string `json:"crypto_usdt_trc20_address,omitempty"`
+	DonateMinAmountRub     *int    `json:"donate_min_amount_rub,omitempty"`
+	DiscordInviteURL       *string `json:"discord_invite_url,omitempty"`
+	SteamAuthorURL         *string `json:"steam_author_url,omitempty"`
+	BoostyDonateURL        *string `json:"boosty_donate_url,omitempty"`
 }
 
 func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
@@ -4518,36 +4632,71 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 		s.mu.RUnlock()
 
 		var dau, wau int
+		cryptoAddr := "TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM"
+		minDonate := 100
+		discordURL := "https://discord.gg/2h8nVRUBeT"
+		steamURL := "https://steamcommunity.com/id/MaksimPaladin/"
+		boostyURL := "https://boosty.to/pld1n/donate"
+
 		if s.db != nil {
 			_ = s.db.QueryRow("SELECT COUNT(*) FROM daily_active_devices WHERE seen_date = CURRENT_DATE").Scan(&dau)
 			_ = s.db.QueryRow("SELECT COUNT(DISTINCT device_id) FROM daily_active_devices WHERE seen_date >= CURRENT_DATE - INTERVAL '7 days'").Scan(&wau)
+
+			rows, err := s.db.Query("SELECT key, value FROM server_settings WHERE key IN ('crypto_usdt_trc20_address', 'donate_min_amount_rub', 'discord_invite_url', 'steam_author_url', 'boosty_donate_url')")
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var k, v string
+					if rows.Scan(&k, &v) == nil {
+						switch k {
+						case "crypto_usdt_trc20_address":
+							cryptoAddr = v
+						case "donate_min_amount_rub":
+							if m, err := strconv.Atoi(v); err == nil && m > 0 {
+								minDonate = m
+							}
+						case "discord_invite_url":
+							discordURL = v
+						case "steam_author_url":
+							steamURL = v
+						case "boosty_donate_url":
+							boostyURL = v
+						}
+					}
+				}
+			}
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":                 true,
-			"enable_donate":           enDonate,
-			"enable_voting":           enVoting,
-			"enable_community_goal":   enCommunityGoal,
-			"drain_mode":              drMode,
-			"donate_boosty_enabled":   enBoosty,
-			"donate_sbp_enabled":      enSbp,
-			"donate_crypto_enabled":   enCrypto,
-			"donate_paused_notice":    donateNotice,
-			"donate_amount_rub":       donateAmt,
-			"max_sessions":            maxSess,
-			"dedicated_sponsor_slots": dedicatedSponsor,
-			"free_slots_limit":        freeSlotsLimit,
-			"dedicated_admin_slots":   dedicatedAdmin,
-			"active_sessions":         activeSess,
-			"active_free_sessions":    activeFreeCount,
-			"active_sponsor_sessions": activeSponsorCount,
-			"server_name":             srvName,
-			"server_location":         srvLoc,
-			"invoices_created":        atomic.LoadUint64(&s.metricInvoicesCreated),
-			"donations_paid":          atomic.LoadUint64(&s.metricDonationsPaid),
-			"donations_rub":           atomic.LoadUint64(&s.metricDonationsRub),
-			"dau":                     dau,
-			"wau":                     wau,
+			"success":                    true,
+			"enable_donate":              enDonate,
+			"enable_voting":              enVoting,
+			"enable_community_goal":      enCommunityGoal,
+			"drain_mode":                 drMode,
+			"donate_boosty_enabled":      enBoosty,
+			"donate_sbp_enabled":         enSbp,
+			"donate_crypto_enabled":      enCrypto,
+			"donate_paused_notice":       donateNotice,
+			"donate_amount_rub":          donateAmt,
+			"donate_min_amount_rub":      minDonate,
+			"crypto_usdt_trc20_address":  cryptoAddr,
+			"discord_invite_url":         discordURL,
+			"steam_author_url":           steamURL,
+			"boosty_donate_url":          boostyURL,
+			"max_sessions":               maxSess,
+			"dedicated_sponsor_slots":    dedicatedSponsor,
+			"free_slots_limit":           freeSlotsLimit,
+			"dedicated_admin_slots":      dedicatedAdmin,
+			"active_sessions":            activeSess,
+			"active_free_sessions":       activeFreeCount,
+			"active_sponsor_sessions":    activeSponsorCount,
+			"server_name":                srvName,
+			"server_location":            srvLoc,
+			"invoices_created":           atomic.LoadUint64(&s.metricInvoicesCreated),
+			"donations_paid":             atomic.LoadUint64(&s.metricDonationsPaid),
+			"donations_rub":              atomic.LoadUint64(&s.metricDonationsRub),
+			"dau":                        dau,
+			"wau":                        wau,
 		})
 
 	case http.MethodPost:
@@ -4726,6 +4875,22 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			if s.db != nil {
 				_, _ = s.db.Exec(`INSERT INTO telemetry_counters (name, value) VALUES ('donations_rub', $1) ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`, *req.DonationsRub)
 			}
+		}
+
+		if req.CryptoUSDTTRC20Address != nil && strings.TrimSpace(*req.CryptoUSDTTRC20Address) != "" && s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('crypto_usdt_trc20_address', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strings.TrimSpace(*req.CryptoUSDTTRC20Address))
+		}
+		if req.DonateMinAmountRub != nil && *req.DonateMinAmountRub > 0 && s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('donate_min_amount_rub', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.DonateMinAmountRub))
+		}
+		if req.DiscordInviteURL != nil && strings.TrimSpace(*req.DiscordInviteURL) != "" && s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('discord_invite_url', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strings.TrimSpace(*req.DiscordInviteURL))
+		}
+		if req.SteamAuthorURL != nil && strings.TrimSpace(*req.SteamAuthorURL) != "" && s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('steam_author_url', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strings.TrimSpace(*req.SteamAuthorURL))
+		}
+		if req.BoostyDonateURL != nil && strings.TrimSpace(*req.BoostyDonateURL) != "" && s.db != nil {
+			_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('boosty_donate_url', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strings.TrimSpace(*req.BoostyDonateURL))
 		}
 
 		s.featureMu.RLock()
@@ -7316,7 +7481,7 @@ func (s *AppState) handleSponsors(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(`
 		SELECT account_number, nickname, avatar_url,
 		       COALESCE(steam_id, ''), COALESCE(motto, ''),
-		       TO_CHAR(created_at, 'YYYY-MM-DD'),
+		       TO_CHAR(created_at, 'DD.MM.YYYY'),
 		       (sponsor_until IS NOT NULL AND sponsor_until > NOW()) AS is_active,
 		       total_donated_rub,
 		       COALESCE(hide_donation_amount, FALSE),
@@ -8898,7 +9063,7 @@ func (s *AppState) handleAdminRoutingFeedback(w http.ResponseWriter, r *http.Req
 	var items []FeedbackItem
 	if s.db != nil {
 		rows, err := s.db.Query(`
-			SELECT id, to_char(created_at, 'YYYY-MM-DD HH24:MI:SS'), account_number, device_id, app_version,
+			SELECT id, to_char(created_at, 'DD.MM.YYYY HH24:MI:SS'), account_number, device_id, app_version,
 			       route_mode, status, in_game_ping, match_quality, discord_status, user_comment, client_ip, telemetry_data
 			FROM routing_feedback
 			ORDER BY created_at DESC LIMIT 100`)
@@ -9104,6 +9269,25 @@ type CommunityGoalsResponse struct {
 	Expansion       ExpansionGoalData        `json:"expansion"`
 	SpecialProjects []SpecialProjectGoalData `json:"special_projects"`
 	AuthorBoosty    BoostyGoalData           `json:"author_boosty"`
+	DonateConfig    *DonateConfigData        `json:"donate_config,omitempty"`
+}
+
+type DonateConfigData struct {
+	CryptoUSDTTRC20Address  string           `json:"crypto_usdt_trc20_address"`
+	DonateMinAmountRub      int              `json:"donate_min_amount_rub"`
+	DiscordInviteURL        string           `json:"discord_invite_url"`
+	SteamAuthorURL          string           `json:"steam_author_url"`
+	BoostyDonateURL         string           `json:"boosty_donate_url"`
+	BoostySubscriptionTiers []BoostyTierData `json:"boosty_subscription_tiers,omitempty"`
+	DonatePerks             []string         `json:"donate_perks,omitempty"`
+}
+
+type BoostyTierData struct {
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	PriceRub int    `json:"price_rub"`
+	URL      string `json:"url"`
+	Badge    string `json:"badge,omitempty"`
 }
 
 type InfrastructureGoalData struct {
@@ -9146,10 +9330,12 @@ type SpecialProjectGoalData struct {
 	CurrentAmountRub int     `json:"current_amount_rub"`
 	Percent          float64 `json:"percent"`
 	IsCompleted      bool    `json:"is_completed"`
+	IsActive         bool    `json:"is_active"`
 	BoostyURL        string  `json:"boosty_url"`
 	BoostyLabel      string  `json:"boosty_label"`
 	SteamURL         string  `json:"steam_url"`
 	SteamLabel       string  `json:"steam_label"`
+	DisplayOrder     int     `json:"display_order"`
 }
 
 func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
@@ -9218,66 +9404,170 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 		IsActive:         false,
 	}
 
-	// Goal 2: Special Project Battlefield 6 (Independent, manually moderated)
-	bf6Target := 1600
-	bf6BasePrice := 3200
-	bf6DiscountPrice := 1600
-	bf6Current := 0
-	bf6Completed := false
+	// Universal Special Projects (Loaded from PostgreSQL)
+	var specialProjects []SpecialProjectGoalData
+	if s.db != nil {
+		rows, err := s.db.Query(`
+			SELECT id, title, badge, description, target_amount_rub, base_price_rub, 
+			       discount_price_rub, current_amount_rub, is_completed, is_active, 
+			       boosty_url, boosty_label, steam_url, steam_label, display_order
+			FROM special_projects
+			WHERE is_active = true
+			ORDER BY display_order ASC, created_at ASC
+		`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var p SpecialProjectGoalData
+				var bURL, bLbl, sURL, sLbl sql.NullString
+				if scanErr := rows.Scan(
+					&p.ID, &p.Title, &p.Badge, &p.Description, &p.TargetAmountRub, &p.BasePriceRub,
+					&p.DiscountPriceRub, &p.CurrentAmountRub, &p.IsCompleted, &p.IsActive,
+					&bURL, &bLbl, &sURL, &sLbl, &p.DisplayOrder,
+				); scanErr == nil {
+					p.BoostyURL = bURL.String
+					p.BoostyLabel = bLbl.String
+					p.SteamURL = sURL.String
+					p.SteamLabel = sLbl.String
+
+					if p.IsCompleted {
+						p.Percent = 100.0
+					} else if p.TargetAmountRub > 0 {
+						p.Percent = math.Round((float64(p.CurrentAmountRub)/float64(p.TargetAmountRub)*100)*10) / 10
+						if p.Percent > 100 {
+							p.Percent = 100
+						}
+					}
+					specialProjects = append(specialProjects, p)
+				}
+			}
+		}
+	}
+
+	// Safe fallback if table is empty or unpopulated
+	if len(specialProjects) == 0 {
+		bf6Target := 3200
+		bf6BasePrice := 3200
+		bf6DiscountPrice := 0
+		bf6Current := 0
+		bf6Completed := false
+
+		if s.db != nil {
+			rows, err := s.db.Query(`SELECT key, value FROM server_settings WHERE key IN ('bf6_goal_current', 'bf6_goal_target', 'bf6_goal_completed')`)
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var k, v string
+					if err := rows.Scan(&k, &v); err == nil {
+						switch k {
+						case "bf6_goal_current":
+							if c, err := strconv.Atoi(v); err == nil && c >= 0 {
+								bf6Current = c
+							}
+						case "bf6_goal_target":
+							if t, err := strconv.Atoi(v); err == nil && t > 0 {
+								bf6Target = t
+							}
+						case "bf6_goal_completed":
+							if v == "true" || v == "1" {
+								bf6Completed = true
+							}
+						}
+					}
+				}
+			}
+		}
+
+		bf6Percent := 0.0
+		if bf6Completed {
+			bf6Percent = 100.0
+		} else if bf6Target > 0 {
+			bf6Percent = math.Round((float64(bf6Current)/float64(bf6Target)*100)*10) / 10
+			if bf6Percent > 100 {
+				bf6Percent = 100
+			}
+		}
+
+		specialProjects = []SpecialProjectGoalData{
+			{
+				ID:               "bf6",
+				Title:            "Battlefield 6 в WarLink",
+				Badge:            "СПЕЦПРОЕКТ",
+				Description:      "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
+				TargetAmountRub:  bf6Target,
+				BasePriceRub:     bf6BasePrice,
+				DiscountPriceRub: bf6DiscountPrice,
+				CurrentAmountRub: bf6Current,
+				Percent:          bf6Percent,
+				IsCompleted:      bf6Completed,
+				IsActive:         true,
+				BoostyURL:        "https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link",
+				BoostyLabel:      "Поддержать сбор на BF6",
+				SteamURL:         "https://steamcommunity.com/id/MaksimPaladin/",
+				SteamLabel:       "Подарить в Steam",
+				DisplayOrder:     1,
+			},
+		}
+	}
+
+	// Dynamic Donate Config
+	donateCfg := &DonateConfigData{
+		CryptoUSDTTRC20Address: "TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM",
+		DonateMinAmountRub:     100,
+		DiscordInviteURL:       "https://discord.gg/2h8nVRUBeT",
+		SteamAuthorURL:         "https://steamcommunity.com/id/MaksimPaladin/",
+		BoostyDonateURL:        "https://boosty.to/pld1n/donate",
+	}
 
 	if s.db != nil {
-		rows, err := s.db.Query(`SELECT key, value FROM server_settings WHERE key IN ('bf6_goal_current', 'bf6_goal_target', 'bf6_goal_completed')`)
+		rows, err := s.db.Query(`
+			SELECT key, value FROM server_settings 
+			WHERE key IN (
+				'crypto_usdt_trc20_address', 'donate_min_amount_rub', 'discord_invite_url',
+				'steam_author_url', 'boosty_donate_url', 'boosty_subscription_tiers_json',
+				'donate_perks_json'
+			)
+		`)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
 				var k, v string
 				if err := rows.Scan(&k, &v); err == nil {
 					switch k {
-					case "bf6_goal_current":
-						if c, err := strconv.Atoi(v); err == nil && c >= 0 {
-							bf6Current = c
+					case "crypto_usdt_trc20_address":
+						if strings.TrimSpace(v) != "" {
+							donateCfg.CryptoUSDTTRC20Address = strings.TrimSpace(v)
 						}
-					case "bf6_goal_target":
-						if t, err := strconv.Atoi(v); err == nil && t > 0 {
-							bf6Target = t
+					case "donate_min_amount_rub":
+						if m, err := strconv.Atoi(v); err == nil && m > 0 {
+							donateCfg.DonateMinAmountRub = m
 						}
-					case "bf6_goal_completed":
-						if v == "true" || v == "1" {
-							bf6Completed = true
+					case "discord_invite_url":
+						if strings.TrimSpace(v) != "" {
+							donateCfg.DiscordInviteURL = strings.TrimSpace(v)
+						}
+					case "steam_author_url":
+						if strings.TrimSpace(v) != "" {
+							donateCfg.SteamAuthorURL = strings.TrimSpace(v)
+						}
+					case "boosty_donate_url":
+						if strings.TrimSpace(v) != "" {
+							donateCfg.BoostyDonateURL = strings.TrimSpace(v)
+						}
+					case "boosty_subscription_tiers_json":
+						var tiers []BoostyTierData
+						if json.Unmarshal([]byte(v), &tiers) == nil && len(tiers) > 0 {
+							donateCfg.BoostySubscriptionTiers = tiers
+						}
+					case "donate_perks_json":
+						var perks []string
+						if json.Unmarshal([]byte(v), &perks) == nil && len(perks) > 0 {
+							donateCfg.DonatePerks = perks
 						}
 					}
 				}
 			}
 		}
-	}
-
-	bf6Percent := 0.0
-	if bf6Completed {
-		bf6Percent = 100.0
-	} else if bf6Target > 0 {
-		bf6Percent = math.Round((float64(bf6Current)/float64(bf6Target)*100)*10) / 10
-		if bf6Percent > 100 {
-			bf6Percent = 100
-		}
-	}
-
-	specialProjects := []SpecialProjectGoalData{
-		{
-			ID:               "bf6",
-			Title:            "Battlefield 6 в WarLink",
-			Badge:            "СПЕЦПРОЕКТ",
-			Description:      "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
-			TargetAmountRub:  bf6Target,
-			BasePriceRub:     bf6BasePrice,
-			DiscountPriceRub: bf6DiscountPrice,
-			CurrentAmountRub: bf6Current,
-			Percent:          bf6Percent,
-			IsCompleted:      bf6Completed,
-			BoostyURL:        "https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link",
-			BoostyLabel:      "Поддержать сбор на BF6",
-			SteamURL:         "https://steamcommunity.com/id/MaksimPaladin/",
-			SteamLabel:       "Подарить в Steam",
-		},
 	}
 
 	return CommunityGoalsResponse{
@@ -9286,6 +9576,7 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 		Expansion:       expansion,
 		SpecialProjects: specialProjects,
 		AuthorBoosty:    s.getBoostyGoal(),
+		DonateConfig:    donateCfg,
 	}
 }
 
@@ -9319,9 +9610,11 @@ func (s *AppState) handleAdminCommunityGoals(w http.ResponseWriter, r *http.Requ
 		if s.db != nil {
 			if req.BF6CurrentAmount != nil {
 				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_current', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.BF6CurrentAmount))
+				_, _ = s.db.Exec(`UPDATE special_projects SET current_amount_rub = $1, updated_at = NOW() WHERE id = 'bf6'`, *req.BF6CurrentAmount)
 			}
 			if req.BF6TargetAmount != nil && *req.BF6TargetAmount > 0 {
 				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_target', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(*req.BF6TargetAmount))
+				_, _ = s.db.Exec(`UPDATE special_projects SET target_amount_rub = $1, base_price_rub = $1, updated_at = NOW() WHERE id = 'bf6'`, *req.BF6TargetAmount)
 			}
 			if req.BF6Completed != nil {
 				val := "false"
@@ -9329,6 +9622,7 @@ func (s *AppState) handleAdminCommunityGoals(w http.ResponseWriter, r *http.Requ
 					val = "true"
 				}
 				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('bf6_goal_completed', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, val)
+				_, _ = s.db.Exec(`UPDATE special_projects SET is_completed = $1, updated_at = NOW() WHERE id = 'bf6'`, *req.BF6Completed)
 			}
 			if req.FrankfurtTargetEur != nil && *req.FrankfurtTargetEur > 0 {
 				_, _ = s.db.Exec(`INSERT INTO server_settings (key, value) VALUES ('frankfurt_goal_target_eur', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, fmt.Sprintf("%.2f", *req.FrankfurtTargetEur))
@@ -9343,6 +9637,258 @@ func (s *AppState) handleAdminCommunityGoals(w http.ResponseWriter, r *http.Requ
 
 	resp := s.getCommunityGoals()
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *AppState) handleAdminSpecialProjects(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Dashboard-Key, Authorization")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	if s.db == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "database_not_connected"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.db.Query(`
+			SELECT id, title, badge, description, target_amount_rub, base_price_rub, 
+			       discount_price_rub, current_amount_rub, is_completed, is_active, 
+			       boosty_url, boosty_label, steam_url, steam_label, display_order,
+			       created_at, updated_at
+			FROM special_projects
+			ORDER BY display_order ASC, created_at ASC
+		`)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		var projects []map[string]interface{}
+		for rows.Next() {
+			var id, title, badge, desc string
+			var target, base, discount, current, order int
+			var completed, active bool
+			var bURL, bLbl, sURL, sLbl sql.NullString
+			var createdAt, updatedAt time.Time
+			if err := rows.Scan(
+				&id, &title, &badge, &desc, &target, &base, &discount, &current,
+				&completed, &active, &bURL, &bLbl, &sURL, &sLbl, &order,
+				&createdAt, &updatedAt,
+			); err == nil {
+				pct := 0.0
+				if completed {
+					pct = 100.0
+				} else if target > 0 {
+					pct = math.Round((float64(current)/float64(target)*100)*10) / 10
+					if pct > 100 {
+						pct = 100
+					}
+				}
+				projects = append(projects, map[string]interface{}{
+					"id":                 id,
+					"title":              title,
+					"badge":              badge,
+					"description":        desc,
+					"target_amount_rub":  target,
+					"base_price_rub":     base,
+					"discount_price_rub": discount,
+					"current_amount_rub": current,
+					"percent":            pct,
+					"is_completed":       completed,
+					"is_active":          active,
+					"boosty_url":         bURL.String,
+					"boosty_label":       bLbl.String,
+					"steam_url":          sURL.String,
+					"steam_label":        sLbl.String,
+					"display_order":      order,
+					"created_at":         createdAt,
+					"updated_at":         updatedAt,
+				})
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"projects": projects,
+			"count":    len(projects),
+		})
+
+	case http.MethodPost:
+		var req struct {
+			ID               string `json:"id"`
+			Title            string `json:"title"`
+			Badge            string `json:"badge"`
+			Description      string `json:"description"`
+			TargetAmountRub  int    `json:"target_amount_rub"`
+			BasePriceRub     int    `json:"base_price_rub"`
+			DiscountPriceRub int    `json:"discount_price_rub"`
+			CurrentAmountRub int    `json:"current_amount_rub"`
+			IsCompleted      bool   `json:"is_completed"`
+			IsActive         *bool  `json:"is_active"`
+			BoostyURL        string `json:"boosty_url"`
+			BoostyLabel      string `json:"boosty_label"`
+			SteamURL         string `json:"steam_url"`
+			SteamLabel       string `json:"steam_label"`
+			DisplayOrder     int    `json:"display_order"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_json"})
+			return
+		}
+		req.ID = strings.TrimSpace(req.ID)
+		if req.ID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "id_required"})
+			return
+		}
+		if req.Title == "" {
+			req.Title = req.ID
+		}
+		if req.Badge == "" {
+			req.Badge = "СПЕЦПРОЕКТ"
+		}
+		if req.BasePriceRub <= 0 {
+			req.BasePriceRub = req.TargetAmountRub
+		}
+		isActive := true
+		if req.IsActive != nil {
+			isActive = *req.IsActive
+		}
+
+		_, err := s.db.Exec(`
+			INSERT INTO special_projects (
+				id, title, badge, description, target_amount_rub, base_price_rub,
+				discount_price_rub, current_amount_rub, is_completed, is_active,
+				boosty_url, boosty_label, steam_url, steam_label, display_order, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+			ON CONFLICT (id) DO UPDATE SET
+				title = EXCLUDED.title,
+				badge = EXCLUDED.badge,
+				description = EXCLUDED.description,
+				target_amount_rub = EXCLUDED.target_amount_rub,
+				base_price_rub = EXCLUDED.base_price_rub,
+				discount_price_rub = EXCLUDED.discount_price_rub,
+				current_amount_rub = EXCLUDED.current_amount_rub,
+				is_completed = EXCLUDED.is_completed,
+				is_active = EXCLUDED.is_active,
+				boosty_url = EXCLUDED.boosty_url,
+				boosty_label = EXCLUDED.boosty_label,
+				steam_url = EXCLUDED.steam_url,
+				steam_label = EXCLUDED.steam_label,
+				display_order = EXCLUDED.display_order,
+				updated_at = NOW();
+		`, req.ID, req.Title, req.Badge, req.Description, req.TargetAmountRub, req.BasePriceRub,
+			req.DiscountPriceRub, req.CurrentAmountRub, req.IsCompleted, isActive,
+			req.BoostyURL, req.BoostyLabel, req.SteamURL, req.SteamLabel, req.DisplayOrder)
+
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+
+		log.Printf("[ADMIN] Special project saved: id=%s title=%s target=%d discount=%d active=%v completed=%v",
+			req.ID, req.Title, req.TargetAmountRub, req.DiscountPriceRub, isActive, req.IsCompleted)
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "project_saved",
+			"id":      req.ID,
+		})
+
+	case http.MethodDelete:
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "id_required"})
+			return
+		}
+		res, err := s.db.Exec(`DELETE FROM special_projects WHERE id = $1`, id)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		affected, _ := res.RowsAffected()
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":  true,
+			"deleted":  id,
+			"affected": affected,
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *AppState) handleAdminSpecialProjectsIncrement(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.db == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "database_not_connected"})
+		return
+	}
+
+	var req struct {
+		ID        string `json:"id"`
+		AmountRub int    `json:"amount_rub"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_json"})
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" || req.AmountRub <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "valid_id_and_positive_amount_required"})
+		return
+	}
+
+	res, err := s.db.Exec(`
+		UPDATE special_projects
+		SET current_amount_rub = current_amount_rub + $1,
+		    is_completed = CASE WHEN current_amount_rub + $1 >= target_amount_rub THEN TRUE ELSE is_completed END,
+		    updated_at = NOW()
+		WHERE id = $2
+	`, req.AmountRub, req.ID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "project_not_found"})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "id": req.ID, "increment": req.AmountRub})
 }
 
 type GameCatalogItem struct {
@@ -10399,11 +10945,14 @@ func (s *AppState) handleAdminTicketRouter(w http.ResponseWriter, r *http.Reques
 		}
 		replyReq.Title = strings.TrimSpace(replyReq.Title)
 		replyReq.Message = strings.TrimSpace(replyReq.Message)
-		if replyReq.Title == "" || replyReq.Message == "" {
+		if replyReq.Message == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "title_and_message_required"})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "message_required"})
 			return
+		}
+		if replyReq.Title == "" {
+			replyReq.Title = fmt.Sprintf("Ответ поддержки по тикету #TK-%04d", ticketID)
 		}
 		sev := strings.ToLower(strings.TrimSpace(replyReq.Severity))
 		if sev != "info" && sev != "update" && sev != "warning" && sev != "urgent" {
@@ -10808,7 +11357,11 @@ func extractFileFromTarGz(archive []byte, targetName string) (string, error) {
 }
 
 func (s *AppState) handleAdminTicketWeb(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, "/admin/dialogs", http.StatusFound)
+	targetHash := "#view-support"
+	if tid := r.URL.Query().Get("id"); tid != "" {
+		targetHash = "#view-support?id=" + tid
+	}
+	http.Redirect(w, r, "/admin"+targetHash, http.StatusFound)
 }
 
 func (s *AppState) handleAdminDialogsAuth(w http.ResponseWriter, r *http.Request) {
@@ -10882,27 +11435,14 @@ func (s *AppState) handleAdminDialogsWeb(w http.ResponseWriter, r *http.Request)
 				MaxAge:   30 * 24 * 3600,
 				SameSite: http.SameSiteLaxMode,
 			})
-			cleanURL := "/admin/dialogs"
-			if tid := r.URL.Query().Get("id"); tid != "" {
-				cleanURL += "?id=" + tid
-			}
-			http.Redirect(w, r, cleanURL, http.StatusFound)
-			return
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	htmlBytes, err := os.ReadFile("admin_dialogs.html")
-	if err == nil && len(htmlBytes) > 0 {
-		_, _ = w.Write(htmlBytes)
-		return
+	targetHash := "#view-support"
+	if tid := r.URL.Query().Get("id"); tid != "" {
+		targetHash = "#view-support?id=" + tid
 	}
-	htmlBytes, err = os.ReadFile("server/admin_dialogs.html")
-	if err == nil && len(htmlBytes) > 0 {
-		_, _ = w.Write(htmlBytes)
-		return
-	}
-	_, _ = w.Write([]byte(embeddedAdminDialogsHTML))
+	http.Redirect(w, r, "/admin"+targetHash, http.StatusFound)
 }
 
 func (s *AppState) handleAdminRoutingFeedbackWeb(w http.ResponseWriter, r *http.Request) {
@@ -10925,7 +11465,7 @@ func (s *AppState) handleReloadFilters(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"message": "Фильтры запрещенных игр, поддерживаемых игр и позывных успешно перезагружены из PostgreSQL",
+		"message": "Фильтры запрещенных игр, поддерживаемых игр и никнеймов успешно перезагружены из PostgreSQL",
 	})
 }
 
@@ -11065,6 +11605,52 @@ func (s *AppState) fetchGoldMarket() {
 		`, marketResp.Stats.Current, marketResp.Stats.Min, marketResp.Stats.Max,
 			marketResp.Stats.Changes.D7, marketResp.Stats.Changes.D30, marketResp.Stats.Changes.D90, marketResp.Stats.Changes.Y1, marketResp.Stats.Changes.All,
 			string(body))
+
+		// Log MetaForge Sync Telemetry relative to 03:00 MSK in-game reset
+		if lastPointTime > 0 {
+			mskZone := time.FixedZone("MSK", 3*3600)
+			nowMSK := time.Now().In(mskZone)
+			targetDate := nowMSK.Format("2006-01-02")
+			resetMSK := time.Date(nowMSK.Year(), nowMSK.Month(), nowMSK.Day(), 3, 0, 0, 0, mskZone)
+			if nowMSK.Before(resetMSK) {
+				resetMSK = resetMSK.AddDate(0, 0, -1)
+			}
+			delaySec := int(nowMSK.Sub(resetMSK).Seconds())
+			if delaySec < 0 {
+				delaySec = 0
+			}
+
+			_, _ = s.db.Exec(`
+				INSERT INTO gold_market_sync_log (target_date, reset_time_msk, detected_time_msk, delay_seconds, price_usd, created_at)
+				VALUES ($1, $2, NOW(), $3, $4, NOW())
+				ON CONFLICT (target_date) DO UPDATE SET
+					price_usd = EXCLUDED.price_usd
+			`, targetDate, resetMSK, delaySec, lastPointPrice)
+
+			// Seed previous 30 points if log is sparsely populated
+			points := marketResp.Points
+			if len(points) == 0 {
+				points = marketResp.GoldBars
+			}
+			for i := len(points) - 1; i >= 0 && i >= len(points)-35; i-- {
+				p := points[i]
+				pMSK := time.UnixMilli(p.T).In(mskZone)
+				pDate := pMSK.Format("2006-01-02")
+				pReset := time.Date(pMSK.Year(), pMSK.Month(), pMSK.Day(), 3, 0, 0, 0, mskZone)
+				if pMSK.Before(pReset) {
+					pReset = pReset.AddDate(0, 0, -1)
+				}
+				pDelay := int(pMSK.Sub(pReset).Seconds())
+				if pDelay < 0 {
+					pDelay = 0
+				}
+				_, _ = s.db.Exec(`
+					INSERT INTO gold_market_sync_log (target_date, reset_time_msk, detected_time_msk, delay_seconds, price_usd, created_at)
+					VALUES ($1, $2, $3, $4, $5, $3)
+					ON CONFLICT (target_date) DO NOTHING
+				`, pDate, pReset, pMSK, pDelay, p.Price)
+			}
+		}
 	}
 
 	if lastPointPrice >= 166000 && lastPointPrice <= 200000 && lastPointTime > 0 {

@@ -2,14 +2,38 @@ package singbox
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
 )
+
+// APIHTTPClient provides connection pooling, HTTP/2 multiplexing, and persistent Keep-Alive
+// to eliminate cold TLS handshakes, socket exhaustion, and request contention across all endpoints.
+var APIHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   50,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	},
+}
 
 type InAppNotification struct {
 	ID          int64  `json:"id"`
@@ -80,8 +104,7 @@ func GetNotifications(account, device string) ([]InAppNotification, error) {
 	q.Set("route_mode", GetNetworkRouteMode())
 	u.RawQuery = q.Encode()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(u.String())
+	resp, err := APIHTTPClient.Get(u.String())
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +128,6 @@ func MarkNotificationRead(device string, notifID int64) error {
 		return fmt.Errorf("адрес шлюза не настроен")
 	}
 
-	client := &http.Client{Timeout: 4 * time.Second}
 	body, _ := json.Marshal(map[string]interface{}{
 		"device_id":       device,
 		"notification_id": notifID,
@@ -117,7 +139,7 @@ func MarkNotificationRead(device string, notifID int64) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -132,8 +154,7 @@ func GetSponsorsList() ([]SponsorCard, error) {
 		return nil, fmt.Errorf("адрес шлюза не настроен")
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("%s/api/v1/sponsors", serverAPI))
+	resp, err := APIHTTPClient.Get(fmt.Sprintf("%s/api/v1/sponsors", serverAPI))
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +191,7 @@ func FetchProfile(account, device string) (*ProfileInfo, error) {
 	}
 	u.RawQuery = q.Encode()
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(u.String())
+	resp, err := APIHTTPClient.Get(u.String())
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +215,6 @@ func UpdateProfile(account, device, nickname string, optionalExtra ...string) (*
 		return nil, fmt.Errorf("адрес шлюза не настроен")
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
 	payload := map[string]interface{}{
 		"account_number": account,
 		"device_id":      device,
@@ -215,7 +234,7 @@ func UpdateProfile(account, device, nickname string, optionalExtra ...string) (*
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +266,6 @@ func SyncProgression(account, device string, prog interface{}) error {
 		return nil
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
 	payload := map[string]interface{}{
 		"account_number": account,
 		"device_id":      device,
@@ -264,7 +282,7 @@ func SyncProgression(account, device string, prog interface{}) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -278,7 +296,6 @@ func ResetOtherDevices(account, device string) error {
 	if serverAPI == "" {
 		return nil
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
 	body, _ := json.Marshal(map[string]interface{}{
 		"account_number": account,
 		"device_id":      device,
@@ -289,7 +306,7 @@ func ResetOtherDevices(account, device string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -316,14 +333,13 @@ func UploadAvatar(account string, imgBytes []byte, filename string) (string, err
 	}
 	_ = w.Close()
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/profile/avatar", serverAPI), &b)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -359,7 +375,6 @@ func CreateCustomDonationWithMethod(account, device string, amountRub int, payme
 		return "", fmt.Errorf("адрес шлюза не настроен")
 	}
 
-	client := &http.Client{Timeout: 8 * time.Second}
 	payload := map[string]interface{}{
 		"account_number": account,
 		"device_id":      device,
@@ -376,7 +391,7 @@ func CreateCustomDonationWithMethod(account, device string, amountRub int, payme
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -412,8 +427,7 @@ func GetDiscordLinkCode(account, device string) (string, int, error) {
 		"device_id":      device,
 	})
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(fmt.Sprintf("%s/api/v1/profile/discord/link-code", serverAPI), "application/json", bytes.NewBuffer(payload))
+	resp, err := APIHTTPClient.Post(fmt.Sprintf("%s/api/v1/profile/discord/link-code", serverAPI), "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		return "", 0, err
 	}
@@ -450,8 +464,7 @@ func UnlinkDiscord(account, device string) error {
 		"device_id":      device,
 	})
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(fmt.Sprintf("%s/api/v1/profile/discord/unlink", serverAPI), "application/json", bytes.NewBuffer(payload))
+	resp, err := APIHTTPClient.Post(fmt.Sprintf("%s/api/v1/profile/discord/unlink", serverAPI), "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		return err
 	}

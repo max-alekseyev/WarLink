@@ -932,8 +932,7 @@ func FetchVotes(deviceID string) (*VotesResponse, error) {
 		return nil, fmt.Errorf("адрес шлюза не настроен")
 	}
 	url := fmt.Sprintf("%s/api/v1/votes?device_id=%s", serverAPI, deviceID)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := APIHTTPClient.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -957,8 +956,7 @@ func SubmitVote(deviceID string, appID int, title, iconURL string) (bool, string
 		"icon_url":     iconURL,
 	})
 	url := fmt.Sprintf("%s/api/v1/votes", serverAPI)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(reqBody))
+	resp, err := APIHTTPClient.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return false, "", err
 	}
@@ -986,8 +984,7 @@ func RetractVote(deviceID string, appID int) (bool, error) {
 		return false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -1021,14 +1018,13 @@ func GetServerGatewayStatus() (*GatewayStatus, error) {
 		return nil, fmt.Errorf("server API not configured")
 	}
 	apiURL := fmt.Sprintf("%s/api/v1/status?route_mode=%s&device_id=%s", serverAPI, url.QueryEscape(GetNetworkRouteMode()), url.QueryEscape(GetMachineGUID()))
-	client := &http.Client{Timeout: 3 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/v2.2.3")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/v2.2.4")
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		cachedGatewayStatusMu.RLock()
 		if cachedGatewayStatus != nil {
@@ -1086,8 +1082,7 @@ func FetchProfiles(optionalServerAPI ...string) ([]Profile, error) {
 		return nil, fmt.Errorf("server API not configured")
 	}
 	url := fmt.Sprintf("%s/api/v1/profiles", strings.TrimRight(serverAPI, "/"))
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := APIHTTPClient.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch profiles from %s: %w", url, err)
 	}
@@ -1138,14 +1133,13 @@ func FetchRemoteConfig(serverAPI string, token string, game string, targetProces
 	}
 	u.RawQuery = q.Encode()
 
-	client := &http.Client{Timeout: 6 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := client.Do(req)
+	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch remote sing-box config: %w", err)
 	}
@@ -1220,9 +1214,11 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			procSet[pClean] = struct{}{}
 		}
 	}
-	// Always include Discord and Telegram processes into tunnel
-	for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
-		procSet[dp] = struct{}{}
+	// Include Discord and Telegram processes into tunnel only if web services are enabled
+	if includeWebServices {
+		for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
+			procSet[dp] = struct{}{}
+		}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -1443,37 +1439,39 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	// Reject QUIC (HTTP/3 over UDP 443) only for YouTube to force TCP HTTP/2.
 	// BlockedServiceDomains (azurefd.net, trafficmanager.net, playfabapi.com etc.) are excluded
 	// because AION 2 and other games use UDP probes on these domains for ping measurement.
-	quicRejectDomains := append([]string{}, YouTubeDomains...)
-	rules = append(rules, RouteRule{
-		Action:       "reject",
-		Network:      "udp",
-		Port:         []int{443},
-		DomainSuffix: quicRejectDomains,
-	})
+	if includeWebServices {
+		quicRejectDomains := append([]string{}, YouTubeDomains...)
+		rules = append(rules, RouteRule{
+			Action:       "reject",
+			Network:      "udp",
+			Port:         []int{443},
+			DomainSuffix: quicRejectDomains,
+		})
 
-	// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
-	rules = append(rules,
-		RouteRule{
-			DomainSuffix: YouTubeDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			DomainSuffix: DiscordDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			DomainSuffix: SocialMessengerDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			DomainSuffix: BlockedServiceDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			IPCIDR:   BlockedServiceIPs,
-			Outbound: "hy2-gateway",
-		},
-	)
+		// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+		rules = append(rules,
+			RouteRule{
+				DomainSuffix: YouTubeDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				DomainSuffix: DiscordDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				DomainSuffix: SocialMessengerDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				DomainSuffix: BlockedServiceDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				IPCIDR:   BlockedServiceIPs,
+				Outbound: "hy2-gateway",
+			},
+		)
+	}
 
 	// Route profile domains
 	if len(allDomains) > 0 {
@@ -1498,21 +1496,23 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
-	rules = append(rules,
-		RouteRule{
-			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
-			Network:     "udp",
-			Port:        []int{3478},
-			Outbound:    "hy2-gateway",
-		},
-		RouteRule{
-			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
-			Network:     "udp",
-			PortRange:   []string{"19294:19344", "50000:65535"},
-			Outbound:    "hy2-gateway",
-		},
-	)
+	if includeWebServices {
+		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
+		rules = append(rules,
+			RouteRule{
+				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+				Network:     "udp",
+				Port:        []int{3478},
+				Outbound:    "hy2-gateway",
+			},
+			RouteRule{
+				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+				Network:     "udp",
+				PortRange:   []string{"19294:19344", "50000:65535"},
+				Outbound:    "hy2-gateway",
+			},
+		)
+	}
 
 	// Default fallback to direct
 	rules = append(rules, RouteRule{
@@ -1530,15 +1530,17 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		DomainSuffix: DynamoDBRegionProbeDomains,
 		Server:       "dns-local",
 	})
-	// Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP
-	targetTunnelDomains := append([]string{}, YouTubeDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
-	dnsRules = append(dnsRules, DNSRule{
-		DomainSuffix: targetTunnelDomains,
-		Server:       "dns-fakeip",
-	})
+	// Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP only when web services enabled
+	if includeWebServices {
+		targetTunnelDomains := append([]string{}, YouTubeDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
+		dnsRules = append(dnsRules, DNSRule{
+			DomainSuffix: targetTunnelDomains,
+			Server:       "dns-fakeip",
+		})
+	}
 	// Google / Antigravity / AI domains must resolve locally to real IPs without FakeIP
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: []string{
@@ -1600,14 +1602,6 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		dnsRules = append(dnsRules, DNSRule{
 			DomainSuffix: remoteGameDomains,
 			Server:       "dns-remote",
-		})
-	}
-
-	// ONLY web browsing bypass services (YouTube, Discord web, Social/Messengers) resolve via FakeIP
-	if len(targetTunnelDomains) > 0 {
-		dnsRules = append(dnsRules, DNSRule{
-			DomainSuffix: targetTunnelDomains,
-			Server:       "dns-fakeip",
 		})
 	}
 
@@ -1688,7 +1682,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Address:             []string{"172.28.192.1/30"},
 				MTU:                 1320,
 				AutoRoute:           true,
-				StrictRoute:         true,
+				StrictRoute:         false,
 				Stack:               "mixed",
 				RouteExcludeAddress: routeExclude,
 				UDPTimeout:          "3m",
@@ -1787,9 +1781,11 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	for _, wb := range WardogsGameProcesses {
 		procSet[wb] = struct{}{}
 	}
-	// Always include Discord and Telegram processes into tunnel
-	for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
-		procSet[dp] = struct{}{}
+	// Include Discord and Telegram processes into tunnel only if web services are enabled
+	if includeWebServices {
+		for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
+			procSet[dp] = struct{}{}
+		}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -2003,37 +1999,39 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	// Reject QUIC (HTTP/3 over UDP 443) only for YouTube to force TCP HTTP/2.
 	// BlockedServiceDomains (azurefd.net, trafficmanager.net, playfabapi.com etc.) are excluded
 	// because AION 2 and other games use UDP probes on these domains for ping measurement.
-	quicRejectDomains := append([]string{}, YouTubeDomains...)
-	rules = append(rules, RouteRule{
-		Action:       "reject",
-		Network:      "udp",
-		Port:         []int{443},
-		DomainSuffix: quicRejectDomains,
-	})
+	if includeWebServices {
+		quicRejectDomains := append([]string{}, YouTubeDomains...)
+		rules = append(rules, RouteRule{
+			Action:       "reject",
+			Network:      "udp",
+			Port:         []int{443},
+			DomainSuffix: quicRejectDomains,
+		})
 
-	// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
-	rules = append(rules,
-		RouteRule{
-			DomainSuffix: YouTubeDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			DomainSuffix: DiscordDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			DomainSuffix: SocialMessengerDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			DomainSuffix: BlockedServiceDomains,
-			Outbound:     "hy2-gateway",
-		},
-		RouteRule{
-			IPCIDR:   BlockedServiceIPs,
-			Outbound: "hy2-gateway",
-		},
-	)
+		// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+		rules = append(rules,
+			RouteRule{
+				DomainSuffix: YouTubeDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				DomainSuffix: DiscordDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				DomainSuffix: SocialMessengerDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				DomainSuffix: BlockedServiceDomains,
+				Outbound:     "hy2-gateway",
+			},
+			RouteRule{
+				IPCIDR:   BlockedServiceIPs,
+				Outbound: "hy2-gateway",
+			},
+		)
+	}
 
 	// Route profile domains & AWS GameLift / DynamoDB telemetry to gateway
 	if len(allDomains) > 0 {
@@ -2058,21 +2056,23 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		Outbound:  "hy2-gateway",
 	})
 
-	// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
-	rules = append(rules,
-		RouteRule{
-			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
-			Network:     "udp",
-			Port:        []int{3478},
-			Outbound:    "hy2-gateway",
-		},
-		RouteRule{
-			ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
-			Network:     "udp",
-			PortRange:   []string{"19294:19344", "50000:65535"},
-			Outbound:    "hy2-gateway",
-		},
-	)
+	if includeWebServices {
+		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
+		rules = append(rules,
+			RouteRule{
+				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+				Network:     "udp",
+				Port:        []int{3478},
+				Outbound:    "hy2-gateway",
+			},
+			RouteRule{
+				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
+				Network:     "udp",
+				PortRange:   []string{"19294:19344", "50000:65535"},
+				Outbound:    "hy2-gateway",
+			},
+		)
+	}
 
 	// Default fallback to direct
 	rules = append(rules, RouteRule{
@@ -2089,15 +2089,17 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		DomainSuffix: DynamoDBRegionProbeDomains,
 		Server:       "dns-local",
 	})
-	// Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP
-	targetTunnelDomains := append([]string{}, YouTubeDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
-	targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
-	dnsRules = append(dnsRules, DNSRule{
-		DomainSuffix: targetTunnelDomains,
-		Server:       "dns-fakeip",
-	})
+	// Services routed through tunnel (YouTube, Discord, Social/Messengers) resolve via FakeIP only when web services enabled
+	if includeWebServices {
+		targetTunnelDomains := append([]string{}, YouTubeDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, DiscordDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, SocialMessengerDomains...)
+		targetTunnelDomains = append(targetTunnelDomains, BlockedServiceDomains...)
+		dnsRules = append(dnsRules, DNSRule{
+			DomainSuffix: targetTunnelDomains,
+			Server:       "dns-fakeip",
+		})
+	}
 	dnsRules = append(dnsRules, DNSRule{
 		DomainSuffix: []string{
 			"google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
@@ -2155,14 +2157,6 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		dnsRules = append(dnsRules, DNSRule{
 			DomainSuffix: remoteGameDomains,
 			Server:       "dns-remote",
-		})
-	}
-
-	// ONLY web browsing bypass services (YouTube, Discord web, Social/Messengers) resolve via FakeIP
-	if len(targetTunnelDomains) > 0 {
-		dnsRules = append(dnsRules, DNSRule{
-			DomainSuffix: targetTunnelDomains,
-			Server:       "dns-fakeip",
 		})
 	}
 

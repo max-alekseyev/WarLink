@@ -5,7 +5,23 @@
  */
 
 (function () {
-    let goldMarketData = null;
+    function loadCachedGoldMarket() {
+        try {
+            if (typeof UIStore !== 'undefined') {
+                const c = UIStore.get('/api/market/gold');
+                if (c && c.stats && (c.points || c.goldBars)) return c;
+            }
+            const raw = localStorage.getItem('wl_cache_/api/market/gold');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                const d = parsed.data || parsed;
+                if (d && d.stats && (d.points || d.goldBars)) return d;
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    let goldMarketData = loadCachedGoldMarket();
     let selectedTimeframe = '90d';
     let hoverIndex = -1;
     let pinnedTimestamp = null;
@@ -49,6 +65,13 @@
             const points = (data && (data.points || data.goldBars));
             if (data && data.stats && points) {
                 goldMarketData = data;
+                if (typeof UIStore !== 'undefined') {
+                    UIStore.set('/api/market/gold', data);
+                } else {
+                    try {
+                        localStorage.setItem('wl_cache_/api/market/gold', JSON.stringify({ data, timestamp: Date.now() }));
+                    } catch (e) {}
+                }
                 renderGoldMarketUI();
                 return true;
             }
@@ -60,6 +83,9 @@
 
     function renderGoldMarketUI() {
         if (!goldMarketData) return;
+
+        const chartSkeleton = document.getElementById('gold-chart-skeleton');
+        if (chartSkeleton) chartSkeleton.style.display = 'none';
 
         const stats = goldMarketData.stats;
         const current = stats.current;
@@ -598,7 +624,7 @@
     };
 
     // Calculator: Bars -> Currency
-    window.calculateGoldToCash = function () {
+    function calculateGoldToCash() {
         if (!goldMarketData || !goldMarketData.stats) return;
         const rate = goldMarketData.stats.current;
         const inputBars = document.getElementById('gold-calc-bars');
@@ -610,10 +636,11 @@
 
         const totalCash = Math.round(bars * rate);
         inputCash.value = formatNumber(totalCash);
-    };
+    }
+    window.calculateGoldToCash = calculateGoldToCash;
 
     // Calculator: Currency -> Bars
-    window.calculateCashToBars = function () {
+    function calculateCashToBars() {
         if (!goldMarketData || !goldMarketData.stats) return;
         const rate = goldMarketData.stats.current;
         const inputBars = document.getElementById('gold-calc-bars');
@@ -629,7 +656,8 @@
 
         const bars = (cash / rate).toFixed(2);
         inputBars.value = bars.endsWith('.00') ? parseInt(bars, 10) : bars;
-    };
+    }
+    window.calculateCashToBars = calculateCashToBars;
 
     // Refresh button
     window.refreshGoldMarket = async function (e) {
@@ -639,12 +667,16 @@
             btn.textContent = 'Обновление...';
             btn.disabled = true;
         }
+        const chartSkeleton = document.getElementById('gold-chart-skeleton');
+        if (chartSkeleton) chartSkeleton.style.display = 'block';
         await fetchGoldMarketData(true);
         if (btn) {
             btn.textContent = 'Обновить';
             btn.disabled = false;
         }
     };
+
+    window.fetchGoldMarketData = fetchGoldMarketData;
 
     // View open entry point
     window.openGoldMarket = function () {
@@ -663,6 +695,9 @@
     // Auto-init listener
     window.addEventListener('DOMContentLoaded', () => {
         setupCanvasEvents();
+        if (goldMarketData) {
+            renderGoldMarketUI();
+        }
         fetchGoldMarketData();
     });
 

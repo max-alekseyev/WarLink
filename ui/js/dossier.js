@@ -288,8 +288,12 @@ function renderDossierHistoryRows(data) {
         let rows = '';
         const items = validDonations.slice(0, 2);
         items.forEach((item, idx) => {
-            const yOffset = 52 + idx * 44;
-            const dDate = (item.created_at || '').slice(0, 10) || data.joinedDate;
+            const yOffset = 52 + idx * 42;
+            let dDate = data.joinedDate;
+            if (item.created_at) {
+                const raw = (item.created_at || '').slice(0, 10);
+                dDate = raw.includes('-') ? raw.split('-').reverse().join('.') : raw;
+            }
             const dTitle = (item.amount_rub && !data.isSecret) ? `ПОДДЕРЖКА (${item.amount_rub} ₽)` : 'ПОДДЕРЖКА ШЛЮЗА';
             rows += `
                 <g transform="translate(0, ${yOffset})">
@@ -547,6 +551,7 @@ function openSponsorDossierByIndex(idx) {
 function openMyDossier() {
     if (typeof cachedAccountProfile !== 'undefined' && cachedAccountProfile) {
         openSponsorDossier({
+            account_number: cachedAccountProfile.account_number || '',
             nickname: cachedAccountProfile.nickname || 'МОЙ ПРОФИЛЬ',
             total_donated_rub: cachedAccountProfile.total_donated_rub || 0,
             joined_date: cachedAccountProfile.created_at || '27.09.2026',
@@ -576,14 +581,21 @@ function openSponsorDossier(sponsor) {
         dossierLoadingTimer = null;
     }
 
-    modal.style.display = 'flex';
-    const data = prepareDossierData(sponsor);
-    container.innerHTML = renderDossierSvg(
-        data,
-        data.isSecret,
-        Boolean(data.steamId),
-        Boolean(data.motto)
-    );
+    try {
+        modal.style.display = 'flex';
+        const data = prepareDossierData(sponsor);
+        container.innerHTML = renderDossierSvg(
+            data,
+            data.isSecret,
+            Boolean(data.steamId),
+            Boolean(data.motto)
+        );
+    } catch (e) {
+        console.error('Failed to render sponsor dossier:', e);
+        if (typeof showToast === 'function') {
+            showToast('Ошибка отображения досье');
+        }
+    }
 }
 
 function closeSponsorDossier() {

@@ -69,7 +69,7 @@ async function fetchSponsors() {
                 renderSponsors(cachedSponsors);
             },
             () => {
-                if (grid.children.length === 0) {
+                if (!grid.querySelector('.sponsor-card:not(.skeleton-card)') || grid.querySelector('.skeleton-card')) {
                     grid.innerHTML = getSponsorsSkeletonHtml(4);
                 }
             }
@@ -176,6 +176,27 @@ async function updateCommunityGoal(sponsors) {
     }
 }
 
+function parseSponsorDateToTime(str) {
+    if (!str) return 0;
+    if (str.includes('.')) {
+        const p = str.split('.');
+        if (p.length === 3) return new Date(`${p[2]}-${p[1]}-${p[0]}T00:00:00`).getTime() || 0;
+    }
+    if (str.includes('-')) {
+        return new Date(str).getTime() || 0;
+    }
+    return 0;
+}
+
+function formatSponsorDate(val) {
+    if (!val) return '';
+    if (val.includes('-')) {
+        const p = val.slice(0, 10).split('-');
+        if (p.length === 3) return `${p[2]}.${p[1]}.${p[0]}`;
+    }
+    return val;
+}
+
 function renderSponsors(sponsors) {
     const grid = document.getElementById('sponsors-grid');
     const badge = document.getElementById('sponsors-count-badge');
@@ -196,13 +217,16 @@ function renderSponsors(sponsors) {
 
     // Filter and sort by active category
     let displayedSponsors = [...sponsors];
-    if (currentSponsorCategory === 'month') {
+    if (currentSponsorCategory === 'all') {
+        displayedSponsors.sort((a, b) => (b.total_donated_rub || 0) - (a.total_donated_rub || 0));
+    } else if (currentSponsorCategory === 'month') {
         displayedSponsors = displayedSponsors.filter(s => s.is_active);
+        displayedSponsors.sort((a, b) => (b.total_donated_rub || 0) - (a.total_donated_rub || 0));
     } else if (currentSponsorCategory === 'new') {
         displayedSponsors.sort((a, b) => {
-            const dateA = a.joined_date || '';
-            const dateB = b.joined_date || '';
-            return dateB.localeCompare(dateA);
+            const timeA = parseSponsorDateToTime(a.joined_date || a.created_at);
+            const timeB = parseSponsorDateToTime(b.joined_date || b.created_at);
+            return timeB - timeA;
         });
     }
 
@@ -241,16 +265,17 @@ function renderSponsors(sponsors) {
             : (s.nickname && !s.nickname.includes('****') ? s.nickname : 'Оператор 101');
         const nick = escapeHtml(cleanNick);
         const isSecret = Boolean(s.hide_donation_amount || s.is_secret || s.secret_donations);
-        let metaText = `Спонсор сервера • ${escapeHtml(s.joined_date || '')}`;
+        const displayDate = formatSponsorDate(s.joined_date);
+        let metaText = `Спонсор сервера • ${escapeHtml(displayDate)}`;
         if (isSecret) {
-            metaText = `[Вклад: засекречен] • ${escapeHtml(s.joined_date || '')}`;
+            metaText = `[Вклад: засекречен] • ${escapeHtml(displayDate)}`;
         } else if (s.total_donated_rub > 0) {
-            metaText = `Вклад: ${s.total_donated_rub} ₽ • ${escapeHtml(s.joined_date || '')}`;
+            metaText = `Вклад: ${s.total_donated_rub} ₽ • ${escapeHtml(displayDate)}`;
         }
 
         const existing = existingCards.get(sponsorKey);
         if (existing) {
-            existing.onclick = () => openSponsorDossierByIndex(originalIdx >= 0 ? originalIdx : 0);
+            existing.onclick = () => openSponsorDossier(s);
             const nickEl = existing.querySelector('.sponsor-card-nick');
             if (nickEl && nickEl.textContent !== nick) nickEl.textContent = nick;
             const metaEl = existing.querySelector('.sponsor-card-meta');
@@ -287,7 +312,7 @@ function renderSponsors(sponsors) {
             card.className = 'sponsor-card';
             card.dataset.sponsorKey = sponsorKey;
             card.title = 'Посмотреть боевое досье оператора';
-            card.onclick = () => openSponsorDossierByIndex(originalIdx >= 0 ? originalIdx : 0);
+            card.onclick = () => openSponsorDossier(s);
 
             const avatarHtml = s.avatar_url ? `
                 <img class="sponsor-card-avatar" src="${escapeHtml(s.avatar_url)}" alt="">

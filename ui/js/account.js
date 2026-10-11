@@ -1,3 +1,13 @@
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 function loadCachedAccountProfile() {
     try {
         const raw = localStorage.getItem('warlink_account_profile');
@@ -59,7 +69,7 @@ async function fetchAccountProfile() {
                 renderAccountData(p);
             },
             () => {
-                if (list && list.children.length === 0) {
+                if (list && (!list.querySelector('.donation-row:not(.skeleton-card)') || list.querySelector('.skeleton-card'))) {
                     list.innerHTML = getDonationsSkeletonHtml(2);
                 }
             }
@@ -156,15 +166,15 @@ function renderAccountData(p) {
     const tierBadge = document.getElementById('profile-tier-badge');
     if (tierBadge) {
         if (p.account_tier === 'admin' || p.is_admin) {
-            tierBadge.textContent = 'Статус: Администратор (Админ-слот 61/61)';
+            tierBadge.textContent = 'Статус: Администратор';
             tierBadge.classList.remove('tier-sponsor');
             tierBadge.classList.add('tier-admin');
         } else if (p.is_sponsor) {
-            tierBadge.textContent = 'Статус: Спонсор шлюза';
+            tierBadge.textContent = 'Статус: Спонсор';
             tierBadge.classList.remove('tier-admin');
             tierBadge.classList.add('tier-sponsor');
         } else {
-            tierBadge.textContent = 'Статус: Базовый доступ';
+            tierBadge.textContent = 'Статус: Игрок';
             tierBadge.classList.remove('tier-sponsor', 'tier-admin');
         }
     }
@@ -377,56 +387,213 @@ window.openBoostyLink = openBoostyLink;
 window.openSteamLink = openSteamLink;
 
 async function loadBoostyGoal() {
+    function applyData(data) {
+        if (!data || !data.success) return;
+        // 1. Author boosty goal
+        const author = data.author_boosty || {};
+        const current = author.current_amount || 0;
+        const target = author.target_amount || 100000;
+        const pct = Math.min(100, Math.max(0, target > 0 ? (current / target) * 100 : 0));
+
+        const titleEl = document.getElementById('boosty-goal-title');
+        if (titleEl && author.title) titleEl.textContent = author.title;
+
+        const targetEl = document.getElementById('boosty-goal-target');
+        if (targetEl) targetEl.textContent = target.toLocaleString('ru-RU') + ' ₽';
+
+        const fillEl = document.getElementById('boosty-goal-fill');
+        if (fillEl) fillEl.style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
+
+        const metaEl = document.getElementById('boosty-goal-text');
+        if (metaEl) {
+            metaEl.textContent = `Собрано: ${current.toLocaleString('ru-RU')} ₽ из ${target.toLocaleString('ru-RU')} ₽ (${pct.toFixed(1)}%)`;
+        }
+
+        // 2. Dynamic Special Projects (Zero Hardcode)
+        renderSpecialProjects(data.special_projects);
+
+        // 3. Dynamic Donate Config (Zero Hardcode)
+        if (data.donate_config) {
+            hydrateDonateConfig(data.donate_config);
+        }
+    }
+
+    if (typeof UIStore !== 'undefined' && typeof UIStore.requestSWR === 'function') {
+        UIStore.requestSWR(
+            '/api/community-goal',
+            async () => {
+                const res = await fetch('/api/community-goal');
+                if (!res.ok) return null;
+                return await res.json();
+            },
+            (data, isFresh) => {
+                applyData(data);
+            },
+            () => {}
+        );
+        return;
+    }
+
     try {
         const res = await fetch('/api/community-goal');
         if (!res.ok) return;
         const data = await res.json();
-        if (data && data.success) {
-            // 1. Author boosty goal
-            const author = data.author_boosty || {};
-            const current = author.current_amount || 0;
-            const target = author.target_amount || 100000;
-            const pct = Math.min(100, Math.max(0, (current / target) * 100));
-
-            const titleEl = document.getElementById('boosty-goal-title');
-            if (titleEl && author.title) titleEl.textContent = author.title;
-
-            const targetEl = document.getElementById('boosty-goal-target');
-            if (targetEl) targetEl.textContent = target.toLocaleString('ru-RU') + ' ₽';
-
-            const fillEl = document.getElementById('boosty-goal-fill');
-            if (fillEl) fillEl.style.width = Math.max(pct > 0 ? 2 : 0, pct) + '%';
-
-            const metaEl = document.getElementById('boosty-goal-text');
-            if (metaEl) {
-                metaEl.textContent = `Собрано: ${current.toLocaleString('ru-RU')} ₽ из ${target.toLocaleString('ru-RU')} ₽ (${pct.toFixed(1)}%)`;
-            }
-
-            // 2. Battlefield 6 special project goal
-            if (data.special_projects && data.special_projects.length > 0) {
-                const bf6 = data.special_projects[0];
-                const bf6Target = bf6.target_amount_rub || 1600;
-                const bf6Current = bf6.current_amount_rub || 0;
-                const bf6Pct = Math.min(100, Math.max(0, bf6.percent || 0));
-
-                const bf6TargetEl = document.getElementById('donate-bf6-target');
-                if (bf6TargetEl) bf6TargetEl.textContent = bf6Target.toLocaleString('ru-RU') + ' ₽';
-
-                const bf6FillEl = document.getElementById('donate-bf6-fill');
-                if (bf6FillEl) bf6FillEl.style.width = Math.max(bf6Pct > 0 ? 2 : 0, bf6Pct) + '%';
-
-                const bf6TextEl = document.getElementById('donate-bf6-text');
-                if (bf6TextEl) {
-                    if (bf6.is_completed) {
-                        bf6TextEl.textContent = 'Цель достигнута! Игра получена разработчиком';
-                    } else {
-                        bf6TextEl.textContent = `Собрано: ${bf6Current.toLocaleString('ru-RU')} ₽ из ${bf6Target.toLocaleString('ru-RU')} ₽ (${bf6Pct.toFixed(1)}%)`;
-                    }
-                }
-            }
-        }
+        applyData(data);
     } catch(e) {
         console.error('loadBoostyGoal error:', e);
+    }
+}
+
+function renderSpecialProjects(projects) {
+    const container = document.getElementById('special-projects-container');
+    if (!container) return;
+
+    if (!Array.isArray(projects) || projects.length === 0) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+
+    const activeProjects = projects.filter(p => p && p.is_active !== false);
+    if (activeProjects.length === 0) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'flex';
+    container.innerHTML = activeProjects.map(project => {
+        const target = project.target_amount_rub || project.base_price_rub || 0;
+        const current = project.current_amount_rub || 0;
+        const pct = Math.min(100, Math.max(0, project.percent || (target > 0 ? (current / target) * 100 : 0)));
+        const fillWidth = Math.max(pct > 0 ? 2 : 0, pct);
+
+        let priceHtml = '';
+        if (project.discount_price_rub && project.discount_price_rub > 0) {
+            priceHtml = `
+                <span class="price-old">${(project.base_price_rub || target).toLocaleString('ru-RU')} ₽</span>
+                <span class="price-active">${project.discount_price_rub.toLocaleString('ru-RU')} ₽</span>
+            `;
+        } else {
+            priceHtml = `<span class="price-active">${(project.base_price_rub || target).toLocaleString('ru-RU')} ₽</span>`;
+        }
+
+        let statusText = '';
+        if (project.is_completed) {
+            statusText = 'Цель достигнута! Игра получена разработчиком';
+        } else {
+            statusText = `Собрано: ${current.toLocaleString('ru-RU')} ₽ из ${target.toLocaleString('ru-RU')} ₽ (${pct.toFixed(1)}%)`;
+        }
+
+        let buttonsHtml = '';
+        if (project.boosty_url) {
+            buttonsHtml += `
+                <button type="button" class="btn-boosty-action" onclick="openBoostyLink('${escapeHtml(project.boosty_url)}')">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    <span>${escapeHtml(project.boosty_label || 'Поддержать сбор')}</span>
+                </button>
+            `;
+        }
+        if (project.steam_url) {
+            buttonsHtml += `
+                <button type="button" class="btn-steam-action" onclick="openSteamLink('${escapeHtml(project.steam_url)}')">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.811c0 .052.005.105.005.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 14.819C1.903 20.099 6.702 24 12.021 24c6.627 0 12-5.373 12-12s-5.373-12-12.042-12zm4.463 11.891c-1.638 0-2.969-1.332-2.969-2.97 0-1.638 1.331-2.97 2.969-2.97 1.637 0 2.969 1.332 2.969 2.97 0 1.638-1.332 2.97-2.969 2.97zm-7.616 5.867c-1.023 0-1.854-.83-1.854-1.854 0-.46.168-.881.449-1.209l3.076 1.272c-.104.996-.902 1.791-1.671 1.791z"/></svg>
+                    <span>${escapeHtml(project.steam_label || 'Подарить в Steam')}</span>
+                </button>
+            `;
+        }
+
+        return `
+            <div class="boosty-spec-box">
+                <div class="boosty-spec-header">
+                    <div class="boosty-spec-title-wrap">
+                        <span class="boosty-spec-badge font-mono">${escapeHtml(project.badge || 'СПЕЦПРОЕКТ')}</span>
+                        <span class="boosty-spec-title">${escapeHtml(project.title || '')}</span>
+                    </div>
+                    <div class="boosty-spec-price font-mono">
+                        ${priceHtml}
+                    </div>
+                </div>
+                <div class="boosty-spec-desc">
+                    ${escapeHtml(project.description || '')}
+                </div>
+                <div class="boosty-bar-wrap">
+                    <div class="boosty-bar-track">
+                        <div class="boosty-bar-fill" style="width: ${fillWidth}%;"></div>
+                    </div>
+                    <span class="boosty-bar-pct font-mono">${statusText}</span>
+                </div>
+                <div class="boosty-spec-btns font-mono">
+                    ${buttonsHtml}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function hydrateDonateConfig(config) {
+    if (!config) return;
+
+    if (config.crypto_usdt_trc20_address) {
+        currentCryptoAddress = config.crypto_usdt_trc20_address;
+        const inputAddr = document.getElementById('input-crypto-addr');
+        if (inputAddr) inputAddr.value = currentCryptoAddress;
+        const qrContainer = document.getElementById('crypto-qr-container');
+        if (qrContainer && qrContainer.dataset.rendered && qrContainer.dataset.rendered !== currentCryptoAddress) {
+            delete qrContainer.dataset.rendered;
+            if (currentDonateTab === 'crypto') {
+                renderCryptoQR();
+            }
+        }
+    }
+
+    if (config.donate_min_amount_rub) {
+        window.donateMinAmountRub = config.donate_min_amount_rub;
+        const inputDonate = document.getElementById('input-donate-custom');
+        if (inputDonate) {
+            inputDonate.min = String(config.donate_min_amount_rub);
+            if (parseInt(inputDonate.value) < config.donate_min_amount_rub) {
+                inputDonate.value = String(config.donate_min_amount_rub);
+                currentDonateAmount = config.donate_min_amount_rub;
+                updateDonateCalc(currentDonateAmount);
+            }
+        }
+    }
+
+    if (config.discord_invite_url) {
+        window.discordInviteUrl = config.discord_invite_url;
+    }
+    if (config.steam_author_url) {
+        window.steamAuthorUrl = config.steam_author_url;
+    }
+    if (config.boosty_donate_url) {
+        window.boostyDonateUrl = config.boosty_donate_url;
+    }
+
+    // Dynamic Boosty subscriptions
+    const subsContainer = document.getElementById('boosty-subs-container');
+    if (subsContainer && Array.isArray(config.boosty_subscription_tiers) && config.boosty_subscription_tiers.length > 0) {
+        subsContainer.innerHTML = config.boosty_subscription_tiers.map(tier => {
+            const rankName = tier.rank || tier.title || '';
+            const cost = tier.cost_rub || tier.price_rub || 0;
+            return `
+                <div class="boosty-sub-card" onclick="openBoostyLink('${escapeHtml(tier.url)}')">
+                    <span class="sub-card-rank">${escapeHtml(rankName)}</span>
+                    <span class="sub-card-cost">${cost.toLocaleString('ru-RU')} ₽<span class="sub-per">/мес</span></span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Dynamic server perks
+    const perksContainer = document.getElementById('donate-perks-container');
+    if (perksContainer && Array.isArray(config.donate_perks) && config.donate_perks.length > 0) {
+        perksContainer.innerHTML = config.donate_perks.map(perk => `
+            <div class="donate-perk-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>${escapeHtml(perk)}</span>
+            </div>
+        `).join('');
     }
 }
 
@@ -559,20 +726,20 @@ function switchDonateTab(tab) {
     }
 }
 
-const TRC20_USDT_ADDRESS = 'TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM';
+let currentCryptoAddress = 'TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM';
 
 function renderCryptoQR() {
     const container = document.getElementById('crypto-qr-container');
     if (!container) return;
-    if (container.dataset.rendered === 'true') return;
+    if (container.dataset.rendered === currentCryptoAddress) return;
 
     try {
         if (typeof qrcode === 'function') {
             const qr = qrcode(0, 'M');
-            qr.addData(TRC20_USDT_ADDRESS);
+            qr.addData(currentCryptoAddress);
             qr.make();
             container.innerHTML = qr.createSvgTag(4, 2);
-            container.dataset.rendered = 'true';
+            container.dataset.rendered = currentCryptoAddress;
         }
     } catch (err) {
         console.error('Failed to generate crypto QR code:', err);
@@ -580,7 +747,7 @@ function renderCryptoQR() {
 }
 
 function copyCryptoAddress() {
-    const addr = TRC20_USDT_ADDRESS;
+    const addr = currentCryptoAddress;
     const input = document.getElementById('input-crypto-addr');
     if (input) {
         input.select();
@@ -652,20 +819,22 @@ function selectDonateMethod(method) {
 }
 
 function selectDonatePreset(amount) {
-    currentDonateAmount = amount;
+    const minAmt = window.donateMinAmountRub || 100;
+    currentDonateAmount = Math.max(minAmt, amount);
     const input = document.getElementById('input-donate-custom');
-    if (input) input.value = amount;
+    if (input) input.value = currentDonateAmount;
 
     document.querySelectorAll('.preset-chip').forEach(btn => {
         const val = parseInt(btn.textContent);
         btn.classList.toggle('active', val === amount);
     });
-    updateDonateCalc(amount);
+    updateDonateCalc(currentDonateAmount);
 }
 
 function onCustomDonateInput(val) {
-    let amt = parseInt(val) || 100;
-    if (amt < 100) amt = 100;
+    const minAmt = window.donateMinAmountRub || 100;
+    let amt = parseInt(val) || minAmt;
+    if (amt < minAmt) amt = minAmt;
     currentDonateAmount = amt;
 
     document.querySelectorAll('.preset-chip').forEach(btn => {
@@ -678,13 +847,15 @@ function onCustomDonateInput(val) {
 function updateDonateCalc(amt) {
     const calcEl = document.getElementById('donate-calc-summary');
     if (calcEl) {
-        const days = Math.floor(amt / 100) * 30;
+        const minAmt = window.donateMinAmountRub || 100;
+        const days = Math.floor(amt / minAmt) * 30;
         calcEl.textContent = `Статус «Спонсор» на ${days} дн.`;
     }
 }
 
 async function submitCustomDonation() {
-    const amt = Math.max(100, currentDonateAmount || 100);
+    const minAmt = window.donateMinAmountRub || 100;
+    const amt = Math.max(minAmt, currentDonateAmount || minAmt);
     const method = currentDonateMethod === 'card' ? 'card' : 'sbp';
     try {
         await fetch('/api/server-donate', {
@@ -842,12 +1013,18 @@ async function saveNickname() {
         const data = await resp.json();
         if (resp.ok && data.success) {
             showToast('Никнейм успешно проверен и сохранен');
+            try {
+                localStorage.removeItem('warlink_sponsors_cache');
+            } catch (e) {}
             if (typeof UIStore !== 'undefined') {
                 UIStore.invalidate('/api/user-profile');
                 UIStore.invalidate('/api/sponsors');
             }
             fetchStatus();
             fetchAccountProfile();
+            if (typeof fetchSponsors === 'function') {
+                fetchSponsors();
+            }
         } else {
             showToast(data.message || data.error || 'Ошибка сохранения никнейма');
         }
@@ -988,10 +1165,11 @@ async function unlinkDiscordAccount() {
 }
 
 async function openDiscordCommunity() {
+    const url = window.discordInviteUrl || 'https://discord.gg/2h8nVRUBeT';
     try {
-        await fetch('/api/open-discord');
+        await fetch('/api/open-discord?url=' + encodeURIComponent(url));
     } catch (e) {
-        window.open('https://discord.gg/2h8nVRUBeT', '_blank');
+        window.open(url, '_blank');
     }
 }
 

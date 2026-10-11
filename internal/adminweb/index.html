@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WarLink Control Plane — Панель управления</title>
+    <link rel="stylesheet" href="/style.css?v=2.1.12.3">
+</head>
+<body>
+    <div id="app-container">
+
+        <!-- SCREEN 1: Setup Wizard (Первичный мастер настройки) -->
+        <div id="screen-setup" class="auth-wrapper" style="display: none;">
+            <div class="auth-card" style="max-width: 480px;">
+                <div class="auth-header">
+                    <svg class="auth-logo" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    <h1 class="auth-title">Мастер настройки WarLink</h1>
+                    <p class="auth-subtitle">Создание учетной записи администратора и привязка 2FA (TOTP)</p>
+                </div>
+
+                <div id="setup-step-1">
+                    <div class="form-group">
+                        <label class="form-label">Логин администратора</label>
+                        <input type="text" id="setup-username" class="form-input" placeholder="admin" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Пароль (минимум 8 символов)</label>
+                        <input type="password" id="setup-password" class="form-input" placeholder="Введите надежный пароль" autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Подтверждение пароля</label>
+                        <input type="password" id="setup-password-confirm" class="form-input" placeholder="Повторите пароль" autocomplete="new-password">
+                    </div>
+                    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="goToSetupStep2()">Продолжить: Настройка 2FA</button>
+                </div>
+
+                <div id="setup-step-2" style="display: none;">
+                    <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+                        Отсканируйте QR-код в приложении аутентификации (Google Authenticator, Яндекс Ключ, 2FAS, Bitwarden) или введите секретный ключ вручную:
+                    </p>
+                    
+                    <div class="totp-qr-wrap" id="setup-qr-wrap">
+                        <div id="setup-qr-code" style="width: 180px; height: 180px; display: flex; align-items: center; justify-content: center;">
+                            <!-- QR SVG rendered here -->
+                        </div>
+                    </div>
+
+                    <div class="totp-secret-box font-mono" id="setup-totp-secret">ЗАГРУЗКА...</div>
+
+                    <div style="margin-top: 14px;">
+                        <span class="form-label">Одноразовые резервные коды (сохраните их):</span>
+                        <div class="backup-codes-grid font-mono" id="setup-backup-codes">
+                            <!-- Backup codes listed here -->
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label">Проверочный 6-значный код из приложения</label>
+                        <input type="text" id="setup-otp-code" class="form-input font-mono" placeholder="000000" maxlength="6" style="text-align: center; font-size: 16px; letter-spacing: 4px;">
+                    </div>
+
+                    <div style="display: flex; gap: 8px; margin-top: 14px;">
+                        <button class="btn btn-secondary" style="flex: 1;" onclick="backToSetupStep1()">Назад</button>
+                        <button class="btn btn-primary" style="flex: 2;" onclick="submitSetupWizard()">Активировать аккаунт</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SCREEN 2: Login Screen (Авторизация: Логин + Пароль + OTP) -->
+        <div id="screen-login" class="auth-wrapper" style="display: none;">
+            <div class="auth-card">
+                <div class="auth-header">
+                    <svg class="auth-logo" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    <h1 class="auth-title">WarLink Control Plane</h1>
+                    <p class="auth-subtitle">Вход в панель управления инфраструктурой</p>
+                </div>
+
+                <div id="login-step-credentials">
+                    <div class="form-group">
+                        <label class="form-label">Логин</label>
+                        <input type="text" id="login-username" class="form-input" placeholder="admin" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Пароль</label>
+                        <input type="password" id="login-password" class="form-input" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') goToLoginOtp()">
+                    </div>
+                    <button class="btn btn-primary" style="width: 100%; margin-top: 12px;" onclick="goToLoginOtp()">Далее: Проверка 2FA</button>
+                </div>
+
+                <div id="login-step-otp" style="display: none;">
+                    <div class="form-group">
+                        <label class="form-label">Код подтверждения (TOTP 2FA или резервный код)</label>
+                        <input type="text" id="login-otp-code" class="form-input font-mono" placeholder="000000" maxlength="12" style="text-align: center; font-size: 16px; letter-spacing: 3px;" onkeydown="if(event.key==='Enter') submitLogin()">
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-top: 14px;">
+                        <button class="btn btn-secondary" style="flex: 1;" onclick="backToLoginCredentials()">Назад</button>
+                        <button class="btn btn-primary" style="flex: 2;" onclick="submitLogin()">Войти в систему</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SCREEN 3: Dashboard (Главная панель управления) -->
+        <div id="screen-dashboard" style="display: none;">
+            <!-- Top App Header -->
+            <header class="app-header">
+                <div class="header-left">
+                    <a href="#view-special-projects" class="brand-wrap">
+                        <svg class="brand-logo" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                        <span class="brand-title">WARLINK <span class="brand-tag font-mono">CONTROL PLANE</span></span>
+                    </a>
+                    <div class="server-indicator font-mono">
+                        <span class="status-dot"></span>
+                        <span id="header-node-status">Stockholm Master :8081</span>
+                    </div>
+                </div>
+
+                <div class="header-center" style="display: flex; align-items: center; gap: 8px; flex: 1; max-width: 360px; margin: 0 16px;">
+                    <div style="position: relative; width: 100%;">
+                        <svg style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; stroke: var(--text-muted);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" id="nav-account-search" class="form-input font-mono" placeholder="Поиск аккаунта (XXXX-XXXX-XXXX-XXXX)..." style="padding-left: 26px; height: 28px; font-size: 11px; width: 100%;" onkeydown="if(event.key==='Enter') searchAccountFromNav()">
+                    </div>
+                </div>
+
+                <div class="header-right">
+                    <div class="font-mono" style="font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        <span id="header-admin-user">admin</span>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="logoutAdmin()" title="Выйти из аккаунта">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                        Выйти
+                    </button>
+                </div>
+            </header>
+
+            <!-- App Body: Sidebar + Main Content -->
+            <div class="app-body">
+                <!-- Sidebar -->
+                <nav class="app-sidebar">
+                    <a class="nav-item active" data-tab="special-projects" onclick="switchAdminTab('special-projects')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                        <span>Спецпроекты</span>
+                    </a>
+                    <a class="nav-item" data-tab="nodes" onclick="switchAdminTab('nodes')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+                        <span>Шлюзы и ноды</span>
+                    </a>
+                    <a class="nav-item" data-tab="monetization" onclick="switchAdminTab('monetization')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
+                        <span>Финансы и СБП</span>
+                    </a>
+                    <a class="nav-item" data-tab="notifications" onclick="switchAdminTab('notifications')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                        <span>Уведомления</span>
+                    </a>
+                    <a class="nav-item" data-tab="support" onclick="switchAdminTab('support')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        <span>Поддержка и тикеты</span>
+                    </a>
+                    <a class="nav-item" data-tab="games-kanban" onclick="switchAdminTab('games-kanban')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                        <span>Игры, Канбан & Рынок</span>
+                    </a>
+                    <div class="sidebar-divider"></div>
+                    <a class="nav-item" data-tab="system-ops" onclick="switchAdminTab('system-ops')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <span>Системные флаги</span>
+                    </a>
+                </nav>
+
+                <!-- Main Content Area -->
+                <main class="app-content">
+
+                    <!-- TAB 1: Спецпроекты -->
+                    <section id="view-special-projects" class="view-pane active">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Спецпроекты и Краудфандинг</h2>
+                                <p class="view-subtitle">Единый источник истины: таблица special_projects</p>
+                            </div>
+                            <button class="btn btn-primary" onclick="openNewProjectModal()">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                Создать спецпроект
+                            </button>
+                        </div>
+
+                        <div id="special-projects-grid" class="grid-2">
+                            <!-- Dynamic project cards loaded here -->
+                        </div>
+                    </section>
+
+                    <!-- TAB 2: Шлюзы и ноды -->
+                    <section id="view-nodes" class="view-pane">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Игровые шлюзы и Пул слотов</h2>
+                                <p class="view-subtitle">Единый пул 100 слотов, глобальный Drain Mode и мониторинг шлюзов Hysteria 2</p>
+                            </div>
+                            <button class="btn btn-secondary" onclick="loadClusterNodes()">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                Обновить шлюзы
+                            </button>
+                        </div>
+
+                        <!-- Единый пул игровых слотов кластера -->
+                        <div class="card" style="margin-bottom: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                                <div>
+                                    <div class="card-title" style="margin-bottom: 2px;">Единый пул игровых слотов кластера</div>
+                                    <div class="text-secondary" style="font-size: 11px;">Общий лимит сессий распределяется на всю инфраструктуру WarLink</div>
+                                </div>
+                                <label class="switch-label">
+                                    <input type="checkbox" id="cluster-drain-switch" class="switch-input" onchange="toggleClusterDrain(this.checked)">
+                                    <span style="font-size: 11px; font-weight: 600;">Глобальный Drain Mode (техобслуживание)</span>
+                                </label>
+                            </div>
+
+                            <div class="grid-3">
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Общий онлайн игроков</div>
+                                    <div class="stat-box-val font-mono" id="cluster-total-online">0 / 100</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Спонсорский резерв</div>
+                                    <div class="stat-box-val font-mono" id="cluster-sponsor-slots">10 слотов</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Доступно для свободных слотов</div>
+                                    <div class="stat-box-val font-mono" id="cluster-free-slots" style="color: var(--accent);">90 слотов</div>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; gap: 12px; align-items: flex-end; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); flex-wrap: wrap;">
+                                <div class="form-group" style="margin-bottom: 0; min-width: 140px;">
+                                    <label class="form-label" style="font-size: 11px;">Всего слотов пула</label>
+                                    <input type="number" id="cluster-max-slots-input" class="form-input font-mono" value="100" min="10" max="1000">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0; min-width: 140px;">
+                                    <label class="form-label" style="font-size: 11px;">Резерв спонсоров</label>
+                                    <input type="number" id="cluster-sponsor-slots-input" class="form-input font-mono" value="10" min="0" max="500">
+                                </div>
+                                <button class="btn btn-secondary btn-sm" style="height: 32px;" onclick="saveClusterSlots()">
+                                    Сохранить емкость пула
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Master Control Plane Node -->
+                        <div id="cluster-master-node-card" style="margin-bottom: 16px;"></div>
+
+                        <!-- 2 Физических игровых шлюза -->
+                        <div style="margin-bottom: 20px;">
+                            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">Выделенные игровые шлюзы Hysteria 2 (QUIC/UDP)</div>
+                            <div class="text-secondary" style="font-size: 11px; margin-bottom: 12px;">Собственные серверные ноды с аппаратным сетевым стеком и алгоритмом BBR</div>
+                            <div id="cluster-nodes-grid" class="grid-2">
+                                <!-- Gateway cards loaded here: Moscow & Frankfurt -->
+                            </div>
+                        </div>
+
+                        <!-- 3 Режима маршрутизации клиентов -->
+                        <div>
+                            <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">Клиентские маршруты лаунчера (3 режима)</div>
+                            <div class="text-secondary" style="font-size: 11px; margin-bottom: 12px;">Профили подключения, выбираемые игроками в настройках приложения WarLink</div>
+                            <div id="cluster-routes-grid" class="grid-3">
+                                <!-- 3 Route cards loaded here: Direct Moscow, Direct Frankfurt, Transit -->
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB 3: Финансы и Спонсорство -->
+                    <section id="view-monetization" class="view-pane">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Финансы, СБП и Спонсоры</h2>
+                                <p class="view-subtitle">Управление способами оплаты, реквизитами и ручное начисление спонсорства</p>
+                            </div>
+                            <button class="btn btn-primary" onclick="saveMonetizationSettings()">Сохранить настройки</button>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="card">
+                                <div class="card-title">Способы приема пожертвований</div>
+                                <div class="form-group">
+                                    <label class="switch-label">
+                                        <input type="checkbox" id="pay-boosty-enabled" class="switch-input">
+                                        <span>Подписки Boosty (уровни доступа)</span>
+                                    </label>
+                                </div>
+                                <div class="form-group">
+                                    <label class="switch-label">
+                                        <input type="checkbox" id="pay-sbp-enabled" class="switch-input">
+                                        <span>СБП / Карты РФ (прямые переводы)</span>
+                                    </label>
+                                </div>
+                                <div class="form-group">
+                                    <label class="switch-label">
+                                        <input type="checkbox" id="pay-usdt-enabled" class="switch-input">
+                                        <span>USDT (TRC20 криптовалюта)</span>
+                                    </label>
+                                </div>
+                                <div class="form-group" style="margin-top: 14px;">
+                                    <label class="form-label">Адрес кошелька USDT (TRC20)</label>
+                                    <input type="text" id="pay-usdt-address" class="form-input font-mono" placeholder="T...">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Текст баннера паузы платежей (если выключены)</label>
+                                    <input type="text" id="pay-pause-reason" class="form-input" placeholder="Платежи временно приостановлены">
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <div class="card-title">Ручное начисление спонсорского статуса</div>
+                                <div class="form-group">
+                                    <label class="form-label">Номер аккаунта игрока</label>
+                                    <input type="text" id="grant-account-number" class="form-input font-mono" placeholder="5230-6527-2989-4096">
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Срок действия</label>
+                                        <select id="grant-duration-months" class="form-select">
+                                            <option value="1">1 месяц (30 дней)</option>
+                                            <option value="3">3 месяца</option>
+                                            <option value="6">6 месяцев</option>
+                                            <option value="12">1 год</option>
+                                            <option value="120">Постоянно (10 лет)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Сумма вклада (₽)</label>
+                                        <input type="number" id="grant-amount-rub" class="form-input" value="500">
+                                    </div>
+                                </div>
+                                <button class="btn btn-secondary" style="width: 100%; margin-top: 8px;" onclick="grantSponsorStatus()">
+                                    Начислить статус спонсора
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB 4: Уведомления (Strictly no депеши) -->
+                    <section id="view-notifications" class="view-pane">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Внутриигровые уведомления</h2>
+                                <p class="view-subtitle">Мгновенная рассылка уведомлений в лаунчеры игроков</p>
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <!-- Send Form -->
+                            <div class="card">
+                                <div class="card-title">Отправить уведомление</div>
+                                <div class="form-group">
+                                    <label class="form-label">Заголовок уведомления</label>
+                                    <input type="text" id="notif-title" class="form-input" placeholder="Технические работы завершены" maxlength="120" oninput="updateNotifPreview()">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Текст сообщения</label>
+                                    <textarea id="notif-message" class="form-textarea" placeholder="Шлюзы работают в штатном режиме..." maxlength="1000" oninput="updateNotifPreview()"></textarea>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Важность</label>
+                                        <select id="notif-severity" class="form-select" onchange="updateNotifPreview()">
+                                            <option value="info">Инфо (Синий)</option>
+                                            <option value="update" selected>Обновление (Оранжевый)</option>
+                                            <option value="warning">Внимание (Желтый)</option>
+                                            <option value="urgent">Срочно (Красный)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">Аудитория</label>
+                                        <select id="notif-target-type" class="form-select" onchange="toggleNotifTargetField()">
+                                            <option value="broadcast" selected>Всем игрокам (Broadcast)</option>
+                                            <option value="account">Конкретный аккаунт</option>
+                                            <option value="device">Конкретное устройство</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="form-group" id="notif-target-id-wrap" style="display: none;">
+                                    <label class="form-label">ID получателя (номер аккаунта или хеш ПК)</label>
+                                    <input type="text" id="notif-target-id" class="form-input font-mono">
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label class="form-label">Текст кнопки действия (опционально)</label>
+                                        <input type="text" id="notif-action-label" class="form-input" placeholder="Открыть досье" oninput="updateNotifPreview()">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label">URL кнопки (#view-account, https://...)</label>
+                                        <input type="text" id="notif-action-url" class="form-input font-mono" placeholder="#view-progression">
+                                    </div>
+                                </div>
+
+                                <div class="notif-preview-box">
+                                    <div style="font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Предварительный просмотр:</div>
+                                    <div class="notif-preview-title" id="prev-notif-title">Заголовок уведомления</div>
+                                    <div class="notif-preview-msg" id="prev-notif-msg">Текст сообщения...</div>
+                                    <div class="notif-preview-btn" id="prev-notif-btn" style="display: none;">Кнопка</div>
+                                </div>
+
+                                <button class="btn btn-primary" style="width: 100%; margin-top: 14px;" onclick="sendAdminNotification()">
+                                    Отправить уведомление
+                                </button>
+                            </div>
+
+                            <!-- History Table -->
+                            <div class="card">
+                                <div class="card-title">Активные уведомления</div>
+                                <div class="table-wrap">
+                                    <table class="data-table" id="table-notifications">
+                                        <thead>
+                                            <tr>
+                                                <th>Заголовок</th>
+                                                <th>Важность</th>
+                                                <th>Дата (ДД.ММ.ГГГГ)</th>
+                                                <th>Действие</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tbody-notifications">
+                                            <!-- Dynamically populated -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB 5: Поддержка и Тикеты -->
+                    <section id="view-support" class="view-pane">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Служба поддержки и Диагностика</h2>
+                                <p class="view-subtitle">Обращения игроков, диагностические логи и переписка в реальном времени</p>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="support-status-filter" class="form-select font-mono" style="width: 150px; font-size: 11px;" onchange="loadTickets()">
+                                    <option value="all">Все статусы</option>
+                                    <option value="new" selected>Новые</option>
+                                    <option value="in_progress">В работе</option>
+                                    <option value="resolved">Решенные</option>
+                                    <option value="closed">Архив</option>
+                                </select>
+                                <button class="btn btn-secondary btn-sm" onclick="loadTickets()">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                                    Обновить
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="ticket-messenger-layout">
+                            <!-- Left: Tickets Queue -->
+                            <div class="ticket-queue-pane">
+                                <div class="ticket-queue-header">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="card-title" style="margin-bottom: 0;">Очередь тикетов</span>
+                                        <span class="font-mono text-muted" id="tickets-queue-count" style="font-size: 11px;">0</span>
+                                    </div>
+                                    <input type="text" id="tickets-search-input" class="form-input" placeholder="Поиск по аккаунту или тексту..." style="font-size: 11px; padding: 5px 8px;" oninput="filterTicketsList()">
+                                </div>
+                                <div id="tickets-list" class="ticket-queue-list wl-scrollbar">
+                                    <!-- Dynamic ticket cards -->
+                                </div>
+                            </div>
+
+                            <!-- Right: Ticket Messenger / Chat View -->
+                            <div class="ticket-messenger-pane" id="ticket-detail-card">
+                                <div class="ticket-chat-header" id="ticket-chat-header">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <span class="font-mono" style="font-size: 13px; font-weight: 700; color: var(--accent);" id="active-ticket-num">#TK-0000</span>
+                                        <div id="active-ticket-meta" style="font-size: 11px; color: var(--text-secondary);">
+                                            Выберите тикет для просмотра
+                                        </div>
+                                    </div>
+                                    <div id="active-ticket-actions" style="display: none; align-items: center; gap: 8px;">
+                                        <div id="active-ticket-logs-wrap"></div>
+                                        <select id="ticket-status-select" class="form-select font-mono" style="width: 140px; font-size: 11px; padding: 4px 6px;" onchange="changeActiveTicketStatus(this.value)">
+                                            <option value="new">Новый</option>
+                                            <option value="in_progress">В работе</option>
+                                            <option value="resolved">Решен</option>
+                                            <option value="closed">Архивирован</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div id="ticket-chat-messages" class="ticket-chat-body wl-scrollbar">
+                                    <div style="color: var(--text-muted); text-align: center; margin: auto; font-size: 12px;">
+                                        Выберите обращение из списка слева для начала диалога
+                                    </div>
+                                </div>
+
+                                <!-- Canned Quick Replies -->
+                                <div class="canned-pills-bar" id="ticket-canned-bar" style="display: none;">
+                                    <span style="font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-right: 2px;">Быстрый ответ:</span>
+                                    <div class="canned-pill" onclick="insertCannedReply('Здравствуйте! Пожалуйста, отправьте диагностический лог через лаунчер (кнопка «Сообщить о проблеме»).')">Запросить логи</div>
+                                    <div class="canned-pill" onclick="insertCannedReply('Проблема устранена. Пожалуйста, перезапустите лаунчер WarLink.')">Проблема устранена</div>
+                                    <div class="canned-pill" onclick="insertCannedReply('Рекомендуем переключить профиль маршрута на «Прямой (Стокгольм)» в настройках сети лаунчера.')">Сменить на Прямой</div>
+                                    <div class="canned-pill" onclick="insertCannedReply('Рекомендуем переключить профиль маршрута на «Транзит (Москва)» для снижения задержки.')">Сменить на Транзит</div>
+                                    <div class="canned-pill" onclick="insertCannedReply('Тикет принят в работу. Проверяем сетевые трассы вашего провайдера.')">Взято в работу</div>
+                                </div>
+
+                                <!-- Chat Input Footer -->
+                                <div class="ticket-chat-footer" id="ticket-chat-footer" style="display: none;">
+                                    <textarea id="ticket-reply-text" class="form-textarea wl-scrollbar" placeholder="Напишите ответ игроку... (Enter для отправки, Shift+Enter для новой строки)" style="min-height: 56px; max-height: 120px; font-size: 12px;"></textarea>
+                                    <div class="ticket-chat-controls">
+                                        <span class="text-muted" style="font-size: 10px;">Enter — отправить • Shift+Enter — перенос строки</span>
+                                        <button class="btn btn-primary btn-sm" onclick="sendTicketReply()">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                                            Отправить игроку
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB 6: Игры, Канбан & Золотообмен -->
+                    <section id="view-games-kanban" class="view-pane">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Игры, Интерактивный Канбан и Золотообмен</h2>
+                                <p class="view-subtitle">Автоматическое управление каталогами игр и мониторинг сброса MetaForge</p>
+                            </div>
+                            <button class="btn btn-secondary" onclick="loadKanbanAndGold()">Обновить данные</button>
+                        </div>
+
+                        <!-- MetaForge Gold Market Sync Telemetry Card -->
+                        <div class="card" style="margin-bottom: 20px;">
+                            <div class="card-title">Телеметрия сброса Золотообмена (MetaForge Sync Telemetry)</div>
+                            <div class="grid-4" style="margin-bottom: 14px;">
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Сброс в игре WARDOGS</div>
+                                    <div class="stat-box-val font-mono">03:00:00 МСК</div>
+                                    <div class="stat-box-sub">Фиксированное время игры</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Последнее обновление MetaForge</div>
+                                    <div class="stat-box-val font-mono" id="metaforge-last-time">—</div>
+                                    <div class="stat-box-sub" id="metaforge-last-date">—</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Задержка поставщика данных</div>
+                                    <div class="stat-box-val font-mono" id="metaforge-delay-val" style="color: var(--accent);">—</div>
+                                    <div class="stat-box-sub">Разница с 03:00 МСК</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-box-label">Текущий курс слитка</div>
+                                    <div class="stat-box-val font-mono" id="metaforge-current-price">—</div>
+                                    <div class="stat-box-sub">Внутриигровые $</div>
+                                </div>
+                            </div>
+
+                            <details>
+                                <summary style="font-size: 11px; color: var(--text-secondary); cursor: pointer; margin-bottom: 8px;">История синхронизации курса за последние 30 дней (число.месяц.год)</summary>
+                                <div class="table-wrap">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Дата (ДД.ММ.ГГГГ)</th>
+                                                <th>Сброс в игре</th>
+                                                <th>Фиксация MetaForge</th>
+                                                <th>Задержка (+мин/сек)</th>
+                                                <th>Цена слитка</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="tbody-gold-sync-history">
+                                            <!-- Dynamically populated 30 days history -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        </div>
+
+                        <!-- Automated Game Suggestions Kanban Board -->
+                        <div class="card">
+                            <div class="card-title">
+                                <span>Канбан предложений сообщества (game_suggestions)</span>
+                                <span class="font-mono text-muted" style="font-size: 10px; font-weight: normal;">Перетащите карточку для авто-синхронизации</span>
+                            </div>
+                            
+                            <div class="kanban-board">
+                                <!-- Column 1: В голосовании -->
+                                <div class="kanban-col" data-status="voting" ondragover="allowKanbanDrop(event)" ondrop="handleKanbanDrop(event, 'voting')">
+                                    <div class="kanban-col-header">
+                                        <span class="kanban-col-title">В голосовании</span>
+                                        <span class="kanban-count-badge font-mono" id="kcount-voting">0</span>
+                                    </div>
+                                    <div class="kanban-cards" id="kcol-voting"></div>
+                                </div>
+
+                                <!-- Column 2: В очереди на интеграцию -->
+                                <div class="kanban-col" data-status="queue_integration" ondragover="allowKanbanDrop(event)" ondrop="handleKanbanDrop(event, 'queue_integration')">
+                                    <div class="kanban-col-header">
+                                        <span class="kanban-col-title">В очереди</span>
+                                        <span class="kanban-count-badge font-mono" id="kcount-queue">0</span>
+                                    </div>
+                                    <div class="kanban-cards" id="kcol-queue_integration"></div>
+                                </div>
+
+                                <!-- Column 3: Добавленные игры (Auto-insert into supported_games) -->
+                                <div class="kanban-col" data-status="supported" ondragover="allowKanbanDrop(event)" ondrop="handleKanbanDrop(event, 'supported')">
+                                    <div class="kanban-col-header">
+                                        <span class="kanban-col-title" style="color: var(--status-green);">Добавленные игры</span>
+                                        <span class="kanban-count-badge font-mono" id="kcount-supported">0</span>
+                                    </div>
+                                    <div class="kanban-cards" id="kcol-supported"></div>
+                                </div>
+
+                                <!-- Column 4: Заблокированные игры (Auto-insert into forbidden_steam_games) -->
+                                <div class="kanban-col" data-status="forbidden" ondragover="allowKanbanDrop(event)" ondrop="handleKanbanDrop(event, 'forbidden')">
+                                    <div class="kanban-col-header">
+                                        <span class="kanban-col-title" style="color: var(--status-red);">Заблокированные</span>
+                                        <span class="kanban-count-badge font-mono" id="kcount-forbidden">0</span>
+                                    </div>
+                                    <div class="kanban-cards" id="kcol-forbidden"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- TAB 7: Системные флаги и Эксплуатация -->
+                    <section id="view-system-ops" class="view-pane">
+                        <div class="view-header">
+                            <div class="view-title-group">
+                                <h2 class="view-title">Системные флаги и Эксплуатация</h2>
+                                <p class="view-subtitle">Управление баннером техработ, удаленными фиче-флагами и логами сбоев</p>
+                            </div>
+                            <button class="btn btn-primary" onclick="saveSystemOpsSettings()">Сохранить параметры</button>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="card">
+                                <div class="card-title">Режим технического обслуживания</div>
+                                <div class="form-group">
+                                    <label class="switch-label">
+                                        <input type="checkbox" id="sys-maint-enabled" class="switch-input">
+                                        <span>Включить баннер техработ в лаунчере</span>
+                                    </label>
+                                </div>
+                                <div class="form-group" style="margin-top: 10px;">
+                                    <label class="form-label">Текст оповещения игроков</label>
+                                    <input type="text" id="sys-maint-msg" class="form-input" placeholder="Проводятся плановые работы на сервере...">
+                                </div>
+                            </div>
+
+                            <div class="card">
+                                <div class="card-title">Кэш и аварийный сброс</div>
+                                <div style="display: flex; flex-direction: column; gap: 8px;">
+                                    <button class="btn btn-secondary" onclick="reloadServerFilters()">
+                                        Принудительно перезагрузить фильтры из PostgreSQL
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="clearGoldCache()">
+                                        Принудительно запросить курс Золотообмена с MetaForge
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                </main>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Modal: Создать / Редактировать Спецпроект -->
+    <div id="modal-project" class="modal-overlay" style="display: none;">
+        <div class="modal-box">
+            <div class="modal-header">
+                <span class="modal-title" id="modal-project-title">Создать спецпроект</span>
+                <button class="modal-close" onclick="closeProjectModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Идентификатор (ID / Slug, латиница)</label>
+                        <input type="text" id="proj-id" class="form-input font-mono" placeholder="bf6">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Бейдж карточки</label>
+                        <input type="text" id="proj-badge" class="form-input" placeholder="СБОР">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Название игры / проекта</label>
+                    <input type="text" id="proj-title" class="form-input" placeholder="Battlefield 6">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Описание спецпроекта</label>
+                    <textarea id="proj-description" class="form-textarea" placeholder="Краткое описание цели сбора для игроков..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Базовая цена (₽)</label>
+                        <input type="number" id="proj-base-price" class="form-input" placeholder="4100">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Цена со скидкой (₽)</label>
+                        <input type="number" id="proj-discount-price" class="form-input" placeholder="0">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Целевая сумма сбора (₽)</label>
+                        <input type="number" id="proj-target-amount" class="form-input" placeholder="4100">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Уже собрано (₽)</label>
+                        <input type="number" id="proj-collected-amount" class="form-input" placeholder="0">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Ссылка Boosty для сбора</label>
+                        <input type="text" id="proj-boosty-url" class="form-input font-mono" placeholder="https://boosty.to/...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Текст кнопки Boosty</label>
+                        <input type="text" id="proj-boosty-label" class="form-input" placeholder="Поддержать сбор">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Ссылка на игру в Steam</label>
+                        <input type="text" id="proj-steam-url" class="form-input font-mono" placeholder="https://store.steampowered.com/app/...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Текст кнопки Steam</label>
+                        <input type="text" id="proj-steam-label" class="form-input" placeholder="Подарить в Steam">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Порядок отображения</label>
+                        <input type="number" id="proj-display-order" class="form-input font-mono" value="1">
+                    </div>
+                    <div class="form-group" style="display:flex; flex-direction:column; justify-content:center; gap:8px;">
+                        <label class="switch-label">
+                            <input type="checkbox" id="proj-is-active" class="switch-input" checked>
+                            <span>Проект активен</span>
+                        </label>
+                        <label class="switch-label">
+                            <input type="checkbox" id="proj-is-completed" class="switch-input">
+                            <span>Цель сбора достигнута</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeProjectModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="saveProjectModal()">Сохранить спецпроект</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Карточка Аккаунта Игрока -->
+    <div id="modal-account" class="modal-overlay" style="display: none;">
+        <div class="modal-box modal-account-box">
+            <!-- Modal Header -->
+            <div class="account-card-header">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <div class="account-num-pill font-mono">
+                        <span id="acc-modal-number">0000-0000-0000-0000</span>
+                        <button class="account-copy-btn" onclick="copyAccountModalNumber()" title="Скопировать номер аккаунта">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                    </div>
+                    <span id="acc-modal-online-badge" class="badge badge-neutral">Проверка...</span>
+                    <span id="acc-modal-tier-badge" class="badge badge-info">FREE</span>
+                    <span id="acc-modal-ban-badge" class="badge badge-urgent" style="display: none;">ЗАБЛОКИРОВАН</span>
+                </div>
+                <button class="modal-close" onclick="closeAccountModal()">&times;</button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="modal-body wl-scrollbar" style="padding: 16px;">
+                <!-- Profile & Key Metrics Grid -->
+                <div class="grid-4" style="margin-bottom: 16px;">
+                    <div class="stat-box">
+                        <div class="stat-box-label">Никнейм / Игрок</div>
+                        <div class="stat-box-val" id="acc-modal-nickname" style="font-size: 14px;">—</div>
+                        <div class="stat-box-sub" id="acc-modal-motto" style="font-size: 10px;">—</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-box-label">Всего донатов</div>
+                        <div class="stat-box-val font-mono" id="acc-modal-donations" style="color: var(--accent);">0 ₽</div>
+                        <div class="stat-box-sub" id="acc-modal-sponsor-until">Спонсорство не активно</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-box-label">Steam ID</div>
+                        <div class="stat-box-val font-mono" id="acc-modal-steam" style="font-size: 11px;">—</div>
+                        <div class="stat-box-sub" id="acc-modal-steam-link">Не привязан</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-box-label">Дата регистрации</div>
+                        <div class="stat-box-val font-mono" id="acc-modal-registered" style="font-size: 12px;">—</div>
+                        <div class="stat-box-sub" id="acc-modal-devices-count">0 устройств</div>
+                    </div>
+                </div>
+
+                <!-- Live Active Session Panel (when online) -->
+                <div id="acc-modal-live-session" class="card" style="display: none; margin-bottom: 16px; border-left: 3px solid #10b981; background: #131714;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span class="status-dot status-dot-online"></span>
+                            <span style="font-size: 12px; font-weight: 700; color: #34d399;">Активная игровая сессия прямо сейчас</span>
+                        </div>
+                        <button class="btn btn-danger btn-sm" onclick="kickModalAccountSession()">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                            Сбросить сессию (Kick)
+                        </button>
+                    </div>
+                    <div class="grid-4 font-mono" style="font-size: 11px; gap: 8px;">
+                        <div><span class="text-muted">Игра:</span> <span id="acc-live-game" style="color: var(--text-primary); font-weight: 600;">—</span></div>
+                        <div><span class="text-muted">Маршрут:</span> <span id="acc-live-route" style="color: var(--accent);">—</span></div>
+                        <div><span class="text-muted">Клиентский IP:</span> <span id="acc-live-ip">—</span></div>
+                        <div><span class="text-muted">Версия:</span> <span id="acc-live-version">—</span></div>
+                    </div>
+                </div>
+
+                <!-- Admin Action Toolbar -->
+                <div style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; background: #161616; padding: 8px 12px; border: 1px solid var(--border-card); border-radius: var(--radius-sm); align-items: center;">
+                    <span style="font-size: 10px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Действия:</span>
+                    <button class="btn btn-secondary btn-sm" onclick="openGrantModalForAccount()">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                        Выдать спонсорку
+                    </button>
+                    <button class="btn btn-secondary btn-sm" onclick="openNotificationForAccount()">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                        Отправить депешу
+                    </button>
+                    <div style="margin-left: auto; display: flex; gap: 6px;">
+                        <button id="acc-btn-ban" class="btn btn-danger btn-sm" onclick="toggleBanModalAccount()">
+                            Заблокировать доступ
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Sub-Tabs Navigation inside Account Card -->
+                <div class="account-tabs-nav">
+                    <button class="account-tab-btn active" id="acc-subtab-btn-devices" onclick="switchAccountSubTab('devices')">Привязанные устройства (<span id="acc-tab-cnt-dev">0</span>)</button>
+                    <button class="account-tab-btn" id="acc-subtab-btn-connections" onclick="switchAccountSubTab('connections')">История сессий (<span id="acc-tab-cnt-conn">0</span>)</button>
+                    <button class="account-tab-btn" id="acc-subtab-btn-tickets" onclick="switchAccountSubTab('tickets')">Обращения в поддержку (<span id="acc-tab-cnt-tick">0</span>)</button>
+                    <button class="account-tab-btn" id="acc-subtab-btn-bans" style="display: none;" onclick="switchAccountSubTab('bans')">Блокировки (<span id="acc-tab-cnt-bans">0</span>)</button>
+                </div>
+
+                <!-- Sub-Tab 1: Devices -->
+                <div id="acc-subtab-devices" class="account-tab-pane active">
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Идентификатор устройства (Hardware Device ID)</th>
+                                    <th>Первая привязка</th>
+                                </tr>
+                            </thead>
+                            <tbody id="acc-tbody-devices">
+                                <tr><td colspan="2" class="text-secondary" style="text-align: center;">Нет данных</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Sub-Tab 2: Connections History -->
+                <div id="acc-subtab-connections" class="account-tab-pane">
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Дата и время</th>
+                                    <th>IP-адрес</th>
+                                    <th>Локация</th>
+                                    <th>Маршрут</th>
+                                    <th>Версия клиента</th>
+                                </tr>
+                            </thead>
+                            <tbody id="acc-tbody-connections">
+                                <tr><td colspan="5" class="text-secondary" style="text-align: center;">Нет данных</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Sub-Tab 3: Support Tickets -->
+                <div id="acc-subtab-tickets" class="account-tab-pane">
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Категория</th>
+                                    <th>Статус</th>
+                                    <th>Описание проблемы</th>
+                                    <th>Дата</th>
+                                    <th>Действие</th>
+                                </tr>
+                            </thead>
+                            <tbody id="acc-tbody-tickets">
+                                <tr><td colspan="6" class="text-secondary" style="text-align: center;">Нет данных</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Sub-Tab 4: Bans -->
+                <div id="acc-subtab-bans" class="account-tab-pane">
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Цель</th>
+                                    <th>Причина блокировки</th>
+                                    <th>Кем забанен</th>
+                                    <th>Истекает</th>
+                                    <th>Дата</th>
+                                </tr>
+                            </thead>
+                            <tbody id="acc-tbody-bans">
+                                <tr><td colspan="5" class="text-secondary" style="text-align: center;">Нет блокировок</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAccountModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container"></div>
+
+    <script src="/app.js?v=2.1.12.4"></script>
+</body>
+</html>

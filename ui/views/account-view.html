@@ -3,7 +3,7 @@
     <div class="details-header">
         <div style="display: flex; align-items: center; gap: 8px;">
             <span class="details-title">Профиль и аккаунт</span>
-            <div class="profile-tier-badge" id="profile-tier-badge"><span>Боец WarLink</span></div>
+            <div class="profile-tier-badge" id="profile-tier-badge"><span>Статус: Игрок</span></div>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
             <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; text-decoration: none;" onclick="openMyDossier()" title="Посмотреть боевое досье оператора">Моё досье</button>
@@ -67,29 +67,26 @@
         <!-- TAB 1: Персонализация -->
         <div id="acc-panel-profile" class="acc-tab-panel active">
             <div class="setting-group" style="margin-bottom: 10px;">
-                <span class="setting-group-title">ИГРОВОЙ ПОЗЫВНОЙ</span>
+                <span class="setting-group-title">НИКНЕЙМ</span>
                 <div style="display:flex; align-items:center; gap:8px;">
                     <input type="text" id="input-nickname" class="form-input form-input-sm" placeholder="Никнейм игрока" maxlength="20" style="flex: 1;">
                     <button id="btn-save-nickname" class="btn btn-secondary btn-sm" onclick="saveNickname()">Сохранить</button>
-                </div>
-                <div class="profile-acc-hint" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-                    Отображается на Доске почёта спонсоров и в игровом сообществе
                 </div>
             </div>
 
             <div class="setting-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <span class="setting-group-title" style="margin-bottom: 0;">НАСТРОЙКА ДОСЬЕ ОПЕРАТОРА</span>
+                    <span class="setting-group-title" style="margin-bottom: 0;">НАСТРОЙКА ДОСЬЕ</span>
                     <button class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="openMyDossier()" title="Открыть предварительный просмотр боевого досье">Открыть досье</button>
                 </div>
                 <div class="setting-row">
-                    <span class="setting-label">Профиль Steam (ссылка или SteamID64):</span>
+                    <span class="setting-label">Профиль Steam:</span>
                     <div style="margin-top:4px;">
                         <input type="text" id="input-dossier-steam" class="form-input form-input-sm font-mono" placeholder="https://steamcommunity.com/id/... или SteamID64" maxlength="120">
                     </div>
                 </div>
                 <div class="setting-row" style="margin-top: 8px;">
-                    <span class="setting-label">Статус / девиз в досье:</span>
+                    <span class="setting-label">Статус:</span>
                     <div style="margin-top:4px;">
                         <input type="text" id="input-dossier-motto" class="form-input form-input-sm" placeholder="Ваш статус или описание в досье" maxlength="100">
                     </div>

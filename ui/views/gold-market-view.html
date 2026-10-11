@@ -18,22 +18,22 @@
         <div class="gold-stats-row">
             <div class="gold-stat-card">
                 <div class="gold-stat-label">ТЕКУЩИЙ КУРС</div>
-                <div class="gold-stat-val font-mono" id="gold-stat-current">$ —</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-current"><div class="skeleton" style="width: 80px; height: 18px; margin: 2px 0; border-radius: 2px;"></div></div>
                 <div class="gold-stat-sub font-mono" id="gold-stat-reset-date">За 1 слиток</div>
             </div>
             <div class="gold-stat-card">
                 <div class="gold-stat-label">ЗА 7 ДНЕЙ</div>
-                <div class="gold-stat-val font-mono" id="gold-stat-7d">—</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-7d"><div class="skeleton" style="width: 55px; height: 18px; margin: 2px 0; border-radius: 2px;"></div></div>
                 <div class="gold-stat-sub">Динамика недели</div>
             </div>
             <div class="gold-stat-card">
                 <div class="gold-stat-label">ЗА 30 ДНЕЙ</div>
-                <div class="gold-stat-val font-mono" id="gold-stat-30d">—</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-30d"><div class="skeleton" style="width: 55px; height: 18px; margin: 2px 0; border-radius: 2px;"></div></div>
                 <div class="gold-stat-sub">Динамика месяца</div>
             </div>
             <div class="gold-stat-card">
                 <div class="gold-stat-label">ЗА ВСЕ ВРЕМЯ</div>
-                <div class="gold-stat-val font-mono" id="gold-stat-all">—</div>
+                <div class="gold-stat-val font-mono" id="gold-stat-all"><div class="skeleton" style="width: 55px; height: 18px; margin: 2px 0; border-radius: 2px;"></div></div>
                 <div class="gold-stat-sub">Общий тренд</div>
             </div>
             <div class="gold-stat-card" id="gold-buy-zone-card">
@@ -74,7 +74,8 @@
                     <button class="gold-tf-btn" data-tf="all" onclick="setGoldTimeframe('all')">Все</button>
                 </div>
             </div>
-            <div class="gold-canvas-wrap" id="gold-canvas-wrap">
+            <div class="gold-canvas-wrap" id="gold-canvas-wrap" style="position: relative;">
+                <div id="gold-chart-skeleton" class="skeleton" style="position: absolute; inset: 0; z-index: 2; pointer-events: none; border-radius: 2px;"></div>
                 <canvas id="gold-market-canvas" width="620" height="180"></canvas>
                 <!-- Floating Hover Tooltip -->
                 <div id="gold-chart-tooltip" class="gold-chart-tooltip" style="display: none;">

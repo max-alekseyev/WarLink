@@ -1,0 +1,43 @@
+# ==============================================================================
+# WARLINK PROFILE: BODYCAM
+# Strict Game Routing & Server-Side Whitelist
+# ==============================================================================
+name: Bodycam
+
+# Game Processes (Client-side routing filter)
+process: Bodycam.exe
+process: bodycam.exe
+process: Bodycam-Win64-Shipping.exe
+process: bodycam-win64-shipping.exe
+process: CrashReportClient.exe
+process: CrashReportClientEditor.exe
+
+# Game Backend, Steam & Platform Domains
+domain: reissad.com
+domain: bodycam.game
+domain: playfabapi.com
+domain: epicgames.dev
+domain: epicgames.com
+domain: unrealengine.com
+domain: amazonaws.com
+domain: cloudfront.net
+domain: vivox.com
+domain: steamserver.net
+domain: steampowered.com
+domain: steamcommunity.com
+domain: steamstatic.com
+domain: akamaitechnologies.com
+domain: akamaiedge.net
+domain: akamai.net
+domain: edgekey.net
+domain: edgesuite.net
+domain: fastly.net
+domain: cloudflare.com
+domain: sectigo.com
+domain: digicert.com
+
+# Steam Networking Sockets & P2P Match UDP Ports
+udp: 27015-27050
+udp: 3478
+udp: 4379-4380
+udp: 7777-7788

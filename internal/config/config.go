@@ -25,6 +25,7 @@ type GameProfile struct {
 	LastPlayed   int64    `json:"last_played"`
 	IsDefault    bool     `json:"is_default"`
 	Autolaunch   bool     `json:"autolaunch"`
+	IsInstalled  bool     `json:"is_installed"`
 }
 
 var DefaultServerIP = "api-warlink.max-alekseyev.com"
@@ -176,6 +177,25 @@ func DefaultGames() []GameProfile {
 			IsDefault:    true,
 			Autolaunch:   true,
 		},
+		{
+			ID:           "bodycam",
+			Title:        "Bodycam",
+			SteamAppID:   "2406770",
+			ProcessNames: []string{
+				"Bodycam.exe",
+				"bodycam.exe",
+				"Bodycam-Win64-Shipping.exe",
+				"bodycam-win64-shipping.exe",
+				"CrashReportClient.exe",
+				"CrashReportClientEditor.exe",
+			},
+			PreferredAlt: "Автокалибровка (Circular Adaptive)",
+			LaunchCount:  0,
+			IconURL:      "bodycam_icon.png",
+			LastPlayed:   time.Now().Unix() - 10,
+			IsDefault:    true,
+			Autolaunch:   true,
+		},
 	}
 }
 
@@ -262,6 +282,11 @@ func Load() *Config {
 				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") {
 					cfg.Games[i].IconURL = "aion2_icon.png"
 				}
+			} else if g.ID == "bodycam" {
+				cfg.Games[i].SteamAppID = "2406770"
+				if cfg.Games[i].IconURL == "" || strings.Contains(cfg.Games[i].IconURL, "steamstatic.com") {
+					cfg.Games[i].IconURL = "bodycam_icon.png"
+				}
 			}
 		}
 		for _, defG := range DefaultGames() {
@@ -280,12 +305,13 @@ func Load() *Config {
 			}
 		}
 
-		// Enforce canonical priority order: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker, 4. AION 2, then custom games
+		// Enforce canonical priority order: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker, 4. AION 2, 5. Bodycam, then custom games
 		priorityOrder := map[string]int{
 			"wardogs":         1,
 			"arc_raiders":     2,
 			"dark_and_darker": 3,
 			"aion2":           4,
+			"bodycam":         5,
 		}
 		sort.SliceStable(cfg.Games, func(i, j int) bool {
 			pI := priorityOrder[cfg.Games[i].ID]

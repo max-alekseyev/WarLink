@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.3"
+var AppVersion = "v2.2.4"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -126,6 +126,7 @@ var (
 		1808500: "ARC Raiders",
 		2016590: "Dark and Darker",
 		3393110: "AION 2",
+		2406770: "Bodycam",
 	}
 )
 
@@ -400,6 +401,25 @@ func resolveFromLocalSteam(appID string) (title, iconURL string) {
 		}
 	}
 	return title, iconURL
+}
+
+func enrichGamesInstalled(games []config.GameProfile) []config.GameProfile {
+	res := make([]config.GameProfile, len(games))
+	for i, g := range games {
+		res[i] = g
+		if g.SteamAppID != "" && watcher.IsSteamGameInstalled(g.SteamAppID) {
+			res[i].IsInstalled = true
+		}
+		if !res[i].IsInstalled && g.ExePath != "" {
+			if _, err := os.Stat(g.ExePath); err == nil {
+				res[i].IsInstalled = true
+			}
+		}
+		if !res[i].IsInstalled && (g.LaunchCount > 0 || g.ID == "wardogs") {
+			res[i].IsInstalled = true
+		}
+	}
+	return res
 }
 
 func resolveSteamIcon(input string) (title, iconURL string) {
@@ -941,6 +961,24 @@ func main() {
 				cfg.Games[i].Title = "Dark and Darker"
 				gamesModified = true
 			}
+		} else if g.ID == "aion2" {
+			if cfg.Games[i].IconURL != "aion2_icon.png" {
+				cfg.Games[i].IconURL = "aion2_icon.png"
+				gamesModified = true
+			}
+			if cfg.Games[i].Title != "AION 2" {
+				cfg.Games[i].Title = "AION 2"
+				gamesModified = true
+			}
+		} else if g.ID == "bodycam" {
+			if cfg.Games[i].IconURL != "bodycam_icon.png" {
+				cfg.Games[i].IconURL = "bodycam_icon.png"
+				gamesModified = true
+			}
+			if cfg.Games[i].Title != "Bodycam" {
+				cfg.Games[i].Title = "Bodycam"
+				gamesModified = true
+			}
 		}
 	}
 	if gamesModified {
@@ -957,7 +995,7 @@ func main() {
 
 		changed := false
 		for i, cg := range customGames {
-			if cg.IsDefault || cg.ID == "wardogs" || cg.ID == "arc_raiders" || cg.ID == "dark_and_darker" {
+			if cg.IsDefault || cg.ID == "wardogs" || cg.ID == "arc_raiders" || cg.ID == "dark_and_darker" || cg.ID == "aion2" || cg.ID == "bodycam" {
 				continue
 			}
 			if cg.SteamAppID != "" && (reNum.MatchString(cg.Title) || cg.Title == cg.SteamAppID || cg.IconURL == "") {
@@ -1632,7 +1670,7 @@ func main() {
 			"autolaunch_game":       state.cfg.AutolaunchGame,
 			"enable_sound_effects":  state.cfg.IsSoundEffectsEnabled(),
 			"free_internet":         state.eng.IsFreeInternetActive(),
-			"games":                 state.cfg.Games,
+			"games":                 enrichGamesInstalled(state.cfg.Games),
 			"selected_game_id":      state.cfg.SelectedGameID,
 			"selected_game":         state.cfg.GetSelectedGame(),
 			"is_updating":           state.isUpdating,
@@ -2278,7 +2316,7 @@ func main() {
 				PaymentMethod string `json:"payment_method"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-				if body.AmountRub >= 100 {
+				if body.AmountRub > 0 {
 					amount = body.AmountRub
 				}
 				if body.PaymentMethod != "" {
@@ -2286,7 +2324,7 @@ func main() {
 				}
 			}
 		} else if qAmount := r.URL.Query().Get("amount"); qAmount != "" {
-			if a, err := strconv.Atoi(qAmount); err == nil && a >= 100 {
+			if a, err := strconv.Atoi(qAmount); err == nil && a > 0 {
 				amount = a
 			}
 			if qm := r.URL.Query().Get("method"); qm != "" {
@@ -2327,9 +2365,9 @@ func main() {
 
 	mux.HandleFunc("/api/community-goal", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 4 * time.Second}
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		serverAPI := singbox.GetServerAPI()
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/community/goal", serverAPI))
+		resp, err := singbox.APIHTTPClient.Get(fmt.Sprintf("%s/api/v1/community/goal", serverAPI))
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -2365,9 +2403,9 @@ func main() {
 						"title":              "Battlefield 6 в WarLink",
 						"badge":              "СПЕЦПРОЕКТ",
 						"description":        "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
-						"target_amount_rub":  1600,
+						"target_amount_rub":  3200,
 						"base_price_rub":     3200,
-						"discount_price_rub": 1600,
+						"discount_price_rub": 0,
 						"current_amount_rub": 0,
 						"percent":            0.0,
 						"is_completed":       false,
@@ -2375,6 +2413,24 @@ func main() {
 						"boosty_label":       "Поддержать сбор на BF6",
 						"steam_url":          "https://steamcommunity.com/id/MaksimPaladin/",
 						"steam_label":        "Подарить в Steam",
+					},
+				},
+				"donate_config": map[string]interface{}{
+					"crypto_usdt_trc20_address": "TE1hrh5yy7hnHpCX7fz51rPvWubpcJJgaM",
+					"donate_min_amount_rub":     100,
+					"discord_invite_url":        "https://discord.gg/2h8nVRUBeT",
+					"steam_author_url":          "https://steamcommunity.com/id/MaksimPaladin/",
+					"boosty_donate_url":         "https://boosty.to/pld1n/donate",
+					"boosty_subscription_tiers": []interface{}{
+						map[string]interface{}{"rank": "Рекрут", "cost_rub": 100, "url": "https://boosty.to/pld1n/purchase/4118973?ssource=DIRECT&share=subscription_link"},
+						map[string]interface{}{"rank": "Оперативник", "cost_rub": 500, "url": "https://boosty.to/pld1n/purchase/4118972?ssource=DIRECT&share=subscription_link"},
+						map[string]interface{}{"rank": "Ветеран", "cost_rub": 1000, "url": "https://boosty.to/pld1n/purchase/4118975?ssource=DIRECT&share=subscription_link"},
+						map[string]interface{}{"rank": "Генерал", "cost_rub": 5000, "url": "https://boosty.to/pld1n/purchase/4118978?ssource=DIRECT&share=subscription_link"},
+					},
+					"donate_perks": []string{
+						"100 ₽ = 30 дней активного статуса «Спонсор»",
+						"Выделенный слот шлюза без очередей",
+						"Никнейм и аватарка на Доске почёта спонсоров",
 					},
 				},
 			})
@@ -2386,9 +2442,8 @@ func main() {
 
 	mux.HandleFunc("/api/games/catalog", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 4 * time.Second}
 		apiBase := singbox.GetServerAPI()
-		resp, err := client.Get(apiBase + "/api/v1/games/catalog")
+		resp, err := singbox.APIHTTPClient.Get(apiBase + "/api/v1/games/catalog")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -2421,9 +2476,8 @@ func main() {
 
 	mux.HandleFunc("/api/announcements", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 3 * time.Second}
 		apiBase := singbox.GetServerAPI()
-		resp, err := client.Get(apiBase + "/api/v1/announcements")
+		resp, err := singbox.APIHTTPClient.Get(apiBase + "/api/v1/announcements")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "announcement": nil})
 			return
@@ -2434,9 +2488,8 @@ func main() {
 
 	mux.HandleFunc("/api/sponsors/tiers", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 3 * time.Second}
 		apiBase := singbox.GetServerAPI()
-		resp, err := client.Get(apiBase + "/api/v1/sponsors/tiers")
+		resp, err := singbox.APIHTTPClient.Get(apiBase + "/api/v1/sponsors/tiers")
 		if err != nil || resp.StatusCode != http.StatusOK {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
@@ -2455,13 +2508,18 @@ func main() {
 
 	mux.HandleFunc("/api/notifications", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		state.mu.Lock()
 		acc := state.cfg.AccountNumber
 		state.mu.Unlock()
 
 		notifs, err := singbox.GetNotifications(acc, singbox.GetMachineGUID())
 		if err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"notifications": []interface{}{}, "unread_count": 0})
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   "upstream_unavailable",
+				"message": err.Error(),
+			})
 			return
 		}
 		unread := 0
@@ -2489,12 +2547,12 @@ func main() {
 
 	mux.HandleFunc("/api/market/gold", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		serverAPI := singbox.GetServerAPI()
 		if serverAPI == "" {
 			serverAPI = "https://api-warlink.max-alekseyev.com"
 		}
-		client := &http.Client{Timeout: 5 * time.Second}
-		resp, err := client.Get(serverAPI + "/api/v1/market/gold")
+		resp, err := singbox.APIHTTPClient.Get(serverAPI + "/api/v1/market/gold")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			defer resp.Body.Close()
 			_, _ = io.Copy(w, resp.Body)
@@ -2610,9 +2668,14 @@ func main() {
 
 	mux.HandleFunc("/api/sponsors", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		sponsors, err := singbox.GetSponsorsList()
 		if err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"sponsors": []interface{}{}})
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   "upstream_unavailable",
+				"message": err.Error(),
+			})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"sponsors": sponsors})
@@ -2711,6 +2774,8 @@ func main() {
 							cn = cn[:20]
 						}
 						cleanNick = cn
+					} else {
+						cleanNick = ""
 					}
 				}
 				if body.SteamID != nil {
@@ -2784,7 +2849,17 @@ func main() {
 			"is_discord_linked": false,
 		}
 
-		if remoteProfile, err := singbox.FetchProfile(acc, singbox.GetMachineGUID()); err == nil && remoteProfile != nil {
+		remoteProfile, err := singbox.FetchProfile(acc, singbox.GetMachineGUID())
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":   "upstream_profile_unavailable",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		if remoteProfile != nil {
 			state.mu.Lock()
 			if remoteProfile.Nickname != "" {
 				state.cfg.Nickname = remoteProfile.Nickname
@@ -2926,9 +3001,13 @@ func main() {
 
 	mux.HandleFunc("/api/open-discord", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		go func() {
-			_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", "https://discord.gg/2h8nVRUBeT").Start()
-		}()
+		targetURL := r.URL.Query().Get("url")
+		if targetURL == "" {
+			targetURL = "https://discord.gg/2h8nVRUBeT"
+		}
+		go func(dest string) {
+			_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", dest).Start()
+		}(targetURL)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 	})
 
@@ -3224,7 +3303,7 @@ func main() {
 		defer state.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"games":            state.cfg.Games,
+			"games":            enrichGamesInstalled(state.cfg.Games),
 			"selected_game_id": state.cfg.SelectedGameID,
 			"selected_game":    state.cfg.GetSelectedGame(),
 		})

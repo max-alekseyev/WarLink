@@ -44,16 +44,17 @@
                         <option value="transit">Москва → Франкфурт</option>
                     </select>
                 </div>
-                <div id="route-mode-desc-row" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                    <span class="info-label">Описание:</span>
-                    <span id="route-mode-desc-val" class="info-value">Прямое подключение по России</span>
-                </div>
-                <div class="setting-info-row" style="margin-top: 6px;">
-                    <span class="info-label">Сетевой фильтр:</span>
-                    <span class="info-value">sing-box (Wintun TUN)</span>
-                </div>
                 <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
-                    <span class="info-label">Кэш авто-доменов:</span>
+                    <span class="info-label" style="display: flex; align-items: center; gap: 4px;">
+                        <span>Кэш авто-доменов:</span>
+                        <span class="tooltip-trigger" title="Локальный кэш динамически обнаруженных игровых адресов и доменов голосовой связи для селективного направления через шлюз WarLink" style="cursor: help; color: var(--text-muted); display: inline-flex; align-items: center;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"/>
+                                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                        </span>
+                    </span>
                     <span style="display: flex; gap: 8px; align-items: center;">
                         <span id="auto-hosts-count" class="info-value">0</span>
                         <button id="btn-reset-auto-hosts" class="btn-link" style="font-size: 10px; color: var(--text-muted); cursor: pointer; text-decoration: underline;" onclick="resetAutoHosts()" title="Очистить авто-список">очистить</button>
@@ -80,7 +81,7 @@
                 <div class="setting-row" style="margin-top: 6px;">
                     <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
                         <input type="checkbox" id="check-sound-effects" checked onchange="onToggleSoundEffects(this.checked)" style="accent-color: var(--action); cursor:pointer;">
-                        <span style="font-size: 11px; color: var(--text);">Звуковые сигналы депеш и системных отказов</span>
+                        <span style="font-size: 11px; color: var(--text);">Звуковые сигналы уведомлений и системных отказов</span>
                     </label>
                     <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
                         Тактические аудио-сигналы при поступлении уведомлений и ошибках сети.

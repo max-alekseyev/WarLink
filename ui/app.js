@@ -66,6 +66,16 @@ const defaultGames = [
         is_default: true,
         autolaunch: true,
         launch_count: 0
+    },
+    {
+        id: 'bodycam',
+        title: 'Bodycam',
+        steam_app_id: '2406770',
+        icon_url: 'bodycam_icon.png',
+        last_played: 1789653225,
+        is_default: true,
+        autolaunch: true,
+        launch_count: 0
     }
 ];
 
@@ -87,6 +97,7 @@ function loadCachedShowcaseGames() {
                     if (g.id === 'arc_raiders' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'arc_raiders_icon.png';
                     if (g.id === 'dark_and_darker' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'dark_and_darker_icon.png';
                     if (g.id === 'aion2' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'aion2_icon.png';
+                    if (g.id === 'bodycam' && (!g.icon_url || g.icon_url.includes('steamstatic.com'))) g.icon_url = 'bodycam_icon.png';
                     return g;
                 });
             }
@@ -210,6 +221,40 @@ function handleClose(e) {
     }
 }
 
+let currentActiveViewId = null;
+
+function refreshActiveView() {
+    if (!currentActiveViewId) return;
+    try {
+        switch (currentActiveViewId) {
+            case 'view-notifications':
+                if (typeof fetchNotifications === 'function') fetchNotifications();
+                break;
+            case 'view-sponsors':
+                if (typeof fetchSponsors === 'function') fetchSponsors();
+                if (typeof loadBoostyGoal === 'function') loadBoostyGoal();
+                break;
+            case 'view-gold-market':
+                if (typeof fetchGoldMarketData === 'function') fetchGoldMarketData();
+                break;
+            case 'view-account':
+                if (typeof fetchAccountProfile === 'function') fetchAccountProfile();
+                if (typeof loadBoostyGoal === 'function') loadBoostyGoal();
+                break;
+            case 'view-support':
+                if (typeof pollSupportMessages === 'function') pollSupportMessages();
+                break;
+            case 'view-progression':
+                if (window.ProgressionController && typeof window.ProgressionController.refresh === 'function') {
+                    window.ProgressionController.refresh();
+                }
+                break;
+        }
+    } catch (e) {
+        console.warn('Error refreshing active view:', e);
+    }
+}
+
 function switchView(targetViewId) {
     const allViews = ['view-details', 'view-notifications', 'view-sponsors', 'view-account', 'view-progression', 'view-support', 'view-gold-market'];
     const showcase = document.getElementById('view-showcase');
@@ -229,6 +274,7 @@ function switchView(targetViewId) {
     }
 
     const nextActiveId = (!targetViewId || isAlreadyOpen) ? null : targetViewId;
+    currentActiveViewId = nextActiveId;
 
     if (!nextActiveId) {
         // Return to showcase
@@ -374,17 +420,145 @@ function updateFreeInternetUI(enabled) {
     }
 }
 
+// --- Collapsible Catalog State ---
+let isCatalogCollapsed = false;
+try {
+    isCatalogCollapsed = (localStorage.getItem('warlink_catalog_collapsed') === 'true');
+} catch (e) {}
+
+function toggleCatalogCollapse(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    isCatalogCollapsed = !isCatalogCollapsed;
+    try {
+        localStorage.setItem('warlink_catalog_collapsed', isCatalogCollapsed ? 'true' : 'false');
+    } catch (e) {}
+    applyCatalogCollapsedState();
+}
+window.toggleCatalogCollapse = toggleCatalogCollapse;
+
+function applyCatalogCollapsedState() {
+    const section = document.getElementById('catalog-section');
+    const label = document.getElementById('catalog-toggle-label');
+    const icon = document.getElementById('catalog-toggle-icon');
+    if (!section) return;
+
+    if (isCatalogCollapsed) {
+        section.classList.add('is-collapsed');
+        if (label) label.textContent = 'Показать';
+        if (icon) icon.style.transform = 'rotate(180deg)';
+    } else {
+        section.classList.remove('is-collapsed');
+        if (label) label.textContent = 'Скрыть';
+        if (icon) icon.style.transform = 'rotate(0deg)';
+    }
+}
+window.applyCatalogCollapsedState = applyCatalogCollapsedState;
+
+function buildGameShortcutHtml(g, activeId, isCatalogItem) {
+    const isSelected = (g.id === activeId);
+    const isDefault = !!g.is_default;
+    const isLaunching = (launchingGameId === g.id) || (isBusy && !isConnected && isSelected);
+
+    let iconHtml = '';
+    let iconSrc = g.icon_url;
+    if (g.id === 'wardogs' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'wardogs_icon.png';
+    if (g.id === 'arc_raiders' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'arc_raiders_icon.png';
+    if (g.id === 'dark_and_darker' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'dark_and_darker_icon.png';
+    if (g.id === 'aion2' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'aion2_icon.png';
+    if (g.id === 'bodycam' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'bodycam_icon.png';
+    if (!iconSrc && g.id === 'wardogs') iconSrc = 'wardogs_icon.png';
+
+    if (iconSrc) {
+        iconHtml = `
+            <img src="${escapeHtml(iconSrc)}" class="shortcut-icon-img" alt="${escapeHtml(g.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" draggable="false" />
+            <svg class="shortcut-icon-fallback" style="display:none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="6" x2="10" y1="11" y2="11" />
+                <line x1="8" x2="8" y1="9" y2="13" />
+                <line x1="15" x2="15.01" y1="12" y2="12" />
+                <line x1="18" x2="18.01" y1="10" y2="10" />
+                <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
+            </svg>
+        `;
+    } else {
+        iconHtml = `
+            <svg class="shortcut-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="6" x2="10" y1="11" y2="11" />
+                <line x1="8" x2="8" y1="9" y2="13" />
+                <line x1="15" x2="15.01" y1="12" y2="12" />
+                <line x1="18" x2="18.01" y1="10" y2="10" />
+                <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
+            </svg>
+        `;
+    }
+
+    const activeDot = (isSelected && isConnected && !isLaunching) ? '<span class="shortcut-dot-active" title="В сети"></span>' : '';
+    const spinnerOverlay = isLaunching ? `
+        <div class="shortcut-spinner-overlay" title="Подключение и запуск...">
+            <svg class="shortcut-spinner-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+            </svg>
+        </div>
+    ` : '';
+
+    let tooltip = escapeHtml(g.title);
+    if (isSelected && isConnected) {
+        tooltip = `${escapeHtml(g.title)} (В сети • Кликните для отключения)`;
+    } else if (isCatalogItem) {
+        tooltip = `${escapeHtml(g.title)} (Поддерживается в WarLink • Клик для запуска)`;
+    }
+
+    return `
+        <div class="game-shortcut ${isSelected ? 'is-selected' : ''} ${isLaunching ? 'is-launching' : ''} ${isCatalogItem ? 'is-catalog-item' : ''}" 
+             data-game-id="${g.id}"
+             onclick="onGameClick('${g.id}')" 
+             oncontextmenu="showGameContextMenu(event, '${g.id}', ${isDefault})"
+             title="${tooltip}">
+            <div class="shortcut-icon-wrapper">
+                ${iconHtml}
+                ${activeDot}
+                ${spinnerOverlay}
+            </div>
+            <div class="shortcut-title">${escapeHtml(g.title)}</div>
+        </div>
+    `;
+}
+
+function toggleCatalogDemoMode(e) {
+    if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+    const isDemo = (localStorage.getItem('warlink_catalog_demo') === 'true');
+    try {
+        localStorage.setItem('warlink_catalog_demo', isDemo ? 'false' : 'true');
+    } catch(err) {}
+    lastShowcaseStateKey = '';
+    renderShowcase(cachedGames, selectedGameId);
+    if (typeof showToast === 'function') {
+        showToast(!isDemo ? 'Демо-режим: Bodycam перенесен в каталог других игр' : 'Демо-режим отключен: восстановлен автодетект Steam');
+    }
+}
+window.toggleCatalogDemoMode = toggleCatalogDemoMode;
+
 // --- Games Showcase Render (Desktop-Style Shortcuts) ---
 function renderShowcase(games, activeId) {
     cachedGames = games || [];
     const grid = document.getElementById('showcase-grid');
+    const catalogSection = document.getElementById('catalog-section');
+    const catalogGrid = document.getElementById('catalog-grid');
+    const catalogBadge = document.getElementById('catalog-count-badge');
     if (!grid) return;
 
-    // Strict priority for featured titles: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker (dnd)
+    // Strict priority for featured titles: 1. WARDOGS, 2. ARC Raiders, 3. Dark and Darker (dnd), 4. Bodycam, 5. AION 2
     const priorityOrder = {
         'wardogs': 1,
         'arc_raiders': 2,
-        'dark_and_darker': 3
+        'dark_and_darker': 3,
+        'bodycam': 4,
+        'aion2': 5
     };
 
     const sorted = [...cachedGames].sort((a, b) => {
@@ -396,9 +570,12 @@ function renderShowcase(games, activeId) {
         return (b.last_played || 0) - (a.last_played || 0);
     });
 
+    const isCatalogDemo = (typeof localStorage !== 'undefined' && localStorage.getItem('warlink_catalog_demo') === 'true');
+
     // Avoid destroying and recreating DOM on every poll if state hasn't changed (prevents hover flickering)
-    const stateKey = JSON.stringify(sorted) + '_' + activeId + '_' + isConnected + '_' + isBusy + '_' + launchingGameId + '_' + isVotingEnabled;
+    const stateKey = JSON.stringify(sorted) + '_' + activeId + '_' + isConnected + '_' + isBusy + '_' + launchingGameId + '_' + isVotingEnabled + '_' + isCatalogDemo;
     if (stateKey === lastShowcaseStateKey && grid.children.length > 0) {
+        applyCatalogCollapsedState();
         return;
     }
     lastShowcaseStateKey = stateKey;
@@ -409,74 +586,28 @@ function renderShowcase(games, activeId) {
         }
     } catch (e) {}
 
-    let html = '';
+    // Separate games:
+    // Installed / Primary on this PC:
+    // 1. Steam detected installation (g.is_installed === true)
+    // 2. Currently selected / active game (g.id === activeId)
+    // 3. Flagship default game (g.id === 'wardogs')
+    // 4. Has been launched previously on this PC ((g.launch_count || 0) > 0)
+    const isGameInstalledOrActive = (g) => {
+        if (isCatalogDemo && g.id === 'bodycam') return false;
+        return !!g.is_installed || (g.id === activeId) || (g.id === 'wardogs') || ((g.launch_count || 0) > 0);
+    };
 
-    sorted.forEach(g => {
-        const isSelected = (g.id === activeId);
-        const isDefault = !!g.is_default;
-        const isLaunching = (launchingGameId === g.id) || (isBusy && !isConnected && isSelected);
+    const installedGames = sorted.filter(g => isGameInstalledOrActive(g));
+    const catalogGames = sorted.filter(g => !isGameInstalledOrActive(g));
 
-        let iconHtml = '';
-        let iconSrc = g.icon_url;
-        if (g.id === 'wardogs' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'wardogs_icon.png';
-        if (g.id === 'arc_raiders' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'arc_raiders_icon.png';
-        if (g.id === 'dark_and_darker' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'dark_and_darker_icon.png';
-        if (g.id === 'aion2' && (!iconSrc || iconSrc.includes('steamstatic.com'))) iconSrc = 'aion2_icon.png';
-        if (!iconSrc && g.id === 'wardogs') iconSrc = 'wardogs_icon.png';
-        if (iconSrc) {
-            iconHtml = `
-                <img src="${escapeHtml(iconSrc)}" class="shortcut-icon-img" alt="${escapeHtml(g.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
-                <svg class="shortcut-icon-fallback" style="display:none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="6" x2="10" y1="11" y2="11" />
-                    <line x1="8" x2="8" y1="9" y2="13" />
-                    <line x1="15" x2="15.01" y1="12" y2="12" />
-                    <line x1="18" x2="18.01" y1="10" y2="10" />
-                    <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
-                </svg>
-            `;
-        } else {
-            iconHtml = `
-                <svg class="shortcut-icon-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="6" x2="10" y1="11" y2="11" />
-                    <line x1="8" x2="8" y1="9" y2="13" />
-                    <line x1="15" x2="15.01" y1="12" y2="12" />
-                    <line x1="18" x2="18.01" y1="10" y2="10" />
-                    <path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z" />
-                </svg>
-            `;
-        }
-
-        const activeDot = (isSelected && isConnected && !isLaunching) ? '<span class="shortcut-dot-active" title="В сети"></span>' : '';
-        const spinnerOverlay = isLaunching ? `
-            <div class="shortcut-spinner-overlay" title="Подключение и запуск...">
-                <svg class="shortcut-spinner-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-            </div>
-        ` : '';
-
-        const tooltip = (isSelected && isConnected) 
-            ? `${escapeHtml(g.title)} (В сети • Кликните для отключения)` 
-            : escapeHtml(g.title);
-
-        html += `
-            <div class="game-shortcut ${isSelected ? 'is-selected' : ''} ${isLaunching ? 'is-launching' : ''}" 
-                 onclick="onGameClick('${g.id}')" 
-                 oncontextmenu="showGameContextMenu(event, '${g.id}', ${isDefault})"
-                 title="${tooltip}">
-                <div class="shortcut-icon-wrapper">
-                    ${iconHtml}
-                    ${activeDot}
-                    ${spinnerOverlay}
-                </div>
-                <div class="shortcut-title">${escapeHtml(g.title)}</div>
-            </div>
-        `;
+    let installedHtml = '';
+    installedGames.forEach(g => {
+        installedHtml += buildGameShortcutHtml(g, activeId, false);
     });
 
-    // Add Shortcut Tile (if voting is enabled)
+    // Add Shortcut Tile (if voting is enabled) in the primary grid
     if (isVotingEnabled) {
-        html += `
+        installedHtml += `
             <div class="game-shortcut add-shortcut" id="btn-add-game" onclick="openAddGameModal()" title="Предложить или проголосовать за новую игру">
                 <div class="add-shortcut-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -488,8 +619,27 @@ function renderShowcase(games, activeId) {
             </div>
         `;
     }
+    grid.innerHTML = installedHtml;
 
-    grid.innerHTML = html;
+    // Render other supported games catalog (hidden if all supported games are installed)
+    if (catalogSection && catalogGrid) {
+        if (catalogGames.length === 0) {
+            catalogSection.style.display = 'none';
+        } else {
+            catalogSection.style.display = 'flex';
+            if (catalogBadge) {
+                catalogBadge.textContent = String(catalogGames.length);
+                catalogBadge.title = `Поддерживается еще ${catalogGames.length} ${catalogGames.length === 1 ? 'игра' : (catalogGames.length < 5 ? 'игры' : 'игр')}`;
+                catalogBadge.onclick = null;
+            }
+            let catalogHtml = '';
+            catalogGames.forEach(g => {
+                catalogHtml += buildGameShortcutHtml(g, activeId, true);
+            });
+            catalogGrid.innerHTML = catalogHtml;
+            applyCatalogCollapsedState();
+        }
+    }
 }
 
 function escapeHtml(str) {
@@ -689,8 +839,15 @@ function onModalBackdropClick(e) {
     handleModalBackdropDismiss(e);
 }
 
-// Global Keyboard Navigation (Escape to dismiss modals, sheets, and menus)
+// Global Keyboard Navigation (Escape to dismiss modals, sheets, and menus; Ctrl+Shift+D for catalog demo)
 document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd' || e.key === 'В' || e.key === 'в')) {
+        e.preventDefault();
+        if (typeof toggleCatalogDemoMode === 'function') {
+            toggleCatalogDemoMode();
+        }
+        return;
+    }
     if (e.key === 'Escape') {
         const brModal = document.getElementById('modal-bug-report');
         if (brModal && brModal.style.display !== 'none') {
@@ -976,15 +1133,15 @@ function updateUI(data) {
     const tierBadge = document.getElementById('profile-tier-badge');
     if (tierBadge) {
         if (data.account_tier === 'admin' || data.is_admin) {
-            tierBadge.textContent = 'Статус: Администратор (Админ-слот 61/61)';
+            tierBadge.textContent = 'Статус: Администратор';
             tierBadge.classList.remove('tier-sponsor');
             tierBadge.classList.add('tier-admin');
         } else if (data.is_sponsor) {
-            tierBadge.textContent = 'Статус: Спонсор шлюза';
+            tierBadge.textContent = 'Статус: Спонсор';
             tierBadge.classList.remove('tier-admin');
             tierBadge.classList.add('tier-sponsor');
         } else {
-            tierBadge.textContent = 'Статус: Базовый доступ';
+            tierBadge.textContent = 'Статус: Игрок';
             tierBadge.classList.remove('tier-sponsor', 'tier-admin');
         }
     }
@@ -1873,7 +2030,7 @@ async function fetchNotifications() {
             },
             () => {
                 const listEl = document.getElementById('notifications-list');
-                if (listEl && listEl.children.length === 0) {
+                if (listEl && (!listEl.querySelector('.notification-card:not(.skeleton-card)') || listEl.querySelector('.skeleton-card'))) {
                     listEl.innerHTML = getNotificationsSkeletonHtml(2);
                 }
             }
@@ -2191,6 +2348,9 @@ function initLiveEventStream() {
                                 badge.textContent = cur + 1;
                                 badge.style.display = 'block';
                             }
+                            if (typeof fetchNotifications === 'function') {
+                                fetchNotifications();
+                            }
                         }
                     }
                 } catch(err) {}
@@ -2265,10 +2425,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         window.revealWindow();
     }
 
-    // 5. Query initial status, notifications, feature flags and start live event stream
+    // 5. Query initial status, notifications, sponsors, gold market, feature flags and start live event stream
     fetchStatus();
     fetchNotifications();
+    if (typeof fetchSponsors === 'function') fetchSponsors();
+    if (typeof fetchGoldMarketData === 'function') fetchGoldMarketData();
     checkAnnouncements();
+    if (typeof loadBoostyGoal === 'function') loadBoostyGoal();
     if (window.WarLinkFlags && typeof window.WarLinkFlags.fetch === 'function') {
         window.WarLinkFlags.fetch();
     }
@@ -2283,4 +2446,5 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     setInterval(fetchStatus, 1500);
     setInterval(fetchNotifications, 10000);
+    setInterval(refreshActiveView, 4500);
 });
