@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.4"
+var AppVersion = "v2.2.5"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -3526,6 +3526,32 @@ func main() {
 			}
 
 			oldMode := state.cfg.GetNetworkRouteMode()
+			if oldMode == req.Mode {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success":      true,
+					"current_mode": req.Mode,
+				})
+				return
+			}
+
+			// Guard against mid-game route switching: changing network routes during an active game session
+			// resets the TUN adapter, terminates game sockets, and triggers anti-cheat rate limiting / error 1628505088.
+			state.mu.Lock()
+			selectedGame := state.cfg.GetSelectedGame()
+			state.mu.Unlock()
+			gameProcsToCheck := append([]string{}, selectedGame.ProcessNames...)
+			gameProcsToCheck = append(gameProcsToCheck, singbox.WardogsGameProcesses...)
+			if running, activeProc := watcher.IsAnyProcessRunning(gameProcsToCheck, watcher.NormalizeGameToken(selectedGame.Title)); running {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"success":      false,
+					"error":        "game_running",
+					"current_mode": oldMode,
+					"message":      fmt.Sprintf("Смена маршрута заблокирована: обнаружен запущенный процесс %s. Пожалуйста, закройте игру перед переключением маршрута во избежание сбоя античита.", activeProc),
+				})
+				return
+			}
+
 			state.cfg.SetNetworkRouteMode(req.Mode)
 			singbox.SetNetworkRouteMode(req.Mode)
 			go singbox.ReleaseSession()
@@ -3664,6 +3690,9 @@ func main() {
 
 	mux.HandleFunc("/api/progression", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 		db := progression.GetDatabase()
 
 		if r.Method == http.MethodPost {
@@ -3848,6 +3877,9 @@ func main() {
 
 	mux.HandleFunc("/api/progression/database", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 		go func() {
 			serverAPI := singbox.GetServerAPI()
 			if serverAPI != "" {

@@ -189,6 +189,7 @@ var DirectGameDomains = []string{
 	// Anti-cheat / PKI endpoints (CRL/OCSP)
 	"certainly.com",
 	"pki.goog",
+	"elytra.ac",
 	// Steam
 	"steamserver.net",
 	"steampowered.com",
@@ -209,10 +210,6 @@ var DirectGameDomains = []string{
 var DirectLauncherProcesses = []string{
 	"Elytra-Setup.exe",
 	"elytra-setup.exe",
-	"elytra-launcher.exe",
-	"elytraclient.exe",
-	"service.exe",
-	"control.exe",
 	"crashpad_handler.exe",
 	"CrashReportClient.exe",
 	"crashreportclient.exe",
@@ -232,7 +229,7 @@ var DirectLauncherProcesses = []string{
 	"denuvo-anti-cheat.exe",
 }
 
-// WardogsGameProcesses contains process names for WARDOGS dedicated game client and launcher.
+// WardogsGameProcesses contains process names for WARDOGS dedicated game client, launcher, and Elytra anti-cheat.
 var WardogsGameProcesses = []string{
 	"WardogsClient-Win64-Shipping.exe",
 	"wardogsclient-win64-shipping.exe",
@@ -241,6 +238,8 @@ var WardogsGameProcesses = []string{
 	"WardogsLauncher-Shipping.exe",
 	"wardogslauncher-shipping.exe",
 	"wardogslauncher.exe",
+	"elytra-launcher.exe",
+	"elytraclient.exe",
 }
 
 // DynamoDBRegionProbeDomains contains AWS DynamoDB regional endpoints used by WARDOGS

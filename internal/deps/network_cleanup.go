@@ -5,6 +5,7 @@ package deps
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -14,6 +15,7 @@ import (
 var (
 	modDnsApi                 = windows.NewLazySystemDLL("dnsapi.dll")
 	procDnsFlushResolverCache = modDnsApi.NewProc("DnsFlushResolverCache")
+	reWintunID                = regexp.MustCompile(`(?i)SWD\\WINTUN\\[^\s\r\n]+`)
 )
 
 // CleanupZombieWintunAdapter removes phantom WarLink-Tun / Wintun interface via pnputil and netsh.
@@ -22,33 +24,23 @@ func CleanupZombieWintunAdapter(logFn func(string)) {
 		logFn("[INFO] Очистка остаточного сетевого адаптера WarLink-Tun...")
 	}
 
-	// 1. Remove device node via Windows PnP utility
+	// 1. Remove device node via Windows PnP utility (language-invariant regexp)
 	cmdEnum := exec.Command("pnputil", "/enum-devices", "/class", "Net")
 	cmdEnum.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if out, err := cmdEnum.Output(); err == nil {
-		lines := strings.Split(string(out), "\n")
-		var currentInstanceID string
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "Instance ID:") {
-				parts := strings.Fields(line)
-				if len(parts) >= 3 {
-					currentInstanceID = parts[2]
-				}
-			} else if strings.HasPrefix(strings.ToUpper(currentInstanceID), "SWD\\WINTUN\\") {
-				lineLower := strings.ToLower(line)
-				if strings.Contains(lineLower, "sing-tun") ||
-					strings.Contains(lineLower, "warlink") ||
-					strings.Contains(lineLower, "wintun") ||
-					strings.Contains(lineLower, "throne") {
-					cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
-					cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-					_ = cmdRm.Run()
-					if logFn != nil {
-						logFn(fmt.Sprintf("[OK] Устройство сетевого адаптера %s удалено", currentInstanceID))
-					}
-					currentInstanceID = ""
-				}
+		matches := reWintunID.FindAllString(string(out), -1)
+		seen := make(map[string]bool)
+		for _, devID := range matches {
+			devID = strings.TrimSpace(devID)
+			if devID == "" || seen[devID] {
+				continue
+			}
+			seen[devID] = true
+			cmdRm := exec.Command("pnputil", "/remove-device", devID)
+			cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+			_ = cmdRm.Run()
+			if logFn != nil {
+				logFn(fmt.Sprintf("[OK] Устройство сетевого адаптера %s удалено", devID))
 			}
 		}
 	}

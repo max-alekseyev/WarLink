@@ -686,7 +686,7 @@ func (e *Engine) checkProcessHealth() {
 	}
 
 	if needRestart {
-		backoffDelays := []time.Duration{0, 3 * time.Second, 8 * time.Second, 15 * time.Second}
+		backoffDelays := []time.Duration{5 * time.Second, 8 * time.Second, 15 * time.Second}
 		delay := 15 * time.Second
 		if e.singboxRestartAttempts < len(backoffDelays) {
 			delay = backoffDelays[e.singboxRestartAttempts]
@@ -712,10 +712,13 @@ func (e *Engine) checkProcessHealth() {
 			}
 		}
 
+		hasAuthErr := e.singboxMgr.HasAuthError()
 		_ = e.singboxMgr.Stop()
 		deps.CleanupZombieWintunAdapter(e.log)
 		time.Sleep(1000 * time.Millisecond)
-		singbox.InvalidateSession()
+		if hasAuthErr {
+			singbox.InvalidateSession()
+		}
 		selectedGameID := "free_internet"
 		if isConn {
 			selectedGameID = e.cfg.GetSelectedGame().ID

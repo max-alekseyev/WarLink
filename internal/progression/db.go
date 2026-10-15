@@ -79,11 +79,28 @@ func loadDatabase() *Database {
 	}
 
 	rawBytes := embeddedDBJSON
+	var embMeta struct {
+		Version      string `json:"version"`
+		TotalUnlocks int    `json:"total_unlocks"`
+	}
+	_ = json.Unmarshal(embeddedDBJSON, &embMeta)
+
 	// Check if cached database exists on disk (e.g. downloaded from server)
 	for _, cachePath := range []string{"warlink_core/cached_progression_db.json", "core/cached_progression_db.json", "cached_progression_db.json"} {
 		if cached, err := os.ReadFile(cachePath); err == nil && len(cached) > 1000 {
-			rawBytes = cached
-			break
+			var cachedMeta struct {
+				Version      string `json:"version"`
+				TotalUnlocks int    `json:"total_unlocks"`
+			}
+			if err := json.Unmarshal(cached, &cachedMeta); err == nil {
+				// If cached database is older than embedded database, discard stale cache
+				if cachedMeta.Version < embMeta.Version || cachedMeta.TotalUnlocks < embMeta.TotalUnlocks {
+					_ = os.Remove(cachePath)
+					continue
+				}
+				rawBytes = cached
+				break
+			}
 		}
 	}
 

@@ -7768,14 +7768,18 @@ func (s *AppState) handleProfile(w http.ResponseWriter, r *http.Request) {
 
 		if len(req.Progression) > 0 && string(req.Progression) != "null" && string(req.Progression) != "{}" {
 			var progCheck struct {
-				CareerLevel int            `json:"career_level"`
-				WishlistID  string         `json:"wishlist_id"`
-				Unlocked    []string       `json:"unlocked_items"`
-				Roles       map[string]int `json:"roles"`
+				Season      int                      `json:"season"`
+				CareerLevel int                      `json:"career_level"`
+				WishlistID  string                   `json:"wishlist_id"`
+				Unlocked    []string                 `json:"unlocked_items"`
+				Roles       map[string]int           `json:"roles"`
+				History     []map[string]interface{} `json:"history"`
 			}
 			isDummy := false
 			if err := json.Unmarshal(req.Progression, &progCheck); err == nil {
-				if progCheck.CareerLevel <= 1 && progCheck.WishlistID == "" && len(progCheck.Unlocked) == 0 {
+				if progCheck.Season >= 2 || len(progCheck.History) > 0 {
+					isDummy = false
+				} else if progCheck.CareerLevel <= 1 && progCheck.WishlistID == "" && len(progCheck.Unlocked) == 0 {
 					allZero := true
 					for rK, rLvl := range progCheck.Roles {
 						if (rK == "assault" && rLvl > 1) || (rK != "assault" && rLvl > 0) {

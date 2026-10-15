@@ -6590,6 +6590,95 @@ html, body {
     color: #ffaa80;
 }
 
+/* ==========================================================================
+   Seasons Progression History Line Chart (Dark Cloudflare Utility)
+   ========================================================================== */
+.prog-seasons-card {
+    background: #141414;
+    border: 1px solid #222222;
+    border-radius: 2px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+}
+
+.prog-seasons-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #1c1c1c;
+    margin-bottom: 10px;
+}
+
+.prog-seasons-header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.prog-seasons-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: #f5f5f5;
+    letter-spacing: 0.05em;
+}
+
+.prog-seasons-subtitle {
+    font-size: 10px;
+    color: #888888;
+}
+
+.prog-seasons-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 10px;
+}
+
+.prog-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #888888;
+}
+
+.prog-legend-line {
+    width: 14px;
+    height: 2px;
+    background: #FF5E1F;
+}
+
+.prog-legend-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #FF5E1F;
+}
+
+.prog-legend-badge-active {
+    display: inline-block;
+    padding: 2px 6px;
+    background: rgba(255, 94, 31, 0.12);
+    border: 1px solid rgba(255, 94, 31, 0.4);
+    border-radius: 2px;
+    color: #FF5E1F;
+    font-weight: 600;
+}
+
+.prog-seasons-chart-wrap {
+    width: 100%;
+    min-height: 180px;
+    position: relative;
+    user-select: none;
+}
+
+.prog-seasons-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+
 
 
 

@@ -1287,7 +1287,6 @@ function updateRouteModeDescription(mode) {
 }
 
 async function onNetworkRouteModeChange(mode) {
-    updateRouteModeDescription(mode);
     try {
         const res = await fetch('/api/network-route', {
             method: 'POST',
@@ -1296,11 +1295,21 @@ async function onNetworkRouteModeChange(mode) {
         });
         const data = await res.json();
         if (data && data.success) {
+            updateRouteModeDescription(mode);
             const badge = mode === 'direct_frankfurt' ? 'Франкфурт' : (mode === 'direct_moscow' ? 'Москва' : (mode === 'direct_stockholm' ? 'Франкфурт' : 'Мск → Франкфурт'));
             showToast('Маршрут переключен: ' + badge);
             if (typeof UIStore !== 'undefined') {
                 UIStore.invalidate('/api/status');
             }
+        } else {
+            const currentMode = (data && data.current_mode) ? data.current_mode : 'transit';
+            const routeSelect = document.getElementById('select-network-route');
+            if (routeSelect) {
+                routeSelect.value = currentMode;
+            }
+            updateRouteModeDescription(currentMode);
+            const msg = (data && data.message) ? data.message : 'Ошибка переключения маршрута';
+            showToast(msg, 5500);
         }
     } catch (e) {
         showToast('Ошибка переключения маршрута');

@@ -62,20 +62,35 @@ type Config struct {
 	Progression         *PlayerProgression `json:"progression,omitempty"`
 }
 
+type SeasonHistoryRecord struct {
+	Season      int    `json:"season"`
+	SeasonTitle string `json:"season_title"`
+	CareerLevel int    `json:"career_level"`
+	CareerXP    int    `json:"career_xp"`
+	StartDate   string `json:"start_date"`
+	EndDate     string `json:"end_date"`
+	ArchivedAt  string `json:"archived_at"`
+}
+
 type PlayerProgression struct {
-	CareerLevel   int                `json:"career_level"`
-	Roles         map[string]int     `json:"roles"`
-	XPProgress    map[string]float64 `json:"xp_progress"`
-	WishlistID     string             `json:"wishlist_id,omitempty"`
-	UnlockedItems  []string           `json:"unlocked_items,omitempty"`
-	GuideDismissed bool               `json:"guide_dismissed,omitempty"`
-	LastUpdated    int64              `json:"last_updated,omitempty"`
+	Season         int                   `json:"season"`
+	CareerLevel    int                   `json:"career_level"`
+	Roles          map[string]int        `json:"roles"`
+	XPProgress     map[string]float64    `json:"xp_progress"`
+	WishlistID     string                `json:"wishlist_id,omitempty"`
+	UnlockedItems  []string              `json:"unlocked_items,omitempty"`
+	GuideDismissed bool                  `json:"guide_dismissed,omitempty"`
+	LastUpdated    int64                 `json:"last_updated,omitempty"`
+	History        []SeasonHistoryRecord `json:"history,omitempty"`
 }
 
 // IsConfigured returns true if the player has actually configured or imported real progression.
 func (p *PlayerProgression) IsConfigured() bool {
 	if p == nil {
 		return false
+	}
+	if p.Season >= 2 || len(p.History) > 0 {
+		return true
 	}
 	if p.CareerLevel > 1 || p.WishlistID != "" || len(p.UnlockedItems) > 0 {
 		return true
@@ -112,6 +127,8 @@ func DefaultGames() []GameProfile {
 			ProcessNames: []string{
 				"WardogsClient-Win64-Shipping.exe",
 				"WardogsLauncher-Shipping.exe",
+				"elytraclient.exe",
+				"elytra-launcher.exe",
 				"Elytra-Setup.exe",
 			},
 			PreferredAlt: "Автокалибровка (Circular Adaptive)",
@@ -355,8 +372,47 @@ func Load() *Config {
 		_ = cfg.saveLocked()
 	}
 
-	if cfg.Progression != nil && !cfg.Progression.IsConfigured() {
-		cfg.Progression = nil
+	if cfg.Progression != nil {
+		// Season 2 Wipe & Archive Migration:
+		// If progression is from Season 1 (Season < 2), archive into History and reset for Season 2
+		if cfg.Progression.Season < 2 {
+			s1Level := cfg.Progression.CareerLevel
+			if s1Level < 1 {
+				s1Level = 1
+			}
+			hasProgress := s1Level > 1 || len(cfg.Progression.Roles) > 0 || len(cfg.Progression.UnlockedItems) > 0
+			if hasProgress {
+				alreadyArchived := false
+				for _, h := range cfg.Progression.History {
+					if h.Season == 1 {
+						alreadyArchived = true
+						break
+					}
+				}
+				if !alreadyArchived {
+					cfg.Progression.History = append(cfg.Progression.History, SeasonHistoryRecord{
+						Season:      1,
+						SeasonTitle: "Сезон 1",
+						CareerLevel: s1Level,
+						CareerXP:    0,
+						StartDate:   "2026-09-10",
+						EndDate:     "2026-10-15",
+						ArchivedAt:  time.Now().UTC().Format(time.RFC3339),
+					})
+				}
+			}
+			cfg.Progression.Season = 2
+			cfg.Progression.CareerLevel = 1
+			cfg.Progression.Roles = map[string]int{"assault": 1}
+			cfg.Progression.XPProgress = make(map[string]float64)
+			cfg.Progression.UnlockedItems = nil
+			cfg.Progression.LastUpdated = time.Now().Unix()
+			_ = cfg.saveLocked()
+		}
+
+		if !cfg.Progression.IsConfigured() {
+			cfg.Progression = nil
+		}
 	}
 
 	return cfg

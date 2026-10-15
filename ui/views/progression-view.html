@@ -255,6 +255,29 @@
             </div>
         </div>
 
+        <!-- Section: Seasons History Line Chart (Dark Cloudflare Utility) -->
+        <div class="prog-seasons-card">
+            <div class="prog-seasons-header">
+                <div class="prog-seasons-header-left">
+                    <span class="prog-seasons-title font-mono">ПРОГРЕСС КАРЬЕРЫ ПО СЕЗОНАМ</span>
+                    <span class="prog-seasons-subtitle font-mono">Динамика достигнутого уровня WARDOGS</span>
+                </div>
+                <div class="prog-seasons-legend font-mono">
+                    <span class="prog-legend-item">
+                        <span class="prog-legend-line"></span>
+                        <span class="prog-legend-dot"></span>
+                        <span class="prog-legend-text">Достигнутый уровень</span>
+                    </span>
+                    <span class="prog-legend-item">
+                        <span class="prog-legend-badge-active">Сезон 2 (Активен)</span>
+                    </span>
+                </div>
+            </div>
+            <div class="prog-seasons-chart-wrap" id="prog-seasons-chart-container">
+                <!-- Linear SVG Chart rendered dynamically by progression.js -->
+            </div>
+        </div>
+
         <!-- Section 2: Active Target Roadmap Banner (Visible when target is active) -->
         <div id="prog-target-banner" class="prog-target-banner" style="display: none;">
             <div class="prog-target-left">
@@ -301,7 +324,7 @@
         <div class="prog-section-header">
             <div class="prog-catalog-header-left">
                 <span class="prog-section-title font-mono">КАТАЛОГ РАЗБЛОКИРОВОК</span>
-                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(58 наград)</span>
+                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(...)</span>
             </div>
             <div class="prog-catalog-filter-row">
                 <label class="prog-hide-unlocked-label font-mono">

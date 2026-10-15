@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.2.1</span>
+                <span class="brand-version">v2.2.5</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Complex Mode (DPI) -->
@@ -413,6 +413,25 @@
             </div>
         </div>
 
+        <!-- Section 1.5: Linear Progression of Seasons (Season 1 vs Season 2) -->
+        <div class="prog-seasons-card">
+            <div class="prog-seasons-header">
+                <div class="prog-seasons-title font-mono">ПРОГРЕСС ПО СЕЗОНАМ (WARDOGS)</div>
+                <div class="prog-seasons-legend font-mono">
+                    <span class="prog-legend-item">
+                        <span class="prog-legend-dot-s1"></span>
+                        <span>Сезон 1 (Завершен)</span>
+                    </span>
+                    <span class="prog-legend-item">
+                        <span class="prog-legend-badge-active">Сезон 2 (Активен)</span>
+                    </span>
+                </div>
+            </div>
+            <div class="prog-seasons-chart-wrap" id="prog-seasons-chart-container">
+                <!-- Linear SVG Chart rendered dynamically by progression.js -->
+            </div>
+        </div>
+
         <!-- Section 2: Active Target Roadmap Banner (Visible when target is active) -->
         <div id="prog-target-banner" class="prog-target-banner" style="display: none;">
             <div class="prog-target-left">
@@ -459,7 +478,7 @@
         <div class="prog-section-header">
             <div class="prog-catalog-header-left">
                 <span class="prog-section-title font-mono">КАТАЛОГ РАЗБЛОКИРОВОК</span>
-                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(58 наград)</span>
+                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(...)</span>
             </div>
             <div class="prog-catalog-filter-row">
                 <label class="prog-hide-unlocked-label font-mono">

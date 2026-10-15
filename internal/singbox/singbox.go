@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -467,6 +468,7 @@ var DirectGameDomains = []string{
 	// Anti-cheat / PKI endpoints (CRL/OCSP)
 	"certainly.com",
 	"pki.goog",
+	"elytra.ac",
 	// Steam
 	"steamserver.net",
 	"steampowered.com",
@@ -580,10 +582,6 @@ func GetRegionProbeExcludeAddresses() []string {
 var DirectLauncherProcesses = []string{
 	"Elytra-Setup.exe",
 	"elytra-setup.exe",
-	"elytra-launcher.exe",
-	"elytraclient.exe",
-	"service.exe",
-	"control.exe",
 	"crashpad_handler.exe",
 	"CrashReportClient.exe",
 	"crashreportclient.exe",
@@ -603,7 +601,7 @@ var DirectLauncherProcesses = []string{
 	"denuvo-anti-cheat.exe",
 }
 
-// WardogsGameProcesses contains process names for WARDOGS dedicated game client and launcher.
+// WardogsGameProcesses contains process names for WARDOGS dedicated game client, launcher, and Elytra anti-cheat.
 var WardogsGameProcesses = []string{
 	"WardogsClient-Win64-Shipping.exe",
 	"wardogsclient-win64-shipping.exe",
@@ -612,6 +610,8 @@ var WardogsGameProcesses = []string{
 	"WardogsLauncher-Shipping.exe",
 	"wardogslauncher-shipping.exe",
 	"wardogslauncher.exe",
+	"elytra-launcher.exe",
+	"elytraclient.exe",
 }
 
 type RouteRule struct {
@@ -2826,27 +2826,18 @@ func CleanupWintunAdapter() {
 	cmdEnum := exec.Command("pnputil", "/enum-devices", "/class", "Net")
 	cmdEnum.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if out, err := cmdEnum.Output(); err == nil {
-		lines := strings.Split(string(out), "\n")
-		var currentInstanceID string
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "Instance ID:") {
-				parts := strings.Fields(line)
-				if len(parts) >= 3 {
-					currentInstanceID = parts[2]
-				}
-			} else if strings.HasPrefix(strings.ToUpper(currentInstanceID), "SWD\\WINTUN\\") {
-				lineLower := strings.ToLower(line)
-				if strings.Contains(lineLower, "sing-tun") ||
-					strings.Contains(lineLower, "warlink") ||
-					strings.Contains(lineLower, "wintun") ||
-					strings.Contains(lineLower, "throne") {
-					cmdRm := exec.Command("pnputil", "/remove-device", currentInstanceID)
-					cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-					_ = cmdRm.Run()
-					currentInstanceID = ""
-				}
+		reWintunID := regexp.MustCompile(`(?i)SWD\\WINTUN\\[^\s\r\n]+`)
+		matches := reWintunID.FindAllString(string(out), -1)
+		seen := make(map[string]bool)
+		for _, devID := range matches {
+			devID = strings.TrimSpace(devID)
+			if devID == "" || seen[devID] {
+				continue
 			}
+			seen[devID] = true
+			cmdRm := exec.Command("pnputil", "/remove-device", devID)
+			cmdRm.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+			_ = cmdRm.Run()
 		}
 	}
 

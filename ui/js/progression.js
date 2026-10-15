@@ -191,9 +191,9 @@
         }
     }
 
-    async function loadCatalogDatabase() {
+    async function loadCatalogDatabase(force = false) {
         const fetcher = async () => {
-            const resp = await fetch('/api/progression/database');
+            const resp = await fetch('/api/progression/database?t=' + Date.now());
             if (!resp.ok) throw new Error('Failed to load catalog: ' + resp.status);
             return await resp.json();
         };
@@ -206,6 +206,19 @@
                 renderCatalog();
             }
         };
+
+        if (force) {
+            try {
+                const data = await fetcher();
+                if (window.UIStore && typeof UIStore.set === 'function') {
+                    UIStore.set('/api/progression/database', data);
+                }
+                render(data);
+                return;
+            } catch (e) {
+                console.error('Failed loading catalog database:', e);
+            }
+        }
 
         if (window.UIStore && typeof UIStore.requestSWR === 'function') {
             await UIStore.requestSWR('/api/progression/database', fetcher, render, () => {});
@@ -221,8 +234,137 @@
 
     function renderAll() {
         renderCareerAndRoles();
+        renderSeasonsChart();
         updateTargetBanner();
         renderCatalog();
+    }
+
+    function renderSeasonsChart() {
+        const container = document.getElementById('prog-seasons-chart-container');
+        if (!container) return;
+
+        // Extract Season 1 and Season 2 data
+        const history = (currentProgression && currentProgression.history) || [];
+        let s1Record = null;
+        if (Array.isArray(history)) {
+            for (let i = 0; i < history.length; i++) {
+                if (history[i] && history[i].season === 1) {
+                    s1Record = history[i];
+                    break;
+                }
+            }
+        }
+        let s1Level = s1Record ? Number(s1Record.career_level) : 0;
+        let s2Level = (currentProgression && Number(currentProgression.career_level)) || 1;
+
+        // If s1Level is 0, check if we have any recorded sum from earlier
+        if (!s1Level && currentProgression.roles) {
+            let roleSum = 0;
+            for (const r of ROLES) {
+                roleSum += (currentProgression.roles[r] || 0);
+            }
+            if (roleSum > 1) s1Level = roleSum;
+        }
+
+        // SVG Canvas dimensions
+        const svgW = 620;
+        const svgH = 175;
+        const chartLeft = 52;
+        const chartRight = 575;
+        const chartTop = 26;
+        const chartBottom = 122;
+        const chartHeight = chartBottom - chartTop;
+        const chartWidth = chartRight - chartLeft;
+
+        // Calculate Y scale (0 to maxVal)
+        const highestLvl = Math.max(s1Level, s2Level, 10);
+        let maxVal = 100;
+        if (highestLvl > 100) {
+            maxVal = Math.ceil(highestLvl / 25) * 25;
+        }
+
+        const ySteps = [0, 25, 50, 75, 100];
+        if (maxVal !== 100) {
+            ySteps.length = 0;
+            const stepInc = maxVal / 4;
+            for (let i = 0; i <= 4; i++) {
+                ySteps.push(Math.round(i * stepInc));
+            }
+        }
+
+        let gridHtml = '';
+        for (const step of ySteps) {
+            const y = chartBottom - (step / maxVal) * chartHeight;
+            gridHtml += '<line x1="' + chartLeft + '" y1="' + y.toFixed(1) + '" x2="' + chartRight + '" y2="' + y.toFixed(1) + '" stroke="#1f1f1f" stroke-width="1" stroke-dasharray="3 3"/>';
+            gridHtml += '<text x="' + (chartLeft - 8) + '" y="' + (y + 3.5).toFixed(1) + '" fill="#666666" font-size="9.5" font-family="monospace" text-anchor="end">' + step + '</text>';
+        }
+
+        // Points coordinates
+        const x1 = chartLeft + chartWidth * 0.28; // Season 1
+        const x2 = chartLeft + chartWidth * 0.72; // Season 2
+
+        const val1Clamped = Math.max(0, Math.min(maxVal, s1Level));
+        const val2Clamped = Math.max(0, Math.min(maxVal, s2Level));
+
+        const y1 = chartBottom - (val1Clamped / maxVal) * chartHeight;
+        const y2 = chartBottom - (val2Clamped / maxVal) * chartHeight;
+
+        const s1Label = s1Level > 0 ? ('Ур. ' + s1Level) : '—';
+        const s2Label = 'Ур. ' + s2Level;
+
+        const svgContent = 
+            '<svg class="prog-seasons-svg" viewBox="0 0 ' + svgW + ' ' + svgH + '" preserveAspectRatio="xMidYMid meet">' +
+                '<defs>' +
+                    '<linearGradient id="progLineGrad" x1="0" y1="0" x2="0" y2="1">' +
+                        '<stop offset="0%" stop-color="#FF5E1F" stop-opacity="0.28"/>' +
+                        '<stop offset="100%" stop-color="#FF5E1F" stop-opacity="0.0"/>' +
+                    '</linearGradient>' +
+                '</defs>' +
+
+                '<!-- Y-Axis Header Label -->' +
+                '<text x="' + chartLeft + '" y="15" fill="#888888" font-size="9" font-family="monospace" font-weight="700">УРОВЕНЬ</text>' +
+
+                '<!-- Horizontal Grid lines and Y labels -->' +
+                gridHtml +
+
+                '<!-- Bottom X Baseline -->' +
+                '<line x1="' + chartLeft + '" y1="' + chartBottom + '" x2="' + chartRight + '" y2="' + chartBottom + '" stroke="#2a2a2a" stroke-width="1"/>' +
+
+                '<!-- Shaded Area Below Line -->' +
+                '<polygon points="' + x1.toFixed(1) + ',' + y1.toFixed(1) + ' ' + x2.toFixed(1) + ',' + y2.toFixed(1) + ' ' + x2.toFixed(1) + ',' + chartBottom + ' ' + x1.toFixed(1) + ',' + chartBottom + '" fill="url(#progLineGrad)"/>' +
+
+                '<!-- Vertical Drop Guides -->' +
+                '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x1.toFixed(1) + '" y2="' + chartBottom + '" stroke="#FF5E1F" stroke-opacity="0.25" stroke-dasharray="2 2"/>' +
+                '<line x1="' + x2.toFixed(1) + '" y1="' + y2.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y2="' + chartBottom + '" stroke="#FF5E1F" stroke-opacity="0.25" stroke-dasharray="2 2"/>' +
+
+                '<!-- Main Trend Line -->' +
+                '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round"/>' +
+
+                '<!-- Data Point 1 (Season 1) -->' +
+                '<circle cx="' + x1.toFixed(1) + '" cy="' + y1.toFixed(1) + '" r="5" fill="#141414" stroke="#FF5E1F" stroke-width="2.5"/>' +
+                '<!-- Value Callout 1 -->' +
+                '<rect x="' + (x1 - 24).toFixed(1) + '" y="' + (y1 - 22).toFixed(1) + '" width="48" height="16" rx="2" fill="#1a1a1a" stroke="#333333" stroke-width="1"/>' +
+                '<text x="' + x1.toFixed(1) + '" y="' + (y1 - 10.5).toFixed(1) + '" fill="#f5f5f5" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">' + s1Label + '</text>' +
+
+                '<!-- Data Point 2 (Season 2) -->' +
+                '<circle cx="' + x2.toFixed(1) + '" cy="' + y2.toFixed(1) + '" r="9" fill="none" stroke="#FF5E1F" stroke-opacity="0.3" stroke-width="1.5"/>' +
+                '<circle cx="' + x2.toFixed(1) + '" cy="' + y2.toFixed(1) + '" r="5.5" fill="#FF5E1F" stroke="#ffffff" stroke-width="1.5"/>' +
+                '<!-- Value Callout 2 -->' +
+                '<rect x="' + (x2 - 24).toFixed(1) + '" y="' + (y2 - 22).toFixed(1) + '" width="48" height="16" rx="2" fill="#1a1a1a" stroke="#FF5E1F" stroke-width="1"/>' +
+                '<text x="' + x2.toFixed(1) + '" y="' + (y2 - 10.5).toFixed(1) + '" fill="#FF5E1F" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">' + s2Label + '</text>' +
+
+                '<!-- Bottom X-Axis Columns: Season 1 -->' +
+                '<text x="' + x1.toFixed(1) + '" y="139" fill="#f5f5f5" font-size="11" font-family="monospace" font-weight="700" text-anchor="middle">СЕЗОН 1</text>' +
+                '<text x="' + x1.toFixed(1) + '" y="153" fill="#888888" font-size="9.5" font-family="monospace" text-anchor="middle">10.09.2026 — 15.10.2026</text>' +
+                '<text x="' + x1.toFixed(1) + '" y="166" fill="#666666" font-size="9" font-family="monospace" text-anchor="middle">Завершен</text>' +
+
+                '<!-- Bottom X-Axis Columns: Season 2 -->' +
+                '<text x="' + x2.toFixed(1) + '" y="139" fill="#FF5E1F" font-size="11" font-family="monospace" font-weight="700" text-anchor="middle">СЕЗОН 2</text>' +
+                '<text x="' + x2.toFixed(1) + '" y="153" fill="#888888" font-size="9.5" font-family="monospace" text-anchor="middle">15.10.2026 — ~15.11.2026</text>' +
+                '<text x="' + x2.toFixed(1) + '" y="166" fill="#FF5E1F" font-size="9" font-family="monospace" font-weight="600" text-anchor="middle">Текущий сезон</text>' +
+            '</svg>';
+
+        container.innerHTML = svgContent;
     }
 
     function renderCareerAndRoles() {
@@ -839,6 +981,8 @@
     function onOpen() {
         renderAll();
         checkFirstTimeGuide();
+        loadProgressionData();
+        loadCatalogDatabase();
     }
 
     function getProgressionSummary() {
@@ -1621,6 +1765,10 @@
     // Export ProgressionController to global window
     window.ProgressionController = {
         init: init,
+        refresh: function() {
+            loadProgressionData();
+            loadCatalogDatabase(true);
+        },
         onOpen: onOpen,
         onClose: onClose,
         checkFirstTimeGuide: checkFirstTimeGuide,
@@ -1646,6 +1794,7 @@
         renderShareCard: renderShareCard,
         copyShareCard: copyShareCard,
         saveShareCard: saveShareCard,
+        renderSeasonsChart: renderSeasonsChart,
         onSteamScreenshotSync: onSteamScreenshotSync
     };
 
