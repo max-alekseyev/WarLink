@@ -90,12 +90,16 @@
             <div class="setting-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                     <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                    <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                        </svg>
-                        Мастер диагностики сети
-                    </button>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button id="btn-quick-repair" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="runEmergencyNetworkRepair(event)">Сброс адаптера</button>
+                        <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                        <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                            </svg>
+                            Мастер диагностики
+                        </button>
+                    </div>
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
                     <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
@@ -103,6 +107,25 @@
                     <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
                     <span style="color: var(--text-muted); font-size: 11px;">•</span>
                     <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+                </div>
+            </div>
+
+            <div id="sys-tweaks-group" class="setting-group" style="margin-top: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">СЕТЕВОЙ СТЕК WINDOWS (GAMING OPTIMIZER)</span>
+                    <button id="btn-apply-sys-tweaks" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="applySystemTweaks(event)">Применить</button>
+                </div>
+                <div class="setting-info-row" style="font-size: 11px; margin-top: 4px;">
+                    <span class="info-label">Троттлинг сетевых прерываний:</span>
+                    <span id="tweak-stat-throttling" class="info-value font-mono">...</span>
+                </div>
+                <div class="setting-info-row" style="font-size: 11px; margin-top: 4px;">
+                    <span class="info-label">Маркировка пакетов DSCP 46 QoS:</span>
+                    <span id="tweak-stat-dscp" class="info-value font-mono">...</span>
+                </div>
+                <div class="setting-info-row" style="font-size: 11px; margin-top: 4px;">
+                    <span class="info-label">Прямая передача Winsock:</span>
+                    <span id="tweak-stat-winsock" class="info-value font-mono">...</span>
                 </div>
             </div>
         </div>

@@ -236,7 +236,7 @@ function renderSponsors(sponsors) {
 
     if (displayedSponsors.length === 0) {
         const emptyMsg = currentSponsorCategory === 'month' 
-            ? 'В этом месяце нет активных спонсоров.' 
+            ? 'Сейчас нет активных спонсоров.' 
             : 'В данной категории пока нет записей.';
         grid.innerHTML = `
             <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 24px 10px; font-size: 11px;">

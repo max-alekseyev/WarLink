@@ -37,6 +37,7 @@ type Engine struct {
 	cfg                *config.Config
 	isConnected        bool
 	isConnecting       bool
+	isDisconnecting    atomic.Bool
 	singboxStopping    atomic.Bool
 	selectedAlt        string
 	freeInternetActive bool
@@ -108,6 +109,10 @@ func (e *Engine) log(msg string) {
 	if e.logCallback != nil {
 		e.logCallback(msg)
 	}
+}
+
+func (e *Engine) IsDisconnecting() bool {
+	return e.isDisconnecting.Load()
 }
 
 func (e *Engine) IsConnected() bool {
@@ -319,6 +324,13 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 	e.transitionMu.Lock()
 	defer e.transitionMu.Unlock()
 
+	for i := 0; i < 15 && e.isDisconnecting.Load(); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if e.isDisconnecting.Load() {
+		return fmt.Errorf("предыдущее соединение еще завершает освобождение сетевого адаптера, подождите секунду")
+	}
+
 	e.mu.Lock()
 	if e.isConnecting || e.isConnected {
 		e.mu.Unlock()
@@ -485,6 +497,9 @@ func (e *Engine) Disconnect() error {
 	e.transitionMu.Lock()
 	defer e.transitionMu.Unlock()
 
+	e.isDisconnecting.Store(true)
+	defer e.isDisconnecting.Store(false)
+
 	e.mu.Lock()
 	e.isConnected = false
 	e.isConnecting = false
@@ -495,7 +510,10 @@ func (e *Engine) Disconnect() error {
 	e.mu.Unlock()
 
 	e.log("[INFO] Остановка игрового туннеля...")
-	return e.disconnectInternal()
+	err := e.disconnectInternal()
+	deps.CleanupZombieWintunAdapter(e.log)
+	time.Sleep(200 * time.Millisecond)
+	return err
 }
 
 func (e *Engine) disconnectInternal() error {
@@ -510,10 +528,8 @@ func (e *Engine) disconnectInternal() error {
 			e.log("[INFO] Остановка игрового туннеля sing-box...")
 			_ = e.singboxMgr.Stop()
 		}
-		go func() {
-			_ = singbox.ReleaseSession()
-			e.singboxStopping.Store(false)
-		}()
+		_ = singbox.ReleaseSession()
+		e.singboxStopping.Store(false)
 	} else {
 		e.singboxStopping.Store(true)
 		if e.singboxMgr != nil {

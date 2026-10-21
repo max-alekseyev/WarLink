@@ -341,6 +341,9 @@ function toggleProgression(e) {
 function toggleDetails(e) {
     if (e) e.stopPropagation();
     switchView('view-details');
+    if (typeof window.fetchSystemTweaks === 'function') {
+        window.fetchSystemTweaks();
+    }
 }
 
 
@@ -958,6 +961,9 @@ async function fetchStatus() {
 }
 
 function updateUI(data) {
+    if (typeof window.handleNetworkStatusPayload === 'function') {
+        window.handleNetworkStatusPayload(data);
+    }
     if (data.version) {
         const verEl = document.querySelector('.brand-version');
         if (verEl && verEl.textContent !== data.version) {

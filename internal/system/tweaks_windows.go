@@ -104,3 +104,41 @@ New-NetQosPolicy -Name "WarLinkTunnelQoS" -AppPathNameMatchCondition "sing-box.e
 		logFn("[SYS] Назначена политика качества обслуживания QoS (DSCP 46 / Expedited Forwarding для WARDOGS и туннеля)")
 	}
 }
+
+
+// GetCompetitiveGamingTweaksStatus inspects Windows registry to report whether low-latency tweaks are currently active.
+func GetCompetitiveGamingTweaksStatus() map[string]interface{} {
+	status := map[string]interface{}{
+		"supported":               true,
+		"throttling_disabled":     false,
+		"responsiveness_max":      false,
+		"dscp_nla_bypassed":       false,
+		"fast_datagram_threshold": false,
+	}
+
+	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile`, registry.QUERY_VALUE); err == nil {
+		if val, _, err := k.GetIntegerValue("NetworkThrottlingIndex"); err == nil && uint32(val) == 0xFFFFFFFF {
+			status["throttling_disabled"] = true
+		}
+		if val, _, err := k.GetIntegerValue("SystemResponsiveness"); err == nil && uint32(val) == 0 {
+			status["responsiveness_max"] = true
+		}
+		k.Close()
+	}
+
+	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\Tcpip\QoS`, registry.QUERY_VALUE); err == nil {
+		if val, _, err := k.GetStringValue("Do not use NLA"); err == nil && val == "1" {
+			status["dscp_nla_bypassed"] = true
+		}
+		k.Close()
+	}
+
+	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\Afd\Parameters`, registry.QUERY_VALUE); err == nil {
+		if val, _, err := k.GetIntegerValue("FastSendDatagramThreshold"); err == nil && val >= 1500 {
+			status["fast_datagram_threshold"] = true
+		}
+		k.Close()
+	}
+
+	return status
+}

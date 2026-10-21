@@ -232,10 +232,20 @@ func fixPlatformIssues() []string {
 	deps.CleanupZombieWintunAdapter(func(msg string) {
 		actions = append(actions, msg)
 	})
+	for _, ifName := range []string{"WarLink-Tun", "wintun", "sing-tun"} {
+		delCmd := exec.Command("netsh", "interface", "delete", "interface", "name="+ifName)
+		delCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		_ = delCmd.Run()
+	}
 
 	// 5. Reset loopback proxy
 	_ = deps.ResetLoopbackProxy(nil)
 	actions = append(actions, "Настройки системного прокси сброшены на прямое подключение")
+
+	// 6. Flush DNS resolver cache
+	if err := deps.FlushDNSResolverCache(); err == nil {
+		actions = append(actions, "Кэш DNS Windows успешно сброшен")
+	}
 
 	return actions
 }

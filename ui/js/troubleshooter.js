@@ -154,7 +154,14 @@
         }
 
         if (fixBtn) {
-            fixBtn.style.display = hasFixable ? 'inline-block' : 'none';
+            fixBtn.style.display = 'inline-block';
+            if (hasFixable) {
+                fixBtn.classList.add('btn-primary');
+                fixBtn.classList.remove('btn-secondary');
+            } else {
+                fixBtn.classList.remove('btn-primary');
+                fixBtn.classList.add('btn-secondary');
+            }
         }
 
         // Check if user is in an active ticket view

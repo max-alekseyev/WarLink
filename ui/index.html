@@ -741,12 +741,16 @@
             <div class="setting-group">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                     <span class="setting-group-title" style="margin-bottom: 0;">ДИАГНОСТИКА И ЖУРНАЛЫ</span>
-                    <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                        </svg>
-                        Мастер диагностики сети
-                    </button>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button id="btn-quick-repair" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="runEmergencyNetworkRepair(event)">Сброс адаптера</button>
+                        <span style="color: var(--text-muted); font-size: 11px;">•</span>
+                        <button id="btn-open-troubleshooter" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;" onclick="openTroubleshooterModal(event)">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                            </svg>
+                            Мастер диагностики
+                        </button>
+                    </div>
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center; margin-top: 4px;">
                     <button class="btn-link" onclick="openLogFile()">warlink.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
@@ -754,6 +758,25 @@
                     <button class="btn-link" onclick="openSingboxLogFile()">singbox.log <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
                     <span style="color: var(--text-muted); font-size: 11px;">•</span>
                     <button class="btn-link" onclick="openLogsFolder()">папка logs <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -1px; margin-left: 2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>
+                </div>
+            </div>
+
+            <div id="sys-tweaks-group" class="setting-group" style="margin-top: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <span class="setting-group-title" style="margin-bottom: 0;">СЕТЕВОЙ СТЕК WINDOWS (GAMING OPTIMIZER)</span>
+                    <button id="btn-apply-sys-tweaks" class="btn-link" style="font-size: 11px; color: var(--action); cursor: pointer;" onclick="applySystemTweaks(event)">Применить</button>
+                </div>
+                <div class="setting-info-row" style="font-size: 11px; margin-top: 4px;">
+                    <span class="info-label">Троттлинг сетевых прерываний:</span>
+                    <span id="tweak-stat-throttling" class="info-value font-mono">...</span>
+                </div>
+                <div class="setting-info-row" style="font-size: 11px; margin-top: 4px;">
+                    <span class="info-label">Маркировка пакетов DSCP 46 QoS:</span>
+                    <span id="tweak-stat-dscp" class="info-value font-mono">...</span>
+                </div>
+                <div class="setting-info-row" style="font-size: 11px; margin-top: 4px;">
+                    <span class="info-label">Прямая передача Winsock:</span>
+                    <span id="tweak-stat-winsock" class="info-value font-mono">...</span>
                 </div>
             </div>
         </div>
@@ -896,7 +919,7 @@
         <!-- Filter Tabs -->
         <div class="sponsors-nav-tabs">
             <button id="tab-sponsors-all" class="sponsor-tab-btn active" onclick="switchSponsorCategory('all')">Зал славы</button>
-            <button id="tab-sponsors-month" class="sponsor-tab-btn" onclick="switchSponsorCategory('month')">Герои месяца</button>
+            <button id="tab-sponsors-month" class="sponsor-tab-btn" onclick="switchSponsorCategory('month')">Активные спонсоры</button>
             <button id="tab-sponsors-new" class="sponsor-tab-btn" onclick="switchSponsorCategory('new')">Новые защитники</button>
         </div>
 
@@ -2110,8 +2133,8 @@
         <!-- Footer Actions -->
         <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-top: 1px solid var(--border-base); background: #141414;">
             <div style="display: flex; gap: 8px;">
-                <button id="btn-tb-fix" class="btn btn-primary btn-sm font-mono" onclick="applyTroubleshooterFix()" style="display: none;">
-                    <span>Исправить в 1 клик</span>
+                <button id="btn-tb-fix" class="btn btn-secondary btn-sm font-mono" onclick="applyTroubleshooterFix()" title="Принудительный сброс Wintun-адаптера, очистка DNS-кэша и удаление конфликтующих процессов">
+                    <span>Восстановить сетевой стек</span>
                 </button>
                 <button id="btn-tb-copy" class="btn btn-secondary btn-sm font-mono" onclick="copyTroubleshooterReport()" title="Скопировать текстовый отчет в буфер обмена">
                     <span>Скопировать отчет</span>
@@ -2173,9 +2196,9 @@
 
         <!-- Persistent Stockholm Gateway & Community Timer Bar -->
         <footer class="gateway-footer">
-            <div class="gateway-footer-left" id="gw-footer-left" onclick="toggleGatewayRoutePopover(event)" title="Сменить маршрут подключения">
+            <div class="gateway-footer-left" id="gw-footer-left" onclick="toggleGatewayRoutePopover(event)" title="Игровой шлюз WarLink (Москва)">
                 <span class="gateway-dot"></span>
-                <span id="gw-title" class="gateway-title">Москва → Франкфурт</span>
+                <span id="gw-title" class="gateway-title">Москва</span>
                 <svg id="gw-chevron" class="gw-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
                 <span class="gateway-sep">•</span>
                 <span id="gw-ping" class="gateway-meta"><span class="skeleton" style="width: 36px; height: 10px;"></span></span>
@@ -2253,6 +2276,8 @@
     <script src="js/bug-report.js"></script>
     <script src="js/support.js"></script>
     <script src="js/troubleshooter.js"></script>
+    <script src="js/diagnostics.js"></script>
+    <script src="js/network.js"></script>
     <script src="js/gold-market.js"></script>
 </body>
 </html>

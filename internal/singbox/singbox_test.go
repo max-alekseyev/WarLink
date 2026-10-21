@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"warlink/internal/config"
+	"warlink/internal/system"
 )
 
 func TestGenerateConfig(t *testing.T) {
@@ -511,8 +512,9 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 	if tun.Stack != "mixed" {
 		t.Errorf("expected stack: mixed, got %s", tun.Stack)
 	}
-	if tun.MTU != 1320 {
-		t.Errorf("expected MTU: 1320, got %d", tun.MTU)
+	expectedMTU := system.DetectOptimalWintunMTU()
+	if tun.MTU != expectedMTU {
+		t.Errorf("expected MTU: %d, got %d", expectedMTU, tun.MTU)
 	}
 
 	// 2. Check Outbound Hysteria 2

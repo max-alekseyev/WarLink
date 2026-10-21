@@ -26,6 +26,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 	"warlink/internal/config"
 	"warlink/internal/embedded"
+	"warlink/internal/system"
 )
 
 const (
@@ -1778,17 +1779,13 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		}
 	}
 
-	gwHost, gwPort, _ := GetActiveGatewayTarget()
+	gwHost, _, _ := GetActiveGatewayTarget()
 	if targetServer == "" {
 		targetServer = gwHost
 	}
-	var hy2Ports []string
+	optimalMTU := system.DetectOptimalWintunMTU()
+	hy2Ports := []string{"443:443", "8443:8443", "2083:2083", "30000:40000"}
 	var hy2Port int
-	if gwPort == 8443 {
-		hy2Ports = []string{"8443:8443", "30000:40000"}
-	} else {
-		hy2Ports = []string{"443:443", "20000:30000"}
-	}
 
 	outbounds := []Outbound{
 		{
@@ -1808,7 +1805,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Insecure:   true,
 			},
 			DisableChromeParrot: true,
-			InitialPacketSize:   1320,
+			InitialPacketSize:   optimalMTU,
 		},
 	}
 	outbounds = append(outbounds, Outbound{
@@ -1829,7 +1826,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				Tag:                 "tun-in",
 				InterfaceName:       "WarLink-Tun",
 				Address:             []string{"172.28.192.1/30"},
-				MTU:                 1320,
+				MTU:                 optimalMTU,
 				AutoRoute:           true,
 				StrictRoute:         false,
 				Stack:               "mixed",
@@ -2367,19 +2364,15 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		}
 	}
 
-	gwHost, gwPort, _ := GetActiveGatewayTarget()
+	gwHost, _, _ := GetActiveGatewayTarget()
 	if envIP := os.Getenv("WARLINK_SERVER_IP"); envIP != "" {
 		targetServer = envIP
 	} else {
 		targetServer = gwHost
 	}
-	var hy2ServerPorts []string
+	optimalMTU := system.DetectOptimalWintunMTU()
+	hy2ServerPorts := []string{"443:443", "8443:8443", "2083:2083", "30000:40000"}
 	var hy2ServerPort int
-	if gwPort == 8443 {
-		hy2ServerPorts = []string{"8443:8443", "30000:40000"}
-	} else {
-		hy2ServerPorts = []string{"443:443", "20000:30000"}
-	}
 
 	devOutbounds := []Outbound{
 		{
@@ -2399,7 +2392,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Insecure:   true,
 			},
 			DisableChromeParrot: true,
-			InitialPacketSize:   1320,
+			InitialPacketSize:   optimalMTU,
 		},
 	}
 	devOutbounds = append(devOutbounds, Outbound{
@@ -2420,7 +2413,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Tag:           "tun-in",
 				InterfaceName: "WarLink-Tun",
 				Address:       []string{"172.28.192.1/30"},
-				MTU:           1320, // Standard safe MTU (1320) avoiding UDP packet fragmentation across PPPoE and regional ISP tunnels
+				MTU:           optimalMTU, // Adaptive MTU avoiding UDP packet fragmentation
 				AutoRoute:     true,
 				StrictRoute:   false,
 				Stack:         "mixed", // Mixed stack: native kernel UDP for gaming fastpath, gVisor TCP for honest end-to-end RTT

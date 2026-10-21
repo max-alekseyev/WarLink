@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.6"
+var AppVersion = "v2.2.7"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -1652,6 +1652,7 @@ func main() {
 		resp := map[string]interface{}{
 			"version":               AppVersion,
 			"is_connected":          state.eng.IsConnected(),
+			"is_disconnecting":      state.eng.IsDisconnecting(),
 			"ping_ms":               totalPing,
 			"gateway_ping":          gwPing,
 			"gateway_badge":         gwBadge,
@@ -2180,6 +2181,33 @@ func main() {
 
 	// Network Troubleshooter: 1-click remediation
 	mux.HandleFunc("/api/troubleshoot/fix", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		result := troubleshooter.FixAllIssues()
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	// System Gaming Tweaks
+	mux.HandleFunc("/api/system/tweaks", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			system.ApplyCompetitiveGamingTweaks(func(msg string) {
+				fmt.Println(msg)
+			})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"status":  system.GetCompetitiveGamingTweaksStatus(),
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(system.GetCompetitiveGamingTweaksStatus())
+	})
+
+	// Network Doctor: Emergency reset
+	mux.HandleFunc("/api/network/repair", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

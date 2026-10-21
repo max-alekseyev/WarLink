@@ -52,7 +52,7 @@ var embeddedAdminDialogsHTML string
 
 
 const (
-	ServerAppVersion     = "v2.2.6"
+	ServerAppVersion     = "v2.2.7"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
@@ -5956,7 +5956,6 @@ func (s *AppState) startOpsAlertingWorker() {
 	}
 
 	nodes := []*nodeState{
-		{name: "Франкфурт Edge", addr: "85.192.24.254:9090"},
 		{name: "Москва Ingress", addr: "45.12.63.85:80"},
 	}
 
@@ -6268,30 +6267,16 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		cNode := sess.ConnectedNode
 		gwIP := sess.GatewayIP
 		if cNode == "" || gwIP == "" {
-			if rMode == "transit" {
-				cNode = "Москва → Франкфурт"
-				gwIP = "45.12.63.85"
-			} else if rMode == "direct_moscow" {
-				cNode = "Москва"
-				gwIP = "45.12.63.85"
-			} else if rMode == "direct_stockholm" {
+			if rMode == "direct_stockholm" {
 				cNode = "Стокгольм"
 				gwIP = "138.124.103.99"
 			} else {
-				cNode = "Франкфурт"
-				gwIP = "85.192.24.254"
+				cNode = "Москва"
+				gwIP = "45.12.63.85"
 			}
 		}
-		routeBadge := "Москва → Франкфурт"
+		routeBadge := "Москва"
 		switch rMode {
-		case "direct_frankfurt":
-			routeBadge = "Франкфурт"
-			if cNode == "" {
-				cNode = "Франкфурт"
-			}
-			if gwIP == "" {
-				gwIP = "85.192.24.254"
-			}
 		case "direct_stockholm":
 			routeBadge = "Стокгольм"
 			if cNode == "" {
@@ -6300,7 +6285,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			if gwIP == "" {
 				gwIP = "138.124.103.99"
 			}
-		case "direct_moscow":
+		case "direct_moscow", "transit":
 			routeBadge = "Москва"
 			if cNode == "" {
 				cNode = "Москва"
@@ -6309,9 +6294,9 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 				gwIP = "45.12.63.85"
 			}
 		default:
-			routeBadge = "Москва → Франкфурт"
+			routeBadge = "Москва"
 			if cNode == "" {
-				cNode = "Москва → Франкфурт"
+				cNode = "Москва"
 			}
 			if gwIP == "" {
 				gwIP = "45.12.63.85"
