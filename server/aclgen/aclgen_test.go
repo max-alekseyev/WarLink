@@ -560,4 +560,94 @@ func TestRegionProbeAndICMPPriority(t *testing.T) {
 	}
 }
 
+func TestDirectMoscowDualOutboundInAclgen(t *testing.T) {
+	testProfiles := []Profile{
+		{
+			ID:        "wardogs",
+			Name:      "WARDOGS",
+			Processes: []string{"WardogsClient-Win64-Shipping.exe"},
+		},
+	}
+
+	// 1. With web services enabled in direct_moscow mode
+	cfgBytes, err := GenerateSingBoxConfig(testProfiles, []string{"WardogsClient-Win64-Shipping.exe"}, true, MoscowIngressIP, "8443", "obfs_pass", "test_tok", "direct_moscow")
+	if err != nil {
+		t.Fatalf("GenerateSingBoxConfig failed: %v", err)
+	}
+
+	var parsed SingBoxFullConfig
+	if err := json.Unmarshal(cfgBytes, &parsed); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+
+	var hasMoscowGateway, hasWebGateway bool
+	for _, o := range parsed.Outbounds {
+		if o.Tag == "hy2-gateway" {
+			hasMoscowGateway = true
+			if o.Server != MoscowIngressIP {
+				t.Errorf("expected hy2-gateway server to be %s, got %s", MoscowIngressIP, o.Server)
+			}
+		}
+		if o.Tag == "hy2-web-gateway" {
+			hasWebGateway = true
+		}
+	}
+
+	if !hasMoscowGateway {
+		t.Errorf("expected hy2-gateway outbound")
+	}
+	if hasWebGateway {
+		t.Errorf("hy2-web-gateway must NOT be present; all traffic unifies into hy2-gateway")
+	}
+
+	foundFakeIP := false
+	foundYouTube := false
+	foundGameInHy2 := false
+	for _, r := range parsed.Route.Rules {
+		if r.Outbound == "hy2-gateway" {
+			for _, cidr := range r.IPCIDR {
+				if cidr == "198.18.0.0/15" {
+					foundFakeIP = true
+				}
+			}
+			for _, d := range r.DomainSuffix {
+				if d == "youtube.com" || d == "googlevideo.com" {
+					foundYouTube = true
+				}
+			}
+			for _, p := range r.ProcessName {
+				if p == "WardogsClient-Win64-Shipping.exe" {
+					foundGameInHy2 = true
+				}
+			}
+		}
+	}
+
+	if !foundFakeIP {
+		t.Errorf("expected FakeIP 198.18.0.0/15 to route to hy2-gateway")
+	}
+	if !foundYouTube {
+		t.Errorf("expected YouTube domains to route to hy2-gateway")
+	}
+	if !foundGameInHy2 {
+		t.Errorf("expected game process to route to hy2-gateway")
+	}
+
+	// 2. With web services disabled
+	cfgBytesNoWeb, err := GenerateSingBoxConfig(testProfiles, []string{"WardogsClient-Win64-Shipping.exe"}, false, MoscowIngressIP, "8443,30000-40000", "obfs_pass", "test_tok", "direct_moscow")
+	if err != nil {
+		t.Fatalf("GenerateSingBoxConfig without web failed: %v", err)
+	}
+	var parsedNoWeb SingBoxFullConfig
+	if err := json.Unmarshal(cfgBytesNoWeb, &parsedNoWeb); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	for _, o := range parsedNoWeb.Outbounds {
+		if o.Tag == "hy2-web-gateway" {
+			t.Errorf("hy2-web-gateway must NOT be present")
+		}
+	}
+}
+
+
 

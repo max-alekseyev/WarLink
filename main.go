@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.5"
+var AppVersion = "v2.2.6"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -1495,23 +1495,31 @@ func main() {
 			}
 		}
 
-		// 3. Proxy from gateway server static API and cache locally
+		// 3. Proxy from gateway server static CDN / API and cache locally
 		serverAPI := singbox.GetServerAPI()
 		if serverAPI == "" {
 			serverAPI = "https://api-warlink.max-alekseyev.com"
 		}
-		targetURL := fmt.Sprintf("%s/static/%s", strings.TrimRight(serverAPI, "/"), relPath)
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Get(targetURL)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			data, err := io.ReadAll(resp.Body)
-			if err == nil && len(data) > 0 {
-				_ = os.MkdirAll(filepath.Dir(localCachedPath), 0755)
-				_ = os.WriteFile(localCachedPath, data, 0644)
-				w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
-				http.ServeFile(w, r, localCachedPath)
-				return
+		candidateURLs := []string{
+			fmt.Sprintf("https://static-warlink.max-alekseyev.com/static/%s", relPath),
+			fmt.Sprintf("%s/static/%s", strings.TrimRight(serverAPI, "/"), relPath),
+		}
+
+		client := &http.Client{Timeout: 8 * time.Second}
+		for _, targetURL := range candidateURLs {
+			resp, err := client.Get(targetURL)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				data, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err == nil && len(data) > 0 {
+					_ = os.MkdirAll(filepath.Dir(localCachedPath), 0755)
+					_ = os.WriteFile(localCachedPath, data, 0644)
+					w.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+					http.ServeFile(w, r, localCachedPath)
+					return
+				}
+			} else if resp != nil {
+				_ = resp.Body.Close()
 			}
 		}
 
@@ -1539,6 +1547,12 @@ func main() {
 		serveStaticAsset(w, r, relPath)
 	})
 
+	// Route 3: Backward-compatible direct wardogs/ routing
+	mux.HandleFunc("/wardogs/", func(w http.ResponseWriter, r *http.Request) {
+		relPath := strings.TrimPrefix(r.URL.Path, "/")
+		serveStaticAsset(w, r, relPath)
+	})
+
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		state.mu.Lock()
 		pipelineProg := state.eng.GetPipelineProgress()
@@ -1559,17 +1573,8 @@ func main() {
 		gwSlotsTooltip := ""
 		gwDays := 0
 		gwDonateAmount := 100
-		routeMode := state.cfg.GetNetworkRouteMode()
-		gwBadge := "Москва → Франкфурт"
-		gwLocation := "Транзит Москва → Франкфурт"
-		switch routeMode {
-		case config.RouteModeDirectFrankfurt, config.RouteModeDirectStockholm:
-			gwBadge = "Франкфурт"
-			gwLocation = "Франкфурт, Германия"
-		case config.RouteModeDirectMoscow:
-			gwBadge = "Москва"
-			gwLocation = "Москва, Россия"
-		}
+		gwBadge := "Москва"
+		gwLocation := "Москва, Россия"
 		isAdmin := state.cfg.AccountNumber == "5230-6527-2989-4096" || state.cfg.AccountTier == "admin"
 		if isAdmin {
 			state.cfg.AccountTier = "admin"
@@ -1577,8 +1582,8 @@ func main() {
 		isSponsor := state.cfg.AccountTier == "sponsor" || isAdmin
 		if state.gatewayStatus != nil {
 			gwDays = state.gatewayStatus.DaysLeft
-			if (routeMode == config.RouteModeDirectStockholm || routeMode == config.RouteModeDirectFrankfurt) && state.gatewayStatus.Location != "" {
-				gwLocation = "Франкфурт, Германия"
+			if state.gatewayStatus.Location != "" {
+				gwLocation = state.gatewayStatus.Location
 			}
 			if state.gatewayStatus.DonateAmountRub > 0 {
 				gwDonateAmount = state.gatewayStatus.DonateAmountRub
@@ -2105,20 +2110,13 @@ func main() {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 
 		state.mu.Lock()
-		routeMode := state.cfg.GetNetworkRouteMode()
 		gwPing := state.gatewayRealPing
 		if gwPing <= 0 && state.gatewayStatus != nil && state.gatewayStatus.PingHintMs > 0 {
 			gwPing = state.gatewayStatus.PingHintMs
 		}
 		state.mu.Unlock()
 
-		gwLocation := "Транзит Москва → Франкфурт"
-		switch routeMode {
-		case config.RouteModeDirectFrankfurt, config.RouteModeDirectStockholm:
-			gwLocation = "Франкфурт, Германия"
-		case config.RouteModeDirectMoscow:
-			gwLocation = "Москва, Россия"
-		}
+		gwLocation := "Москва, Россия"
 
 		gwStatus, err := singbox.GetServerGatewayStatus()
 		statusStr := "online"
@@ -2373,29 +2371,24 @@ func main() {
 				"success": true,
 				"infrastructure": map[string]interface{}{
 					"title":               "Инфраструктура кластера (Стокгольм + Москва + Франкфурт)",
-					"target_amount_rub":   1690,
-					"target_amount_eur":   13.0,
-					"current_balance_rub": 1690,
-					"current_balance_eur": 13.0,
+					"target_amount_rub":   1040,
+					"target_amount_eur":   8.0,
+					"current_balance_rub": 1040,
+					"current_balance_eur": 8.0,
 					"days_left":           23,
 					"real_days_left":      30,
 					"target_days":         31,
 					"percent":             100.0,
 					"is_covered":          true,
-					"status_text":         "Оплачено на 23 дня (Стокгольм + Москва + Франкфурт в строю)",
+					"status_text":         "Оплачено на 23 дня (Стокгольм + Москва в строю)",
 				},
 				"expansion": map[string]interface{}{
-					"id":                  "frankfurt",
-					"title":               "Шлюз Франкфурт (Германия)",
-					"role":                "В СТРОЮ",
-					"description":         "Европейский игровой узел с ультранизким пингом. Включен в базовую инфраструктуру кластера (13 € / мес).",
-					"target_amount_rub":   1690,
-					"target_amount_eur":   13.0,
-					"current_amount_rub":  1690,
-					"current_amount_eur":  13.0,
-					"percent":             100.0,
-					"is_covered":          true,
-					"is_active":           false,
+					"id":          "",
+					"title":       "",
+					"role":        "ВЫВЕДЕН",
+					"description": "",
+					"is_covered":  false,
+					"is_active":   false,
 				},
 				"special_projects": []interface{}{
 					map[string]interface{}{
@@ -3482,21 +3475,9 @@ func main() {
 			modes := []map[string]string{
 				{
 					"id":          config.RouteModeDirectMoscow,
-					"title":       "1. Клиент — Москва — Игра",
+					"title":       "Клиент — Москва — Игра",
 					"description": "Прямое подключение по России (минимальный пинг ~20 мс)",
 					"badge":       "Москва",
-				},
-				{
-					"id":          config.RouteModeTransit,
-					"title":       "2. Клиент — Москва — Франкфурт — Игра",
-					"description": "Транзитный маршрут через Европу (~80 мс)",
-					"badge":       "Москва → Франкфурт",
-				},
-				{
-					"id":          config.RouteModeDirectFrankfurt,
-					"title":       "3. Клиент — Франкфурт — Игра",
-					"description": "Прямое европейское подключение (~70 мс)",
-					"badge":       "Франкфурт",
 				},
 			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -3514,16 +3495,8 @@ func main() {
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Некорректный запрос"})
 				return
 			}
-			if req.Mode != config.RouteModeTransit && req.Mode != config.RouteModeDirectStockholm && req.Mode != config.RouteModeDirectMoscow && req.Mode != config.RouteModeDirectFrankfurt {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Неизвестный режим маршрутизации"})
-				return
-			}
-
-			// Alias direct_stockholm to direct_frankfurt
-			if req.Mode == config.RouteModeDirectStockholm {
-				req.Mode = config.RouteModeDirectFrankfurt
-			}
+			// Frankfurt is decommissioned. All routes normalize to Direct Moscow
+			req.Mode = config.RouteModeDirectMoscow
 
 			oldMode := state.cfg.GetNetworkRouteMode()
 			if oldMode == req.Mode {
@@ -3875,17 +3848,29 @@ func main() {
 		})
 	})
 
+	var lastProgSync time.Time
+	var lastProgSyncMu sync.Mutex
+
 	mux.HandleFunc("/api/progression/database", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Expires", "0")
-		go func() {
-			serverAPI := singbox.GetServerAPI()
-			if serverAPI != "" {
+
+		serverAPI := singbox.GetServerAPI()
+		if serverAPI != "" {
+			lastProgSyncMu.Lock()
+			shouldSync := r.URL.Query().Get("force") == "1" || time.Since(lastProgSync) > 3*time.Second
+			if shouldSync {
+				lastProgSync = time.Now()
+			}
+			lastProgSyncMu.Unlock()
+
+			if shouldSync {
 				_ = progression.SyncWithServer(serverAPI, deps.GetCoreDir())
 			}
-		}()
+		}
+
 		db := progression.GetDatabase()
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"unlocks": db.GetAllUnlocks(),

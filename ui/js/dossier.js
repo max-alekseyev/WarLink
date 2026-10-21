@@ -370,13 +370,13 @@ function renderDossierBadgeBlock(data) {
 
             <!-- Сетка 6 ролей -->
             <g transform="translate(72, 28)">
-                <text x="0" y="11" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ШТУРМОВИК: <tspan font-weight="800" fill="#0f100e">${roles.assault || 0}</tspan></text>
-                <text x="0" y="26" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">МЕДИК: <tspan font-weight="800" fill="#0f100e">${roles.medic || 0}</tspan></text>
-                <text x="0" y="41" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">РАЗВЕДЧИК: <tspan font-weight="800" fill="#0f100e">${roles.recon || 0}</tspan></text>
+                <text x="0" y="11" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ШТУРМОВИК: <tspan font-weight="800" fill="#0f100e">${roles.assault > 0 ? roles.assault : '-'}</tspan></text>
+                <text x="0" y="26" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">МЕДИК: <tspan font-weight="800" fill="#0f100e">${roles.medic > 0 ? roles.medic : '-'}</tspan></text>
+                <text x="0" y="41" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">РАЗВЕДЧИК: <tspan font-weight="800" fill="#0f100e">${roles.recon > 0 ? roles.recon : '-'}</tspan></text>
 
-                <text x="68" y="11" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ПОДДЕРЖКА: <tspan font-weight="800" fill="#0f100e">${roles.support || 0}</tspan></text>
-                <text x="68" y="26" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ВОДИТЕЛЬ: <tspan font-weight="800" fill="#0f100e">${roles.driver || 0}</tspan></text>
-                <text x="68" y="41" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ПИЛОТ: <tspan font-weight="800" fill="#0f100e">${roles.pilot || 0}</tspan></text>
+                <text x="68" y="11" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ПОДДЕРЖКА: <tspan font-weight="800" fill="#0f100e">${roles.support > 0 ? roles.support : '-'}</tspan></text>
+                <text x="68" y="26" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ВОДИТЕЛЬ: <tspan font-weight="800" fill="#0f100e">${roles.driver > 0 ? roles.driver : '-'}</tspan></text>
+                <text x="68" y="41" font-family="'JetBrains Mono', monospace" font-size="6.8" fill="#544e3e">ПИЛОТ: <tspan font-weight="800" fill="#0f100e">${roles.pilot > 0 ? roles.pilot : '-'}</tspan></text>
             </g>
 
             ${targetHtml}

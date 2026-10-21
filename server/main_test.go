@@ -485,16 +485,16 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	if sess == nil {
 		t.Fatalf("expected session to be created")
 	}
-	if sess.RouteMode != "direct_frankfurt" {
-		t.Errorf("expected RouteMode 'direct_frankfurt', got '%s'", sess.RouteMode)
+	if sess.RouteMode != "direct_moscow" {
+		t.Errorf("expected RouteMode 'direct_moscow', got '%s'", sess.RouteMode)
 	}
 
 	// 2. Telemetry Beacon update
 	beacon := TelemetryBeaconPayload{
 		DeviceID:           "dev-123",
 		AccountNumber:      "1111-2222-3333-4444",
-		AppVersion:         "v2.2.3",
-		RouteMode:          "transit",
+		AppVersion:         "v2.2.6",
+		RouteMode:          "direct_moscow",
 		Status:             "beacon",
 		PingMoscowMs:       24,
 		PingStockholmMs:    48,
@@ -517,8 +517,8 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 	}
 
 	// Verify route mode was updated in session
-	if sess.RouteMode != "transit" {
-		t.Errorf("expected updated RouteMode 'transit', got '%s'", sess.RouteMode)
+	if sess.RouteMode != "direct_moscow" {
+		t.Errorf("expected updated RouteMode 'direct_moscow', got '%s'", sess.RouteMode)
 	}
 
 	// 3. Prometheus metrics output
@@ -531,11 +531,11 @@ func TestTelemetryBeaconAndRouteMode(t *testing.T) {
 		t.Fatalf("expected 200 from handleMetrics, got %d", mW.Code)
 	}
 	mBody := mW.Body.String()
-	if !strings.Contains(mBody, "warlink_sessions_by_route_mode") {
-		t.Errorf("expected metrics to contain warlink_sessions_by_route_mode, got:\n%s", mBody)
+	if !strings.Contains(mBody, "warlink_active_sessions_by_route") {
+		t.Errorf("expected metrics to contain warlink_active_sessions_by_route, got:\n%s", mBody)
 	}
-	if !strings.Contains(mBody, `warlink_sessions_by_route_mode{route_mode="transit"} 1`) {
-		t.Errorf("expected metrics to report 1 transit session, got:\n%s", mBody)
+	if !strings.Contains(mBody, `warlink_active_sessions_by_route{route_mode="direct_moscow"} 1`) {
+		t.Errorf("expected metrics to report 1 direct_moscow session, got:\n%s", mBody)
 	}
 }
 
@@ -543,15 +543,15 @@ func TestCommunityGoalsCluster(t *testing.T) {
 	state := &AppState{
 		cachedDisplayDays:  23,
 		cachedRealDaysLeft: 30,
-		cachedPrice:        1690,
+		cachedPrice:        1040,
 		cachedVPSDetails: []VPSServerDetail{
 			{
 				ID:        1,
 				Name:      "decisive-amber",
 				IP:        "138.124.103.99",
 				DaysLeft:  46,
-				PriceRub:  385,
-				PriceEur:  3.5,
+				PriceRub:  390,
+				PriceEur:  3.0,
 				Status:    "active",
 			},
 			{
@@ -559,35 +559,26 @@ func TestCommunityGoalsCluster(t *testing.T) {
 				Name:      "minor-orange",
 				IP:        "45.12.63.85",
 				DaysLeft:  30,
-				PriceRub:  528,
-				PriceEur:  4.75,
-				Status:    "active",
-			},
-			{
-				ID:        3,
-				Name:      "mechanical-azure",
-				IP:        "85.192.24.254",
-				DaysLeft:  30,
-				PriceRub:  528,
-				PriceEur:  4.75,
+				PriceRub:  650,
+				PriceEur:  5.0,
 				Status:    "active",
 			},
 		},
 	}
-	atomic.StoreUint64(&state.metricAezaBalanceRub, 1690)
-	atomic.StoreUint64(&state.metricAezaBalanceEurCents, 1300)
+	atomic.StoreUint64(&state.metricAezaBalanceRub, 1040)
+	atomic.StoreUint64(&state.metricAezaBalanceEurCents, 800)
 
 	goals := state.getCommunityGoals()
 	if !goals.Success {
 		t.Fatalf("expected goals.Success to be true")
 	}
 
-	// 1. Cluster infrastructure checks (13 EUR / 1690 RUB)
-	if goals.Infrastructure.TargetAmountRub != 1690 {
-		t.Errorf("expected target 1690 RUB, got %d", goals.Infrastructure.TargetAmountRub)
+	// 1. Cluster infrastructure checks (8 EUR / 1040 RUB)
+	if goals.Infrastructure.TargetAmountRub != 1040 {
+		t.Errorf("expected target 1040 RUB, got %d", goals.Infrastructure.TargetAmountRub)
 	}
-	if goals.Infrastructure.TargetAmountEur != 13.0 {
-		t.Errorf("expected target 13.0 EUR, got %.1f", goals.Infrastructure.TargetAmountEur)
+	if goals.Infrastructure.TargetAmountEur != 8.0 {
+		t.Errorf("expected target 8.0 EUR, got %.1f", goals.Infrastructure.TargetAmountEur)
 	}
 	if goals.Infrastructure.DaysLeft != 23 {
 		t.Errorf("expected displayed days 23 (-7 buffer), got %d", goals.Infrastructure.DaysLeft)
@@ -598,16 +589,16 @@ func TestCommunityGoalsCluster(t *testing.T) {
 	if !goals.Infrastructure.IsCovered {
 		t.Errorf("expected infrastructure to be covered")
 	}
-	if len(goals.Infrastructure.Nodes) != 3 {
-		t.Errorf("expected 3 nodes, got %d", len(goals.Infrastructure.Nodes))
+	if len(goals.Infrastructure.Nodes) != 2 {
+		t.Errorf("expected 2 nodes, got %d", len(goals.Infrastructure.Nodes))
 	}
 
-	// 2. Expansion Frankfurt is now covered / active in cluster
-	if goals.Expansion.Role != "В СТРОЮ" {
-		t.Errorf("expected Frankfurt role 'В СТРОЮ', got '%s'", goals.Expansion.Role)
+	// 2. Expansion Frankfurt is decommissioned
+	if goals.Expansion.Role != "ВЫВЕДЕН" {
+		t.Errorf("expected Frankfurt role 'ВЫВЕДЕН', got '%s'", goals.Expansion.Role)
 	}
-	if !goals.Expansion.IsCovered {
-		t.Errorf("expected Frankfurt to be covered in cluster")
+	if goals.Expansion.IsCovered {
+		t.Errorf("expected Frankfurt expansion IsCovered to be false")
 	}
 
 	// 3. Special Project BF6 checks (independent, with Steam & Boosty links)

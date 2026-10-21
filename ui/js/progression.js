@@ -77,22 +77,45 @@
     }
 
     function normalizeItemIcon(icon) {
+        if (!icon || typeof icon !== 'string') return 'wardogs_icon.png';
+        icon = icon.trim();
         if (!icon) return 'wardogs_icon.png';
-        if (icon.startsWith('http://') || icon.startsWith('https://')) return icon;
-        let clean = icon;
+        if (icon.startsWith('http://') || icon.startsWith('https://') || icon.startsWith('data:')) return icon;
+
+        let clean = icon.replace(/\\/g, '/');
+        if (clean.startsWith('/')) clean = clean.substring(1);
+
         if (clean.startsWith('guides/icons/')) {
             clean = 'static/wardogs/items/' + clean.slice(13);
-        } else if (clean.startsWith('/guides/icons/')) {
-            clean = 'static/wardogs/items/' + clean.slice(14);
         } else if (clean.startsWith('guides/images/')) {
             clean = 'static/wardogs/renders/' + clean.slice(14);
-        } else if (clean.startsWith('/guides/images/')) {
-            clean = 'static/wardogs/renders/' + clean.slice(15);
+        } else if (clean.startsWith('wardogs/items/')) {
+            clean = 'static/wardogs/items/' + clean.slice(14);
+        } else if (clean.startsWith('wardogs/renders/')) {
+            clean = 'static/wardogs/renders/' + clean.slice(16);
+        } else if (clean.startsWith('wardogs/')) {
+            clean = 'static/' + clean;
+        } else if (clean.startsWith('items/')) {
+            clean = 'static/wardogs/items/' + clean.slice(6);
+        } else if (clean.startsWith('renders/')) {
+            clean = 'static/wardogs/renders/' + clean.slice(8);
+        } else if (!clean.startsWith('static/') && !clean.startsWith('assets/') && !clean.includes('/')) {
+            clean = 'static/wardogs/items/' + clean;
         }
-        if (!clean.startsWith('/')) {
-            clean = '/' + clean;
+
+        return '/' + clean;
+    }
+
+    function formatUnlockPrice(cost) {
+        if (cost === undefined || cost === null) {
+            return '—';
         }
-        return clean;
+        const num = Number(cost);
+        if (isNaN(num)) return '—';
+        if (num === 0) {
+            return 'Бесплатно';
+        }
+        return '$' + num.toLocaleString('en-US');
     }
 
     function checkFirstTimeGuide() {
@@ -147,6 +170,9 @@
         // Setup global paste listener for Ctrl+V screenshot import
         window.addEventListener('paste', handleGlobalPaste);
 
+        // Apply saved seasons chart collapsed state
+        applySeasonsCollapsedState(isSeasonsCollapsed());
+
         // Fetch initial data
         await loadProgressionData();
         await loadCatalogDatabase();
@@ -193,7 +219,7 @@
 
     async function loadCatalogDatabase(force = false) {
         const fetcher = async () => {
-            const resp = await fetch('/api/progression/database?t=' + Date.now());
+            const resp = await fetch('/api/progression/database?t=' + Date.now() + (force ? '&force=1' : ''));
             if (!resp.ok) throw new Error('Failed to load catalog: ' + resp.status);
             return await resp.json();
         };
@@ -201,6 +227,7 @@
         const render = (data) => {
             if (data && data.unlocks && Array.isArray(data.unlocks)) {
                 allUnlocks = data.unlocks;
+                lastRenderedCatalogKey = '';
                 updateCareerNextReward();
                 updateTargetBanner();
                 renderCatalog();
@@ -239,132 +266,295 @@
         renderCatalog();
     }
 
-    function renderSeasonsChart() {
-        const container = document.getElementById('prog-seasons-chart-container');
-        if (!container) return;
+    const STORAGE_SEASONS_COLLAPSED = 'wl_prog_seasons_collapsed';
 
-        // Extract Season 1 and Season 2 data
+    function isSeasonsCollapsed() {
+        try {
+            return localStorage.getItem(STORAGE_SEASONS_COLLAPSED) === 'true';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function applySeasonsCollapsedState(collapsed) {
+        const cards = document.querySelectorAll('.prog-seasons-card');
+        cards.forEach(card => {
+            if (collapsed) {
+                card.classList.add('is-collapsed');
+            } else {
+                card.classList.remove('is-collapsed');
+            }
+        });
+
+        const toggleBtns = document.querySelectorAll('.prog-seasons-toggle-btn');
+        toggleBtns.forEach(btn => {
+            btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            btn.setAttribute('title', collapsed ? 'Развернуть прогресс по сезонам' : 'Свернуть прогресс по сезонам');
+        });
+    }
+
+    function toggleSeasonsCollapse(e) {
+        if (e) {
+            if (e.stopPropagation) e.stopPropagation();
+            if (e.preventDefault) e.preventDefault();
+        }
+        const current = isSeasonsCollapsed();
+        const nextState = !current;
+        try {
+            localStorage.setItem(STORAGE_SEASONS_COLLAPSED, nextState ? 'true' : 'false');
+        } catch (err) {
+            console.error('Failed to save seasons collapsed state:', err);
+        }
+        applySeasonsCollapsedState(nextState);
+    }
+
+    function getSeasonsModel() {
         const history = (currentProgression && currentProgression.history) || [];
-        let s1Record = null;
+        const seasonsMap = {};
+
+        // 1. Process history records (completed archived seasons)
         if (Array.isArray(history)) {
             for (let i = 0; i < history.length; i++) {
-                if (history[i] && history[i].season === 1) {
-                    s1Record = history[i];
-                    break;
+                const h = history[i];
+                if (h && h.season) {
+                    const sNum = Number(h.season);
+                    seasonsMap[sNum] = {
+                        season: sNum,
+                        title: h.season_title || ('СЕЗОН ' + sNum),
+                        level: Number(h.career_level) || 0,
+                        startDate: h.start_date || '',
+                        endDate: h.end_date || '',
+                        shortDates: (h.start_date && h.end_date) ? (h.start_date.substring(5).replace('-', '.') + ' — ' + h.end_date.substring(5).replace('-', '.')) : 'Завершен',
+                        status: 'completed',
+                        statusLabel: 'Завершен',
+                        wipeDate: h.end_date || ''
+                    };
                 }
             }
         }
-        let s1Level = s1Record ? Number(s1Record.career_level) : 0;
-        let s2Level = (currentProgression && Number(currentProgression.career_level)) || 1;
 
-        // If s1Level is 0, check if we have any recorded sum from earlier
-        if (!s1Level && currentProgression.roles) {
+        // 2. Identify current active season
+        const currentSeasonNum = (currentProgression && currentProgression.season) ? Number(currentProgression.season) : 2;
+        let currentLevel = (currentProgression && currentProgression.career_level !== undefined && currentProgression.career_level !== null)
+            ? Number(currentProgression.career_level)
+            : 0;
+
+        // If currentLevel is 0, check sum of roles
+        if (!currentLevel && currentProgression && currentProgression.roles) {
             let roleSum = 0;
             for (const r of ROLES) {
                 roleSum += (currentProgression.roles[r] || 0);
             }
-            if (roleSum > 1) s1Level = roleSum;
+            if (roleSum > 0) currentLevel = roleSum;
         }
 
-        // SVG Canvas dimensions
+        // 3. Fallback for Season 1 if not recorded in history
+        if (!seasonsMap[1]) {
+            let s1Lvl = 153; // default archived S1 record
+            if (currentSeasonNum === 1 && currentLevel > 0) s1Lvl = currentLevel;
+            seasonsMap[1] = {
+                season: 1,
+                title: 'СЕЗОН 1',
+                level: s1Lvl,
+                startDate: '10.09.2026',
+                endDate: '15.10.2026',
+                shortDates: '10.09 — 15.10',
+                status: currentSeasonNum === 1 ? 'active' : 'completed',
+                statusLabel: currentSeasonNum === 1 ? 'Активен' : 'Завершен',
+                wipeDate: '15.10.2026'
+            };
+        }
+
+        // 4. Register current active season
+        if (currentSeasonNum > 1 || !seasonsMap[currentSeasonNum] || seasonsMap[currentSeasonNum].status !== 'active') {
+            seasonsMap[currentSeasonNum] = {
+                season: currentSeasonNum,
+                title: 'СЕЗОН ' + currentSeasonNum,
+                level: currentLevel,
+                startDate: '15.10.2026',
+                endDate: '~15.11.2026',
+                shortDates: '15.10 — ~15.11',
+                status: 'active',
+                statusLabel: 'Активен',
+                wipeDate: null
+            };
+        }
+
+        // 5. Convert to sorted array
+        const sortedNums = Object.keys(seasonsMap).map(Number).sort((a, b) => a - b);
+        const result = [];
+        for (let i = 0; i < sortedNums.length; i++) {
+            result.push(seasonsMap[sortedNums[i]]);
+        }
+        return result;
+    }
+
+    function renderSeasonsChart() {
+        const container = document.getElementById('prog-seasons-chart-container');
+        if (!container) return;
+
+        const seasons = getSeasonsModel();
+        const N = seasons.length;
+        if (N === 0) return;
+
+        // 1. Update Header Legend dynamically
+        const legendEl = document.getElementById('prog-seasons-header-legend');
+        if (legendEl) {
+            const activeSeason = seasons.find(s => s.status === 'active') || seasons[seasons.length - 1];
+            legendEl.innerHTML = 
+                '<span class="prog-legend-badge-s1 font-mono">Всего сезонов: ' + N + '</span>' +
+                '<span class="prog-legend-badge-active font-mono">Сезон ' + activeSeason.season + ' (Активен)</span>';
+        }
+
+        // 2. SVG Canvas dimensions & grid metrics
         const svgW = 620;
-        const svgH = 175;
-        const chartLeft = 52;
-        const chartRight = 575;
-        const chartTop = 26;
-        const chartBottom = 122;
-        const chartHeight = chartBottom - chartTop;
-        const chartWidth = chartRight - chartLeft;
+        const svgH = 124;
+        const chartLeft = 34;
+        const chartRight = 608;
+        const chartTop = 16;
+        const chartBottom = 82;
+        const chartHeight = chartBottom - chartTop; // 66
+        const totalW = chartRight - chartLeft;       // 574
 
-        // Calculate Y scale (0 to maxVal)
-        const highestLvl = Math.max(s1Level, s2Level, 10);
-        let maxVal = 100;
-        if (highestLvl > 100) {
-            maxVal = Math.ceil(highestLvl / 25) * 25;
+        // Dynamic Y scale
+        let highestLvl = 10;
+        for (let i = 0; i < N; i++) {
+            if (seasons[i].level > highestLvl) highestLvl = seasons[i].level;
         }
 
-        const ySteps = [0, 25, 50, 75, 100];
-        if (maxVal !== 100) {
-            ySteps.length = 0;
-            const stepInc = maxVal / 4;
-            for (let i = 0; i <= 4; i++) {
-                ySteps.push(Math.round(i * stepInc));
-            }
+        let maxVal = 100;
+        let stepInc = 25;
+        if (highestLvl <= 50) {
+            maxVal = 50;
+            stepInc = 10;
+        } else if (highestLvl <= 100) {
+            maxVal = 100;
+            stepInc = 25;
+        } else if (highestLvl <= 150) {
+            maxVal = 150;
+            stepInc = 50;
+        } else if (highestLvl <= 200) {
+            maxVal = 200;
+            stepInc = 50;
+        } else {
+            maxVal = Math.ceil(highestLvl / 50) * 50;
+            stepInc = maxVal / 4;
         }
 
         let gridHtml = '';
-        for (const step of ySteps) {
-            const y = chartBottom - (step / maxVal) * chartHeight;
-            gridHtml += '<line x1="' + chartLeft + '" y1="' + y.toFixed(1) + '" x2="' + chartRight + '" y2="' + y.toFixed(1) + '" stroke="#1f1f1f" stroke-width="1" stroke-dasharray="3 3"/>';
-            gridHtml += '<text x="' + (chartLeft - 8) + '" y="' + (y + 3.5).toFixed(1) + '" fill="#666666" font-size="9.5" font-family="monospace" text-anchor="end">' + step + '</text>';
+        for (let v = 0; v <= maxVal; v += stepInc) {
+            const y = chartBottom - (v / maxVal) * chartHeight;
+            gridHtml += '<line x1="' + chartLeft + '" y1="' + y.toFixed(1) + '" x2="' + chartRight + '" y2="' + y.toFixed(1) + '" stroke="#1a1a1a" stroke-width="1" stroke-dasharray="3 3"/>';
+            gridHtml += '<text x="' + (chartLeft - 5) + '" y="' + (y + 3).toFixed(1) + '" fill="#555555" font-size="8.5" font-family="monospace" text-anchor="end">' + Math.round(v) + '</text>';
         }
 
-        // Points coordinates
-        const x1 = chartLeft + chartWidth * 0.28; // Season 1
-        const x2 = chartLeft + chartWidth * 0.72; // Season 2
+        // 3. Dynamic columns per season (scalable for 2, 3, 4, 6... N seasons)
+        const slotW = totalW / N;
+        const colW = Math.min(68, Math.max(30, Math.floor(slotW * 0.52)));
 
-        const val1Clamped = Math.max(0, Math.min(maxVal, s1Level));
-        const val2Clamped = Math.max(0, Math.min(maxVal, s2Level));
+        let columnsHtml = '';
+        let dividersHtml = '';
 
-        const y1 = chartBottom - (val1Clamped / maxVal) * chartHeight;
-        const y2 = chartBottom - (val2Clamped / maxVal) * chartHeight;
+        for (let i = 0; i < N; i++) {
+            const s = seasons[i];
+            const cx = chartLeft + (i + 0.5) * slotW;
+            const barX = cx - colW / 2;
+            const clampedLvl = Math.max(0, Math.min(maxVal, s.level));
+            const y = chartBottom - (clampedLvl / maxVal) * chartHeight;
+            const fillH = chartBottom - y;
+            const isActive = s.status === 'active';
 
-        const s1Label = s1Level > 0 ? ('Ур. ' + s1Level) : '—';
-        const s2Label = 'Ур. ' + s2Level;
+            // Column Track
+            columnsHtml += '<rect x="' + barX.toFixed(1) + '" y="' + chartTop + '" width="' + colW + '" height="' + chartHeight + '" rx="2" fill="#131313" stroke="#202020" stroke-width="1"/>';
+
+            // Column Fill
+            if (isActive) {
+                if (fillH > 2) {
+                    columnsHtml += '<rect x="' + (barX + 1).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + (colW - 2) + '" height="' + (fillH - 0.5).toFixed(1) + '" rx="1" fill="rgba(255, 94, 31, 0.22)"/>';
+                    columnsHtml += '<line x1="' + (barX + 1).toFixed(1) + '" y1="' + y.toFixed(1) + '" x2="' + (barX + colW - 1).toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="#FF5E1F" stroke-width="2"/>';
+                } else {
+                    columnsHtml += '<rect x="' + (barX + 1).toFixed(1) + '" y="' + (chartBottom - 2).toFixed(1) + '" width="' + (colW - 2) + '" height="2" fill="#FF5E1F"/>';
+                }
+                // Value text
+                const textY = s.level > 0 ? (y - 5) : (chartBottom - 6);
+                columnsHtml += '<text x="' + cx.toFixed(1) + '" y="' + textY.toFixed(1) + '" fill="#FF5E1F" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">Ур. ' + s.level + '</text>';
+            } else {
+                if (fillH > 0) {
+                    columnsHtml += '<rect x="' + (barX + 1).toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + (colW - 2) + '" height="' + (fillH - 0.5).toFixed(1) + '" rx="1" fill="#303030"/>';
+                    columnsHtml += '<line x1="' + (barX + 1).toFixed(1) + '" y1="' + y.toFixed(1) + '" x2="' + (barX + colW - 1).toFixed(1) + '" y2="' + y.toFixed(1) + '" stroke="#555555" stroke-width="1.5"/>';
+                }
+                // Value text
+                const textY = s.level > 0 ? (y - 5) : (chartBottom - 6);
+                columnsHtml += '<text x="' + cx.toFixed(1) + '" y="' + textY.toFixed(1) + '" fill="#d0d0d0" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">Ур. ' + s.level + '</text>';
+            }
+
+            // Bottom X-axis labels
+            const titleColor = isActive ? '#FF5E1F' : '#e0e0e0';
+            const statusColor = isActive ? '#FF5E1F' : '#555555';
+            columnsHtml += '<text x="' + cx.toFixed(1) + '" y="95" fill="' + titleColor + '" font-size="10" font-family="monospace" font-weight="700" text-anchor="middle">' + s.title + '</text>';
+            columnsHtml += '<text x="' + cx.toFixed(1) + '" y="106" fill="#777777" font-size="8.5" font-family="monospace" text-anchor="middle">' + s.shortDates + '</text>';
+            columnsHtml += '<text x="' + cx.toFixed(1) + '" y="116" fill="' + statusColor + '" font-size="8" font-family="monospace" text-anchor="middle">' + s.statusLabel + '</text>';
+
+            // Wipe separator between seasons
+            if (i < N - 1) {
+                const divX = chartLeft + (i + 1) * slotW;
+                dividersHtml += '<line x1="' + divX.toFixed(1) + '" y1="' + chartTop + '" x2="' + divX.toFixed(1) + '" y2="' + chartBottom + '" stroke="#262626" stroke-width="1" stroke-dasharray="2 3"/>';
+                dividersHtml += '<text x="' + divX.toFixed(1) + '" y="' + (chartTop - 4) + '" fill="#777777" font-size="7.5" font-family="monospace" font-weight="600" text-anchor="middle">ВАЙП</text>';
+            }
+        }
 
         const svgContent = 
             '<svg class="prog-seasons-svg" viewBox="0 0 ' + svgW + ' ' + svgH + '" preserveAspectRatio="xMidYMid meet">' +
-                '<defs>' +
-                    '<linearGradient id="progLineGrad" x1="0" y1="0" x2="0" y2="1">' +
-                        '<stop offset="0%" stop-color="#FF5E1F" stop-opacity="0.28"/>' +
-                        '<stop offset="100%" stop-color="#FF5E1F" stop-opacity="0.0"/>' +
-                    '</linearGradient>' +
-                '</defs>' +
-
                 '<!-- Y-Axis Header Label -->' +
-                '<text x="' + chartLeft + '" y="15" fill="#888888" font-size="9" font-family="monospace" font-weight="700">УРОВЕНЬ</text>' +
+                '<text x="' + chartLeft + '" y="10" fill="#666666" font-size="8.5" font-family="monospace" font-weight="700">УРОВЕНЬ</text>' +
 
                 '<!-- Horizontal Grid lines and Y labels -->' +
                 gridHtml +
 
                 '<!-- Bottom X Baseline -->' +
-                '<line x1="' + chartLeft + '" y1="' + chartBottom + '" x2="' + chartRight + '" y2="' + chartBottom + '" stroke="#2a2a2a" stroke-width="1"/>' +
+                '<line x1="' + chartLeft + '" y1="' + chartBottom + '" x2="' + chartRight + '" y2="' + chartBottom + '" stroke="#262626" stroke-width="1"/>' +
 
-                '<!-- Shaded Area Below Line -->' +
-                '<polygon points="' + x1.toFixed(1) + ',' + y1.toFixed(1) + ' ' + x2.toFixed(1) + ',' + y2.toFixed(1) + ' ' + x2.toFixed(1) + ',' + chartBottom + ' ' + x1.toFixed(1) + ',' + chartBottom + '" fill="url(#progLineGrad)"/>' +
+                '<!-- Wipe vertical divider lines -->' +
+                dividersHtml +
 
-                '<!-- Vertical Drop Guides -->' +
-                '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x1.toFixed(1) + '" y2="' + chartBottom + '" stroke="#FF5E1F" stroke-opacity="0.25" stroke-dasharray="2 2"/>' +
-                '<line x1="' + x2.toFixed(1) + '" y1="' + y2.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y2="' + chartBottom + '" stroke="#FF5E1F" stroke-opacity="0.25" stroke-dasharray="2 2"/>' +
-
-                '<!-- Main Trend Line -->' +
-                '<line x1="' + x1.toFixed(1) + '" y1="' + y1.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y2="' + y2.toFixed(1) + '" stroke="#FF5E1F" stroke-width="2.5" stroke-linecap="round"/>' +
-
-                '<!-- Data Point 1 (Season 1) -->' +
-                '<circle cx="' + x1.toFixed(1) + '" cy="' + y1.toFixed(1) + '" r="5" fill="#141414" stroke="#FF5E1F" stroke-width="2.5"/>' +
-                '<!-- Value Callout 1 -->' +
-                '<rect x="' + (x1 - 24).toFixed(1) + '" y="' + (y1 - 22).toFixed(1) + '" width="48" height="16" rx="2" fill="#1a1a1a" stroke="#333333" stroke-width="1"/>' +
-                '<text x="' + x1.toFixed(1) + '" y="' + (y1 - 10.5).toFixed(1) + '" fill="#f5f5f5" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">' + s1Label + '</text>' +
-
-                '<!-- Data Point 2 (Season 2) -->' +
-                '<circle cx="' + x2.toFixed(1) + '" cy="' + y2.toFixed(1) + '" r="9" fill="none" stroke="#FF5E1F" stroke-opacity="0.3" stroke-width="1.5"/>' +
-                '<circle cx="' + x2.toFixed(1) + '" cy="' + y2.toFixed(1) + '" r="5.5" fill="#FF5E1F" stroke="#ffffff" stroke-width="1.5"/>' +
-                '<!-- Value Callout 2 -->' +
-                '<rect x="' + (x2 - 24).toFixed(1) + '" y="' + (y2 - 22).toFixed(1) + '" width="48" height="16" rx="2" fill="#1a1a1a" stroke="#FF5E1F" stroke-width="1"/>' +
-                '<text x="' + x2.toFixed(1) + '" y="' + (y2 - 10.5).toFixed(1) + '" fill="#FF5E1F" font-size="9.5" font-family="monospace" font-weight="700" text-anchor="middle">' + s2Label + '</text>' +
-
-                '<!-- Bottom X-Axis Columns: Season 1 -->' +
-                '<text x="' + x1.toFixed(1) + '" y="139" fill="#f5f5f5" font-size="11" font-family="monospace" font-weight="700" text-anchor="middle">СЕЗОН 1</text>' +
-                '<text x="' + x1.toFixed(1) + '" y="153" fill="#888888" font-size="9.5" font-family="monospace" text-anchor="middle">10.09.2026 — 15.10.2026</text>' +
-                '<text x="' + x1.toFixed(1) + '" y="166" fill="#666666" font-size="9" font-family="monospace" text-anchor="middle">Завершен</text>' +
-
-                '<!-- Bottom X-Axis Columns: Season 2 -->' +
-                '<text x="' + x2.toFixed(1) + '" y="139" fill="#FF5E1F" font-size="11" font-family="monospace" font-weight="700" text-anchor="middle">СЕЗОН 2</text>' +
-                '<text x="' + x2.toFixed(1) + '" y="153" fill="#888888" font-size="9.5" font-family="monospace" text-anchor="middle">15.10.2026 — ~15.11.2026</text>' +
-                '<text x="' + x2.toFixed(1) + '" y="166" fill="#FF5E1F" font-size="9" font-family="monospace" font-weight="600" text-anchor="middle">Текущий сезон</text>' +
+                '<!-- Season Columns and Labels -->' +
+                columnsHtml +
             '</svg>';
 
         container.innerHTML = svgContent;
+
+        // 4. Render Scalable Season Cards Grid
+        const cardsGrid = document.getElementById('prog-seasons-cards-grid');
+        if (cardsGrid) {
+            let cardsHtml = '';
+            for (let i = 0; i < N; i++) {
+                const s = seasons[i];
+                const isActive = s.status === 'active';
+                const pct = Math.min(100, Math.round((s.level / maxVal) * 100));
+
+                cardsHtml += 
+                    '<div class="prog-season-card ' + (isActive ? 'is-active' : '') + '">' +
+                        '<div class="prog-season-card-top">' +
+                            '<span class="prog-season-card-title font-mono">' + s.title + '</span>' +
+                            '<span class="prog-season-card-badge font-mono ' + (isActive ? 'is-active' : 'is-completed') + '">' + s.statusLabel + '</span>' +
+                        '</div>' +
+                        '<div class="prog-season-card-metric">' +
+                            '<span class="prog-season-card-val font-mono">' + s.level + '</span>' +
+                            '<span class="prog-season-card-lbl font-mono">' + (isActive ? 'ТЕКУЩИЙ' : 'ИТОГ') + '</span>' +
+                        '</div>' +
+                        '<div class="prog-season-card-bar-track">' +
+                            '<div class="prog-season-card-bar-fill" style="width: ' + pct + '%"></div>' +
+                        '</div>' +
+                        '<div class="prog-season-card-meta font-mono">' +
+                            '<span class="prog-season-card-dates">' + (s.startDate && s.endDate ? (s.startDate + ' — ' + s.endDate) : s.shortDates) + '</span>' +
+                            (s.wipeDate ? '<span class="prog-season-card-wipe">Вайп: ' + s.wipeDate + '</span>' : '') +
+                        '</div>' +
+                    '</div>';
+            }
+            cardsGrid.innerHTML = cardsHtml;
+        }
+
+        applySeasonsCollapsedState(isSeasonsCollapsed());
     }
 
     function renderCareerAndRoles() {
@@ -374,9 +564,9 @@
             const lvl = (currentProgression.roles && currentProgression.roles[r]) || 0;
             sum += lvl;
 
-            // Update level number in dial
+            // Update level number in dial (show dash '-' when 0)
             const lvlEl = document.getElementById('prog-lvl-' + r);
-            if (lvlEl) lvlEl.textContent = String(lvl);
+            if (lvlEl) lvlEl.textContent = lvl > 0 ? String(lvl) : '-';
 
             // Update XP progress arc and dot
             const xp = (currentProgression.xp_progress && currentProgression.xp_progress[r]) || 0;
@@ -392,8 +582,13 @@
             // Dot on perimeter: rotated around center with radius 23.8px (58px dial wrap)
             const dotEl = document.getElementById('prog-dial-dot-' + r);
             if (dotEl) {
-                const angle = 130 + (clampedXp / 100) * 280;
-                dotEl.style.transform = 'rotate(' + angle.toFixed(1) + 'deg) translate(23.8px) rotate(-' + angle.toFixed(1) + 'deg)';
+                if (clampedXp > 0) {
+                    dotEl.style.display = 'block';
+                    const angle = 130 + (clampedXp / 100) * 280;
+                    dotEl.style.transform = 'rotate(' + angle.toFixed(1) + 'deg) translate(23.8px) rotate(-' + angle.toFixed(1) + 'deg)';
+                } else {
+                    dotEl.style.display = 'none';
+                }
             }
 
             // Update role next unlock item name, level requirement and XP/price
@@ -413,8 +608,8 @@
                 if (xpReqEl) {
                     if (it.total_xp) {
                         xpReqEl.textContent = it.total_xp.toLocaleString('en-US') + ' XP';
-                    } else if (it.price) {
-                        xpReqEl.textContent = '$' + it.price.toLocaleString('en-US');
+                    } else if (it.unlock_cost !== undefined && it.unlock_cost !== null) {
+                        xpReqEl.textContent = formatUnlockPrice(it.unlock_cost);
                     } else {
                         xpReqEl.textContent = '';
                     }
@@ -425,7 +620,7 @@
                     nameEl.title = 'Все открыто';
                 }
                 if (lvlReqEl) lvlReqEl.textContent = 'MAX';
-                if (xpReqEl) xpReqEl.textContent = '-';
+                if (xpReqEl) xpReqEl.textContent = '—';
             }
         }
 
@@ -438,7 +633,10 @@
         // Update Career Badge Icon
         const badgeImg = document.getElementById('prog-career-badge-img');
         if (badgeImg) {
-            badgeImg.src = getCareerBadgePath(sum);
+            const nextBadgeSrc = getCareerBadgePath(sum);
+            if (badgeImg.getAttribute('src') !== nextBadgeSrc) {
+                badgeImg.src = nextBadgeSrc;
+            }
         }
 
         updateCareerNextReward();
@@ -455,7 +653,7 @@
             const displayName = item.name_ru || item.name;
             if (nextNameEl) nextNameEl.textContent = displayName;
             if (nextLvlEl) nextLvlEl.textContent = 'Ур. ' + item.level;
-            if (nextPriceEl) nextPriceEl.textContent = item.price ? '$' + item.price.toLocaleString('en-US') : '$0';
+            if (nextPriceEl) nextPriceEl.textContent = formatUnlockPrice(item.unlock_cost);
         } else {
             // Find closest career reward from allUnlocks if nextUnlocks['career'] not ready
             const careerItems = allUnlocks.filter(it => it.role === 'career' && it.level > currentProgression.career_level);
@@ -464,11 +662,11 @@
                 const displayName = item.name_ru || item.name;
                 if (nextNameEl) nextNameEl.textContent = displayName;
                 if (nextLvlEl) nextLvlEl.textContent = 'Ур. ' + item.level;
-                if (nextPriceEl) nextPriceEl.textContent = item.price ? '$' + item.price.toLocaleString('en-US') : '$0';
+                if (nextPriceEl) nextPriceEl.textContent = formatUnlockPrice(item.unlock_cost);
             } else {
                 if (nextNameEl) nextNameEl.textContent = 'Все награды получены';
                 if (nextLvlEl) nextLvlEl.textContent = 'MAX';
-                if (nextPriceEl) nextPriceEl.textContent = '-';
+                if (nextPriceEl) nextPriceEl.textContent = '—';
             }
         }
     }
@@ -512,15 +710,27 @@
         const remLvl = Math.max(0, reqLvl - curLvl);
         const pct = Math.min(100, Math.round((curLvl / reqLvl) * 100));
 
-        // Calculate financial goals: target price & total path equipment budget
-        const targetPrice = targetItem.price || 0;
+        // Calculate financial goals: target unlock cost & total path equipment budget
+        const targetCost = targetItem.unlock_cost !== undefined ? targetItem.unlock_cost : (targetItem.price || 0);
         let pathBudget = 0;
+
         for (const it of allUnlocks) {
             if (it.role === targetRole && it.level > curLvl && it.level <= reqLvl) {
-                pathBudget += (it.price || 0);
+                const cost = it.unlock_cost !== undefined ? it.unlock_cost : 0;
+                if (cost > 0) {
+                    pathBudget += cost;
+                }
             }
         }
-        if (pathBudget === 0) pathBudget = targetPrice;
+
+        let pathBudgetStr = '';
+        if (pathBudget > 0) {
+            pathBudgetStr = '$' + pathBudget.toLocaleString('en-US');
+        } else {
+            pathBudgetStr = formatUnlockPrice(targetCost);
+        }
+
+        const targetPriceStr = formatUnlockPrice(targetCost);
 
         const imgEl = document.getElementById('prog-target-img');
         const nameEl = document.getElementById('prog-target-name');
@@ -534,7 +744,12 @@
         const pctEl = document.getElementById('prog-target-pct');
         const fillEl = document.getElementById('prog-target-bar-fill');
 
-        if (imgEl) imgEl.src = normalizeItemIcon(targetItem.icon);
+        if (imgEl) {
+            const nextTargetSrc = normalizeItemIcon(targetItem.icon);
+            if (imgEl.getAttribute('src') !== nextTargetSrc) {
+                imgEl.src = nextTargetSrc;
+            }
+        }
         if (nameEl) nameEl.textContent = targetItem.name_ru || targetItem.name;
         if (catEl) catEl.textContent = targetItem.category_ru || SUBCAT_RU[targetItem.subcategory] || targetItem.subcategory || targetItem.tab || 'Предмет';
         if (roleLblEl) roleLblEl.textContent = roleNameRu;
@@ -542,8 +757,8 @@
         if (remEl) {
             remEl.textContent = remLvl === 0 ? 'Уровень достигнут' : ('Осталось: ' + remLvl + ' ур.');
         }
-        if (priceEl) priceEl.textContent = targetPrice ? '$' + targetPrice.toLocaleString('en-US') : '$0';
-        if (budgetEl) budgetEl.textContent = pathBudget ? '$' + pathBudget.toLocaleString('en-US') : '$0';
+        if (priceEl) priceEl.textContent = targetPriceStr;
+        if (budgetEl) budgetEl.textContent = pathBudgetStr;
         if (statusEl) statusEl.textContent = curLvl + ' / ' + reqLvl;
         if (pctEl) pctEl.textContent = pct + '%';
         if (fillEl) fillEl.style.width = pct + '%';
@@ -732,6 +947,8 @@
         }
     }
 
+    let lastRenderedCatalogKey = '';
+
     function renderCatalog() {
         const tbody = document.getElementById('prog-catalog-tbody');
         if (!tbody) return;
@@ -764,6 +981,12 @@
             countEl.textContent = '(' + filtered.length + ' наград)';
         }
 
+        const stateKey = currentFilterRole + '|' + (currentSearchTerm || '') + '|' + (hideUnlocked ? '1' : '0') + '|' + (currentProgression.wishlist_id || '') + '|' + Array.from(unlockedSet).sort().join(',') + '|' + filtered.map(x => x.unlock_id + ':' + (x.icon || '') + ':' + (x.name_ru || x.name)).join(';');
+        if (stateKey === lastRenderedCatalogKey && tbody.children.length > 0) {
+            return;
+        }
+        lastRenderedCatalogKey = stateKey;
+
         if (filtered.length === 0) {
             tbody.innerHTML = '<tr class="prog-empty-table-row font-mono"><td colspan="6">Ничего не найдено по заданному фильтру</td></tr>';
             return;
@@ -782,7 +1005,9 @@
             }
 
             const iconUrl = normalizeItemIcon(item.icon);
-            const priceFormatted = item.price ? '$' + item.price.toLocaleString('en-US') : '—';
+            const unlockPriceFormatted = formatUnlockPrice(item.unlock_cost);
+            const buyPriceFormatted = item.price ? '$' + Number(item.price).toLocaleString('en-US') : '—';
+            const priceTooltip = `Цена разблокировки: ${unlockPriceFormatted} | Цена покупки в игре: ${buyPriceFormatted}`;
             const catName = item.category_ru || SUBCAT_RU[item.subcategory] || item.subcategory || item.tab || 'Предмет';
             const displayName = item.name_ru || item.name;
 
@@ -802,14 +1027,14 @@
                     </td>
                     <td>
                         <div class="td-item-cell">
-                            <img class="td-item-icon" src="${escapeHtml(iconUrl)}" alt="${escapeHtml(displayName)}" onerror="this.src='wardogs_icon.png'">
+                            <img class="td-item-icon" src="${escapeHtml(iconUrl)}" alt="${escapeHtml(displayName)}" loading="lazy" onerror="this.onerror=null; this.src='wardogs_icon.png'">
                             <span class="td-item-name font-mono" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
                         </div>
                     </td>
                     <td>
                         <span class="td-cat-text font-mono" title="${escapeHtml(catName)}">${escapeHtml(catName)}</span>
                     </td>
-                    <td class="td-price-cell font-mono">${priceFormatted}</td>
+                    <td class="td-price-cell font-mono" title="${escapeHtml(priceTooltip)}">${unlockPriceFormatted}</td>
                     <td style="text-align: center;">${targetBtnHtml}</td>
                 </tr>
             `;
@@ -982,7 +1207,7 @@
         renderAll();
         checkFirstTimeGuide();
         loadProgressionData();
-        loadCatalogDatabase();
+        loadCatalogDatabase(true);
     }
 
     function getProgressionSummary() {
@@ -995,7 +1220,9 @@
         }
         if (sum === 0 && roleSum > 0) sum = roleSum;
 
-        if (sum === 0 && roleSum === 0) return null;
+        const hasWipeHistory = (currentProgression.season && currentProgression.season >= 2) || 
+                               (Array.isArray(currentProgression.history) && currentProgression.history.length > 0);
+        if (sum === 0 && roleSum === 0 && !hasWipeHistory) return null;
 
         let targetItemInfo = null;
         if (currentProgression.wishlist_id && allUnlocks && allUnlocks.length > 0) {
@@ -1266,7 +1493,7 @@
                 ctx.fillText('  |  ', inlineX, textY);
                 inlineX += ctx.measureText('  |  ').width;
 
-                const priceStr = nextCareerItem.price ? '$' + nextCareerItem.price.toLocaleString('en-US') : '$0';
+                const priceStr = formatUnlockPrice(nextCareerItem.unlock_cost);
                 ctx.font = '500 11px "Segoe UI", sans-serif';
                 ctx.fillStyle = '#a3a3a3';
                 ctx.fillText(priceStr, inlineX, textY);
@@ -1378,7 +1605,7 @@
                 ctx.textAlign = 'center';
                 ctx.font = '700 13px "Segoe UI", sans-serif';
                 ctx.fillStyle = '#FFFFFF';
-                ctx.fillText(String(lvl), colCenterX, dialCenterY + 11);
+                ctx.fillText(lvl > 0 ? String(lvl) : '-', colCenterX, dialCenterY + 11);
 
                 // 4. Dial Meta Below Circle
                 const metaTopY = dialCenterY + radius + 7;
@@ -1398,8 +1625,8 @@
                     reqLvlStr = 'Ур. ' + roleItem.level;
                     if (roleItem.total_xp) {
                         reqXpOrPrice = roleItem.total_xp.toLocaleString('en-US') + ' XP';
-                    } else if (roleItem.price) {
-                        reqXpOrPrice = '$' + roleItem.price.toLocaleString('en-US');
+                    } else if (roleItem.unlock_cost !== undefined && roleItem.unlock_cost !== null) {
+                        reqXpOrPrice = formatUnlockPrice(roleItem.unlock_cost);
                     }
                 }
 
@@ -1470,14 +1697,15 @@
 
                 // Load Weapon Image
                 const weaponIconPath = targetItem.icon || '';
-                if (weaponIconPath && (!targetWeaponImgCache || lastTargetWeaponPath !== weaponIconPath)) {
+                const normIconPath = normalizeItemIcon(weaponIconPath);
+                if (normIconPath && (!targetWeaponImgCache || lastTargetWeaponPath !== normIconPath)) {
                     targetWeaponImgCache = new Image();
-                    lastTargetWeaponPath = weaponIconPath;
+                    lastTargetWeaponPath = normIconPath;
                     targetWeaponImgCache.onload = () => {
                         const modal = document.getElementById('prog-share-modal');
                         if (modal && modal.style.display !== 'none') renderShareCard();
                     };
-                    targetWeaponImgCache.src = weaponIconPath;
+                    targetWeaponImgCache.src = normIconPath;
                 }
 
                 if (targetWeaponImgCache && targetWeaponImgCache.complete && targetWeaponImgCache.naturalWidth > 0) {
@@ -1491,17 +1719,25 @@
                 const tRem = Math.max(0, tReqLvl - tCurLvl);
                 const isReached = tCurLvl >= tReqLvl;
                 const pct = tReqLvl > 0 ? Math.min(100, Math.round((tCurLvl / tReqLvl) * 100)) : 100;
-                const targetPrice = targetItem.price || 0;
+                const targetCost = targetItem.unlock_cost !== undefined ? targetItem.unlock_cost : (targetItem.price || 0);
 
                 let pathBudget = 0;
                 if (allUnlocks && allUnlocks.length > 0) {
                     for (const it of allUnlocks) {
                         if (it.role === tRole && it.level > tCurLvl && it.level <= tReqLvl) {
-                            pathBudget += (it.price || 0);
+                            const cost = it.unlock_cost !== undefined ? it.unlock_cost : 0;
+                            if (cost > 0) {
+                                pathBudget += cost;
+                            }
                         }
                     }
                 }
-                if (pathBudget === 0) pathBudget = targetPrice;
+                let pathBudgetStr = '';
+                if (pathBudget > 0) {
+                    pathBudgetStr = '$' + pathBudget.toLocaleString('en-US');
+                } else {
+                    pathBudgetStr = formatUnlockPrice(targetCost);
+                }
 
                 const tCat = targetItem.category_ru || SUBCAT_RU[targetItem.subcategory] || targetItem.subcategory || 'Предмет';
                 const tName = targetItem.name_ru || targetItem.name;
@@ -1579,12 +1815,12 @@
 
                 ctx.font = '8.5px "Segoe UI", sans-serif';
                 ctx.fillStyle = '#777777';
-                ctx.fillText('Цена цели: ', r3X, r3Y);
-                r3X += ctx.measureText('Цена цели: ').width;
+                ctx.fillText('Цена разблокировки: ', r3X, r3Y);
+                r3X += ctx.measureText('Цена разблокировки: ').width;
 
                 ctx.font = '600 8.5px "Segoe UI", sans-serif';
                 ctx.fillStyle = '#00e676';
-                const priceTargetStr = '$' + targetPrice.toLocaleString('en-US');
+                const priceTargetStr = formatUnlockPrice(targetCost);
                 ctx.fillText(priceTargetStr, r3X, r3Y);
                 r3X += ctx.measureText(priceTargetStr).width;
 
@@ -1599,7 +1835,7 @@
 
                 ctx.font = '600 8.5px "Segoe UI", sans-serif';
                 ctx.fillStyle = '#f0b820';
-                ctx.fillText('$' + pathBudget.toLocaleString('en-US'), r3X, r3Y);
+                ctx.fillText(pathBudgetStr, r3X, r3Y);
 
                 // Right Side of Target Banner: Progress Bar & Attribution
                 const barW = 150;
@@ -1795,8 +2031,16 @@
         copyShareCard: copyShareCard,
         saveShareCard: saveShareCard,
         renderSeasonsChart: renderSeasonsChart,
-        onSteamScreenshotSync: onSteamScreenshotSync
+        toggleSeasonsCollapse: toggleSeasonsCollapse,
+        isSeasonsCollapsed: isSeasonsCollapsed,
+        applySeasonsCollapsedState: applySeasonsCollapsedState,
+        onSteamScreenshotSync: onSteamScreenshotSync,
+        loadProgressionData: loadProgressionData,
+        loadCatalogDatabase: loadCatalogDatabase
     };
+
+    // Alias window.Progression for seamless compatibility
+    window.Progression = window.ProgressionController;
 
     // Auto-init on DOMContentLoaded
     if (document.readyState === 'loading') {

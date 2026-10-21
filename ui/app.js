@@ -245,8 +245,8 @@ function refreshActiveView() {
                 if (typeof pollSupportMessages === 'function') pollSupportMessages();
                 break;
             case 'view-progression':
-                if (window.ProgressionController && typeof window.ProgressionController.refresh === 'function') {
-                    window.ProgressionController.refresh();
+                if (window.ProgressionController && typeof window.ProgressionController.loadProgressionData === 'function') {
+                    window.ProgressionController.loadProgressionData();
                 }
                 break;
         }
@@ -1273,16 +1273,16 @@ async function onProfileChange(val) {
 }
 
 const ROUTE_DESCRIPTIONS = {
-    'direct_moscow': 'Прямое подключение по России (минимальный пинг ~15-25 мс)',
-    'direct_frankfurt': 'Прямое европейское подключение, Франкфурт (~40-50 мс)',
-    'transit': 'Транзитный коридор через Москву во Франкфурт (~50-60 мс)',
-    'direct_stockholm': 'Прямое европейское подключение, Франкфурт (~40-50 мс)'
+    'direct_moscow': 'Прямой узел РФ (Москва, минимальный игровой пинг ~15-25 мс)',
+    'transit': 'Прямой узел РФ (Москва, минимальный игровой пинг ~15-25 мс)',
+    'direct_frankfurt': 'Прямой узел РФ (Москва, минимальный игровой пинг ~15-25 мс)',
+    'direct_stockholm': 'Прямой узел РФ (Москва, минимальный игровой пинг ~15-25 мс)'
 };
 
 function updateRouteModeDescription(mode) {
     const descEl = document.getElementById('route-mode-desc-val');
     if (descEl) {
-        descEl.textContent = ROUTE_DESCRIPTIONS[mode] || ROUTE_DESCRIPTIONS['transit'];
+        descEl.textContent = ROUTE_DESCRIPTIONS[mode] || ROUTE_DESCRIPTIONS['direct_moscow'];
     }
 }
 
@@ -1296,13 +1296,12 @@ async function onNetworkRouteModeChange(mode) {
         const data = await res.json();
         if (data && data.success) {
             updateRouteModeDescription(mode);
-            const badge = mode === 'direct_frankfurt' ? 'Франкфурт' : (mode === 'direct_moscow' ? 'Москва' : (mode === 'direct_stockholm' ? 'Франкфурт' : 'Мск → Франкфурт'));
-            showToast('Маршрут переключен: ' + badge);
+            showToast('Маршрут переключен: Москва');
             if (typeof UIStore !== 'undefined') {
                 UIStore.invalidate('/api/status');
             }
         } else {
-            const currentMode = (data && data.current_mode) ? data.current_mode : 'transit';
+            const currentMode = (data && data.current_mode) ? data.current_mode : 'direct_moscow';
             const routeSelect = document.getElementById('select-network-route');
             if (routeSelect) {
                 routeSelect.value = currentMode;
@@ -1323,18 +1322,6 @@ let currentRouteModes = [
         title: 'Москва',
         region: 'RU-DIRECT',
         iconSvg: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="server-node-icon"><rect x="2" y="3" width="20" height="5" rx="1"/><rect x="2" y="10" width="20" height="5" rx="1"/><rect x="2" y="17" width="20" height="5" rx="1"/><circle cx="6" cy="5.5" r="1" fill="currentColor"/><circle cx="6" cy="12.5" r="1" fill="currentColor"/><circle cx="6" cy="19.5" r="1" fill="currentColor"/></svg>`
-    },
-    {
-        id: 'direct_frankfurt',
-        title: 'Франкфурт',
-        region: 'EU-DIRECT',
-        iconSvg: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="server-node-icon"><circle cx="12" cy="12" r="9"/><path d="M12 3a14.5 14.5 0 0 0 0 18"/><path d="M12 3a14.5 14.5 0 0 1 0 18"/><line x1="3" y1="12" x2="21" y2="12"/></svg>`
-    },
-    {
-        id: 'transit',
-        title: 'Москва → Франкфурт',
-        region: 'TRANSIT',
-        iconSvg: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="server-node-icon"><rect x="2" y="4" width="7" height="6" rx="1"/><rect x="15" y="14" width="7" height="6" rx="1"/><path d="M9 7h4a3 3 0 0 1 3 3v4"/><polyline points="14 12 16 14 18 12"/></svg>`
     }
 ];
 
@@ -1420,29 +1407,15 @@ document.addEventListener('click', (e) => {
 const FEEDBACK_STEPS = [
     {
         mode: 'direct_moscow',
-        title: '1. МОСКВА — ПРЯМОЙ УЗЕЛ РФ',
+        title: 'МОСКВА — ИГРОВОЙ ШЛЮЗ РФ',
         sub: 'Прямое подключение по России (минимальный пинг ~15-25 мс)',
         label: 'Москва'
-    },
-    {
-        mode: 'direct_frankfurt',
-        title: '2. ФРАНКФУРТ — ЕВРОПЕЙСКИЙ ШЛЮЗ',
-        sub: 'Прямое европейское подключение (~40-50 мс)',
-        label: 'Франкфурт'
-    },
-    {
-        mode: 'transit',
-        title: '3. ТРАНЗИТ — ГИБРИДНЫЙ МАРШРУТ',
-        sub: 'Москва → Франкфурт (~50-60 мс)',
-        label: 'Транзит'
     }
 ];
 
 let currentFeedbackStepIndex = 0;
 let feedbackDraft = {
-    'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-    'direct_frankfurt': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-    'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
+    'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
 };
 
 function loadFeedbackDraftFromStorage() {
@@ -1451,7 +1424,7 @@ function loadFeedbackDraftFromStorage() {
         if (raw) {
             const parsed = JSON.parse(raw);
             if (parsed && typeof parsed === 'object') {
-                for (const k of ['direct_moscow', 'direct_frankfurt', 'direct_stockholm', 'transit']) {
+                for (const k of ['direct_moscow']) {
                     if (parsed[k]) feedbackDraft[k] = Object.assign({}, feedbackDraft[k], parsed[k]);
                 }
             }
@@ -1467,9 +1440,7 @@ function saveFeedbackDraftToStorage() {
 
 function resetFeedbackDraft() {
     feedbackDraft = {
-        'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-        'direct_frankfurt': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-        'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
+        'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
     };
     try { localStorage.removeItem('warlink_routing_feedback_draft_v2'); } catch(e) {}
     renderFeedbackCurrentStep();
@@ -1764,9 +1735,7 @@ async function submitMultiRouteFeedback() {
         if (res.ok && data && data.success) {
             try { localStorage.removeItem('warlink_routing_feedback_draft_v2'); } catch(e) {}
             feedbackDraft = {
-                'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-                'direct_frankfurt': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' },
-                'transit': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
+                'direct_moscow': { status: '', ping: '', match: 'perfect', discord: 'clean', comment: '' }
             };
 
             const formCont = document.getElementById('rf-form-container');
@@ -2378,6 +2347,13 @@ function initLiveEventStream() {
             eventSource.addEventListener('flags:updated', () => {
                 if (window.WarLinkFlags && typeof window.WarLinkFlags.fetch === 'function') {
                     window.WarLinkFlags.fetch();
+                }
+            });
+
+            eventSource.addEventListener('progression:updated', () => {
+                const ctrl = window.ProgressionController || window.Progression;
+                if (ctrl && typeof ctrl.refresh === 'function') {
+                    ctrl.refresh();
                 }
             });
 

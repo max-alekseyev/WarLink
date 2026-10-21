@@ -37,6 +37,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	_ "golang.org/x/image/webp"
 
 	_ "embed"
 	_ "github.com/lib/pq"
@@ -51,12 +52,12 @@ var embeddedAdminDialogsHTML string
 
 
 const (
-	ServerAppVersion     = "v2.2.3"
+	ServerAppVersion     = "v2.2.6"
 	AdminAccountNumber   = "5230-6527-2989-4096"
 	DefaultHMACSecret    = ""
 	DefaultObfsPassword  = ""
 	DefaultServerIP      = ""
-	DefaultServerPorts   = "443,20000-30000"
+	DefaultServerPorts   = "8443,30000-40000"
 	DefaultDueDate       = "2026-10-19T14:48:00Z"
 	MaxActiveSessions    = 61 // 50 Free + 10 Sponsor + 1 Dedicated Admin
 	MaxSessionsPerIP     = 2
@@ -65,16 +66,15 @@ const (
 	PerUserRateDownBps   = 12500000 // 100 Mbps in bytes/sec
 	PerUserRateUpBps     = 6250000  // 50 Mbps in bytes/sec
 	SafetyBufferDays             = 7
-	MonthlyInfrastructureCostRub = 1690
-	MonthlyInfrastructureCostEur = 13.0
+	MonthlyInfrastructureCostRub = 1040 // 8 EUR * 130 RUB/EUR (Stockholm + Moscow)
+	MonthlyInfrastructureCostEur = 8.0
 )
 
 var (
-	// TrustedIngressIPs defines reverse proxy / edge Ingress/Egress PoP nodes (e.g. Moscow and Frankfurt nodes)
+	// TrustedIngressIPs defines reverse proxy / edge Ingress PoP nodes (e.g. Moscow node)
 	// that forward client traffic to the Master Control Plane.
 	TrustedIngressIPs = map[string]bool{
-		"45.12.63.85":   true,
-		"85.192.24.254": true,
+		"45.12.63.85": true,
 	}
 )
 
@@ -269,6 +269,7 @@ type AppState struct {
 	rateLimiter        *IPRateLimiter
 	db           *sql.DB
 	rdb          *redis.Client
+	staticDir    string
 
 	startTime time.Time
 	geoCache  map[string]GeoInfo
@@ -570,12 +571,6 @@ func (s *AppState) startLatencySampler() {
 			s.moscowPingRTT = moscowRTT
 			s.moscowPingMu.Unlock()
 		}
-		// Edge Egress RTT probe to Frankfurt node
-		if frankfurtRTT, err := probeICMPPing("85.192.24.254", 1200*time.Millisecond); err == nil && frankfurtRTT > 0 {
-			s.frankfurtPingMu.Lock()
-			s.frankfurtPingRTT = frankfurtRTT
-			s.frankfurtPingMu.Unlock()
-		}
 	}
 }
 
@@ -752,6 +747,7 @@ func main() {
 		staticDir = "./static"
 	}
 	_ = os.MkdirAll(staticDir, 0755)
+	state.staticDir = staticDir
 	publicMux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 
 	publicMux.HandleFunc("/api/v1/client/features", state.handleClientFeatures)
@@ -789,6 +785,7 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/auth/setup/init", state.handleAdminAuthSetupInit)
 	publicMux.HandleFunc("/api/v1/admin/auth/setup/verify", state.handleAdminAuthSetupVerify)
 	publicMux.HandleFunc("/api/v1/admin/auth/login", state.handleAdminAuthLogin)
+	publicMux.HandleFunc("/api/v1/admin/auth/key", state.handleAdminAuthKeyLogin)
 	publicMux.HandleFunc("/api/v1/admin/auth/logout", state.handleAdminAuthLogout)
 	publicMux.HandleFunc("/api/v1/admin/nodes", state.handleAdminNodes)
 	publicMux.HandleFunc("/api/v1/admin/nodes/drain", state.handleAdminNodesDrain)
@@ -822,6 +819,24 @@ func main() {
 	publicMux.HandleFunc("/api/v1/admin/routing-feedback", state.handleAdminRoutingFeedback)
 	publicMux.HandleFunc("/admin/routing-feedback", state.handleAdminRoutingFeedbackWeb)
 	publicMux.HandleFunc("/admin/routing-feedback/", state.handleAdminRoutingFeedbackWeb)
+	publicMux.HandleFunc("/admin/static", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin#view-static", http.StatusFound)
+	})
+	publicMux.HandleFunc("/admin/static/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin#view-static", http.StatusFound)
+	})
+	publicMux.HandleFunc("/api/v1/admin/static/files", state.handleAdminStaticFiles)
+	publicMux.HandleFunc("/api/v1/admin/static/upload", state.handleAdminStaticUpload)
+	publicMux.HandleFunc("/api/v1/admin/static/mkdir", state.handleAdminStaticMkdir)
+	publicMux.HandleFunc("/api/v1/admin/static/rename", state.handleAdminStaticRename)
+	publicMux.HandleFunc("/api/v1/admin/static/delete", state.handleAdminStaticDelete)
+	publicMux.HandleFunc("/admin/progression", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin#view-progression", http.StatusFound)
+	})
+	publicMux.HandleFunc("/admin/progression/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin#view-progression", http.StatusFound)
+	})
+	publicMux.HandleFunc("/api/v1/admin/progression/database", state.handleAdminProgressionDatabase)
 	publicMux.HandleFunc("/api/v1/boosty-goal", state.handleGetBoostyGoal)
 	publicMux.HandleFunc("/api/v1/admin/boosty-goal", state.handleAdminBoostyGoal)
 	publicMux.HandleFunc("/api/v1/community/goal", state.handleCommunityGoals)
@@ -885,7 +900,7 @@ func (s *AppState) loadConfig(path string) {
 		s.cfg.ServerName = "WarLink • Gaming Gateway"
 	}
 	if s.cfg.ServerLocation == "" {
-		s.cfg.ServerLocation = "Frankfurt, Germany"
+		s.cfg.ServerLocation = "Москва, Россия"
 	}
 	if s.cfg.ServerPorts == "" {
 		s.cfg.ServerPorts = DefaultServerPorts
@@ -950,6 +965,10 @@ func (s *AppState) updateDueDateFromAeza() {
 
 		for _, item := range result.Items {
 			if item.TypeSlug == "vps" && item.ExpiresAt != "" {
+				// Decommissioned node filter: ignore Frankfurt node in Aeza billing calculation
+				if item.IP == "85.192.24.254" || strings.Contains(strings.ToLower(item.Name), "frankfurt") {
+					continue
+				}
 				parsed, err := time.Parse(time.RFC3339, item.ExpiresAt)
 				if err != nil {
 					continue
@@ -1458,16 +1477,9 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	gwLoc := "Франкфурт, Германия"
-	switch routeMode {
-	case "direct_moscow":
+	gwLoc := "Москва, Россия"
+	if routeMode == "direct_moscow" || routeMode != "" {
 		gwLoc = "Москва, Россия"
-	case "transit":
-		gwLoc = "Транзит Москва → Франкфурт"
-	case "direct_frankfurt", "direct_stockholm":
-		gwLoc = "Франкфурт, Германия"
-	default:
-		gwLoc = "Франкфурт, Германия"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1539,75 +1551,20 @@ type SessionRequest struct {
 }
 
 func (s *AppState) resolveRouteAndNode(r *http.Request, explicitMode string) (routeMode, connectedNode, gatewayIP string) {
-	viaMoscow := false
-	viaFrankfurt := false
-	if r != nil {
-		remoteHost, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if remoteHost == "45.12.63.85" || strings.Contains(r.Header.Get("X-Forwarded-For"), "45.12.63.85") {
-			viaMoscow = true
-		}
-		if remoteHost == "85.192.24.254" || strings.Contains(r.Header.Get("X-Forwarded-For"), "85.192.24.254") {
-			viaFrankfurt = true
-		}
-	}
-
-	mode := strings.TrimSpace(explicitMode)
-	if mode == "" {
-		if viaMoscow {
-			mode = "transit"
-		} else if viaFrankfurt {
-			mode = "direct_frankfurt"
-		} else {
-			mode = "direct_frankfurt"
-		}
-	}
-
-	stockholmIP := s.cfg.ServerIP
-	if stockholmIP == "" {
-		stockholmIP = "138.124.103.99"
-	}
 	moscowIP := "45.12.63.85"
-	frankfurtIP := "85.192.24.254"
-
-	switch mode {
-	case "direct_moscow":
-		return "direct_moscow", "Москва", moscowIP
-	case "direct_frankfurt":
-		return "direct_frankfurt", "Франкфурт", frankfurtIP
-	case "direct_stockholm":
-		if viaMoscow {
-			return "transit", "Москва → Франкфурт", moscowIP
-		}
-		return "direct_frankfurt", "Франкфурт", frankfurtIP
-	case "transit":
-		fallthrough
-	default:
-		return "transit", "Москва → Франкфурт", moscowIP
-	}
+	// Frankfurt is decommissioned. All traffic seamlessly unifies into Moscow Ingress Gateway
+	return "direct_moscow", "Москва", moscowIP
 }
 
 func (s *AppState) getSessionRouteMode(sess *SessionInfo) string {
 	if sess == nil {
-		return "direct_frankfurt"
-	}
-	m := strings.TrimSpace(sess.RouteMode)
-	if m != "" {
-		return m
-	}
-	if strings.Contains(sess.ConnectedNode, "Транзит") || sess.ConnectedNode == "Москва Ingress (Транзит)" ||
-		sess.GatewayIP == "45.12.63.85" || strings.HasPrefix(sess.ClientIP, "45.12.63.") {
-		return "transit"
-	}
-	if strings.Contains(sess.ConnectedNode, "Франкфурт") || sess.GatewayIP == "85.192.24.254" {
-		return "direct_frankfurt"
-	}
-	if strings.Contains(sess.ConnectedNode, "Москва") {
 		return "direct_moscow"
 	}
-	if strings.Contains(sess.ConnectedNode, "Стокгольм") {
-		return "direct_stockholm"
+	m := strings.TrimSpace(sess.RouteMode)
+	if m == "direct_moscow" {
+		return m
 	}
-	return "direct_frankfurt"
+	return "direct_moscow"
 }
 
 func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -1816,7 +1773,7 @@ func (s *AppState) handleSession(w http.ResponseWriter, r *http.Request) {
 	existingToken, exists := s.deviceTokens[req.DeviceID]
 	serverPorts := s.cfg.ServerPorts
 	if routeMode == "direct_moscow" {
-		serverPorts = "8443"
+		serverPorts = "8443,30000-40000"
 	} else if serverPorts == "" {
 		serverPorts = DefaultServerPorts
 	}
@@ -3025,16 +2982,10 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetGatewayIP := sess.GatewayIP
-	if targetGatewayIP == "" {
-		targetGatewayIP = pubIP
+	if targetGatewayIP == "" || targetGatewayIP == "85.192.24.254" {
+		targetGatewayIP = "45.12.63.85"
 	}
-	if sess.RouteMode == "direct_moscow" {
-		serverPorts = "8443"
-	} else if sess.RouteMode == "direct_frankfurt" || sess.RouteMode == "transit" {
-		if serverPorts == "" || serverPorts == DefaultServerPorts {
-			serverPorts = "443,20000-30000"
-		}
-	}
+	serverPorts = "8443,30000-40000"
 
 	targetGame := r.URL.Query().Get("game")
 	if targetGame == "" {
@@ -3096,6 +3047,7 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		serverPorts,
 		obfsPassword,
 		token,
+		sess.RouteMode,
 	)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -5126,8 +5078,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var sb strings.Builder
 	sb.WriteString("# HELP warlink_active_sessions Active game sessions by server\n")
 	sb.WriteString("# TYPE warlink_active_sessions gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_active_sessions{server=\"frankfurt\"} %d\n", sessionsByRouteMode["direct_frankfurt"]+sessionsByRouteMode["direct_stockholm"]))
-	sb.WriteString(fmt.Sprintf("warlink_active_sessions{server=\"moscow\"} %d\n\n", sessionsByRouteMode["transit"]+sessionsByRouteMode["direct_moscow"]))
+	sb.WriteString(fmt.Sprintf("warlink_active_sessions{server=\"moscow\"} %d\n\n", activeSessions))
 
 	sb.WriteString("# HELP warlink_active_sessions_total Total active game sessions cluster-wide\n")
 	sb.WriteString("# TYPE warlink_active_sessions_total gauge\n")
@@ -5190,14 +5141,12 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_server_version gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_version{version=\"%s\"} 1\n\n", ServerAppVersion))
 
-	clusterBudgetEur := 13
+	clusterBudgetEur := 8
 	clusterBudgetRub := MonthlyInfrastructureCostRub
-	stockholmCostEur := 4
-	stockholmCostRub := 385
+	stockholmCostEur := 3
+	stockholmCostRub := 390
 	moscowCostEur := 5
-	moscowCostRub := 528
-	frankfurtCostEur := 5
-	frankfurtCostRub := 528
+	moscowCostRub := 650
 
 	sb.WriteString("# HELP warlink_cluster_budget_eur Monthly cluster maintenance budget in EUR\n")
 	sb.WriteString("# TYPE warlink_cluster_budget_eur gauge\n")
@@ -5223,14 +5172,6 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_moscow_cost_rub gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_moscow_cost_rub %d\n\n", moscowCostRub))
 
-	sb.WriteString("# HELP warlink_frankfurt_cost_eur Frankfurt node monthly cost in EUR\n")
-	sb.WriteString("# TYPE warlink_frankfurt_cost_eur gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_frankfurt_cost_eur %d\n\n", frankfurtCostEur))
-
-	sb.WriteString("# HELP warlink_frankfurt_cost_rub Frankfurt node monthly cost in RUB\n")
-	sb.WriteString("# TYPE warlink_frankfurt_cost_rub gauge\n")
-	sb.WriteString(fmt.Sprintf("warlink_frankfurt_cost_rub %d\n\n", frankfurtCostRub))
-
 	stockholmDailyPrice := float64(stockholmCostRub) / 30.0
 	prepaidStockholmRub := float64(daysLeft) * stockholmDailyPrice
 	totalAvailableRub := prepaidStockholmRub + float64(aezaBalRub+aezaBonusRub)
@@ -5242,7 +5183,7 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	clusterDailyPrice := float64(clusterBudgetRub) / 30.0
 	totalRunwayDays := totalAvailableRub / clusterDailyPrice
 
-	sb.WriteString("# HELP warlink_server_runway_days Total days of cluster runway at 13 EUR / mo\n")
+	sb.WriteString("# HELP warlink_server_runway_days Total days of cluster runway at 8 EUR / mo\n")
 	sb.WriteString("# TYPE warlink_server_runway_days gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_runway_days %.1f\n\n", totalRunwayDays))
 
@@ -5265,11 +5206,11 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_server_coverage_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_coverage_percent %.1f\n\n", clusterCoveragePercent))
 
-	sb.WriteString("# HELP warlink_cluster_coverage_percent Financial cluster coverage percentage (13 EUR target)\n")
+	sb.WriteString("# HELP warlink_cluster_coverage_percent Financial cluster coverage percentage (8 EUR target)\n")
 	sb.WriteString("# TYPE warlink_cluster_coverage_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_cluster_coverage_percent %.1f\n\n", clusterCoveragePercent))
 
-	sb.WriteString("# HELP warlink_donations_goal_percent Community donations progress towards 13 EUR target\n")
+	sb.WriteString("# HELP warlink_donations_goal_percent Community donations progress towards 8 EUR target\n")
 	sb.WriteString("# TYPE warlink_donations_goal_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_donations_goal_percent %.1f\n\n", donationsGoalPercent))
 
@@ -5468,17 +5409,9 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			moscowPing = 27.1
 		}
 
-		s.frankfurtPingMu.RLock()
-		frankfurtPing := s.frankfurtPingRTT
-		s.frankfurtPingMu.RUnlock()
-		if frankfurtPing <= 0 {
-			frankfurtPing = 18.5
-		}
-
 		sb.WriteString("# HELP warlink_node_ping_ms Inter-node network latency between Stockholm and edge nodes\n")
 		sb.WriteString("# TYPE warlink_node_ping_ms gauge\n")
 		sb.WriteString(fmt.Sprintf("warlink_node_ping_ms{server=\"stockholm\"} %.2f\n", live.GatewayPingMs))
-		sb.WriteString(fmt.Sprintf("warlink_node_ping_ms{server=\"frankfurt\"} %.2f\n", frankfurtPing))
 		sb.WriteString(fmt.Sprintf("warlink_node_ping_ms{server=\"moscow\"} %.2f\n\n", moscowPing))
 
 		sb.WriteString("# HELP warlink_player_ping_ms Average player latency by route mode and macro-region\n")
@@ -5547,42 +5480,20 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		mskResp.Body.Close()
 	}
 
-	// Scrape Hysteria 2 trafficStats from Frankfurt (85.192.24.254/status/traffic)
-	var fraTx, fraRx uint64
-	fraUsers := 0
-	if fraResp, err := hyClient.Get("http://85.192.24.254/status/traffic"); err == nil {
-		var fraData map[string]struct {
-			Tx uint64 `json:"tx"`
-			Rx uint64 `json:"rx"`
-		}
-		if err := json.NewDecoder(fraResp.Body).Decode(&fraData); err == nil {
-			fraUsers = len(fraData)
-			for _, v := range fraData {
-				fraTx += v.Tx
-				fraRx += v.Rx
-			}
-		}
-		fraResp.Body.Close()
-	}
-
 	sb.WriteString("# HELP hysteria_online_users Number of online Hysteria users by server\n")
 	sb.WriteString("# TYPE hysteria_online_users gauge\n")
-	sb.WriteString(fmt.Sprintf("hysteria_online_users{server=\"frankfurt\"} %d\n", sessionsByRouteMode["direct_frankfurt"]+sessionsByRouteMode["direct_stockholm"]))
-	sb.WriteString(fmt.Sprintf("hysteria_online_users{server=\"moscow\"} %d\n\n", sessionsByRouteMode["transit"]+sessionsByRouteMode["direct_moscow"]))
+	sb.WriteString(fmt.Sprintf("hysteria_online_users{server=\"moscow\"} %d\n\n", activeSessions))
 
 	sb.WriteString("# HELP hysteria_tokens_in_memory_total Cumulative authentication tokens in Hysteria daemon memory\n")
 	sb.WriteString("# TYPE hysteria_tokens_in_memory_total gauge\n")
-	sb.WriteString(fmt.Sprintf("hysteria_tokens_in_memory_total{server=\"frankfurt\"} %d\n", fraUsers))
 	sb.WriteString(fmt.Sprintf("hysteria_tokens_in_memory_total{server=\"moscow\"} %d\n\n", mskUsers))
 
 	sb.WriteString("# HELP hysteria_traffic_tx_bytes_total Total bytes sent through Hysteria\n")
 	sb.WriteString("# TYPE hysteria_traffic_tx_bytes_total counter\n")
-	sb.WriteString(fmt.Sprintf("hysteria_traffic_tx_bytes_total{server=\"frankfurt\"} %d\n", fraTx))
 	sb.WriteString(fmt.Sprintf("hysteria_traffic_tx_bytes_total{server=\"moscow\"} %d\n\n", mskTx))
 
 	sb.WriteString("# HELP hysteria_traffic_rx_bytes_total Total bytes received through Hysteria\n")
 	sb.WriteString("# TYPE hysteria_traffic_rx_bytes_total counter\n")
-	sb.WriteString(fmt.Sprintf("hysteria_traffic_rx_bytes_total{server=\"frankfurt\"} %d\n", fraRx))
 	sb.WriteString(fmt.Sprintf("hysteria_traffic_rx_bytes_total{server=\"moscow\"} %d\n\n", mskRx))
 
 	// Client background telemetry beacon metrics
@@ -7087,7 +6998,7 @@ func (s *AppState) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	pubsub := s.rdb.Subscribe(ctx, "tickets:message", "tickets:updated", "notifications:new", "slots:update", "flags:updated")
+	pubsub := s.rdb.Subscribe(ctx, "tickets:message", "tickets:updated", "notifications:new", "slots:update", "flags:updated", "progression:updated")
 	defer pubsub.Close()
 
 	ch := pubsub.Channel()
@@ -7130,6 +7041,9 @@ func (s *AppState) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 			case "flags:updated":
 				fmt.Fprintf(w, "event: flags:updated\ndata: %s\n\n", msg.Payload)
 				flusher.Flush()
+			case "progression:updated":
+				fmt.Fprintf(w, "event: progression:updated\ndata: %s\n\n", msg.Payload)
+				flusher.Flush()
 			}
 		}
 	}
@@ -7142,7 +7056,7 @@ func (s *AppState) handleProgressionDatabase(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=1800")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	dbPath := "/opt/warlink-server/progression_db.json"
@@ -7175,6 +7089,146 @@ func (s *AppState) handleProgressionDatabase(w http.ResponseWriter, r *http.Requ
 	_, _ = w.Write(data)
 }
 
+func (s *AppState) handleAdminProgressionDatabase(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	dbPath := "/opt/warlink-server/progression_db.json"
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "internal/progression/progression_db.json"
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "progression/progression_db.json"
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "progression_db.json"
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		data, err := os.ReadFile(dbPath)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "database_not_found"})
+			return
+		}
+		_, _ = w.Write(data)
+
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 15*1024*1024))
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "failed_to_read_body"})
+			return
+		}
+
+		var payload struct {
+			Version           string                   `json:"version"`
+			Source            string                   `json:"source"`
+			TotalUnlocks      int                      `json:"total_unlocks"`
+			TotalCatalogItems int                      `json:"total_catalog_items"`
+			Roles             []string                 `json:"roles"`
+			Unlocks           []map[string]interface{} `json:"unlocks"`
+			Catalog           []map[string]interface{} `json:"catalog"`
+			UpdatedAt         string                   `json:"updated_at,omitempty"`
+		}
+
+		if err := json.Unmarshal(body, &payload); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_json: " + err.Error()})
+			return
+		}
+
+		if len(payload.Unlocks) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unlocks_list_empty"})
+			return
+		}
+
+		if payload.Version == "" {
+			payload.Version = "2.0.0"
+		}
+		for _, u := range payload.Unlocks {
+			if ic, ok := u["icon"].(string); ok {
+				ic = strings.TrimPrefix(strings.TrimSpace(ic), "/")
+				if strings.HasPrefix(ic, "wardogs/") {
+					u["icon"] = "static/" + ic
+				} else if strings.HasPrefix(ic, "items/") {
+					u["icon"] = "static/wardogs/" + ic
+				}
+			}
+			if im, ok := u["image"].(string); ok {
+				im = strings.TrimPrefix(strings.TrimSpace(im), "/")
+				if strings.HasPrefix(im, "wardogs/") {
+					u["image"] = "static/" + im
+				}
+			}
+		}
+		payload.TotalUnlocks = len(payload.Unlocks)
+		payload.TotalCatalogItems = len(payload.Catalog)
+		payload.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+		formatted, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "formatting_error: " + err.Error()})
+			return
+		}
+
+		// Save to target path on VPS
+		targetPath := "/opt/warlink-server/progression_db.json"
+		if _, err := os.Stat("/opt/warlink-server"); os.IsNotExist(err) {
+			targetPath = "internal/progression/progression_db.json"
+		}
+		if err := os.WriteFile(targetPath, formatted, 0644); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "write_failed: " + err.Error()})
+			return
+		}
+
+		// Also sync local copy if exists
+		if targetPath != "internal/progression/progression_db.json" {
+			if _, err := os.Stat("internal/progression/progression_db.json"); err == nil {
+				_ = os.WriteFile("internal/progression/progression_db.json", formatted, 0644)
+			}
+		}
+
+		// Invalidate and reload server in-memory item metadata cache
+		reloadProgressionItemsMap()
+
+		// Publish to Redis channel for 0ms SSE broadcast to all active clients
+		if s.rdb != nil {
+			eventData, _ := json.Marshal(map[string]interface{}{
+				"event":         "progression_updated",
+				"total_unlocks": payload.TotalUnlocks,
+				"version":       payload.Version,
+				"updated_at":    payload.UpdatedAt,
+			})
+			_ = s.rdb.Publish(context.Background(), "progression:updated", string(eventData)).Err()
+		}
+
+		log.Printf("[ADMIN] Progression database updated: %d unlocks, version %s saved to %s", payload.TotalUnlocks, payload.Version, targetPath)
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":       true,
+			"total_unlocks": payload.TotalUnlocks,
+			"version":       payload.Version,
+			"updated_at":    payload.UpdatedAt,
+			"message":       "Progression database saved and applied to clients",
+		})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "method_not_allowed"})
+	}
+}
+
 type ProgressionItemMeta struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -7187,85 +7241,99 @@ type ProgressionItemMeta struct {
 }
 
 var (
-	progressionItemsMap  map[string]ProgressionItemMeta
-	progressionItemsOnce sync.Once
+	progressionItemsMap map[string]ProgressionItemMeta
+	progressionItemsMu  sync.RWMutex
 )
 
-func loadProgressionItemsMap() map[string]ProgressionItemMeta {
-	progressionItemsOnce.Do(func() {
-		progressionItemsMap = make(map[string]ProgressionItemMeta)
-		dbPath := "/opt/warlink-server/progression_db.json"
-		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-			dbPath = "internal/progression/progression_db.json"
+func reloadProgressionItemsMap() map[string]ProgressionItemMeta {
+	progressionItemsMu.Lock()
+	defer progressionItemsMu.Unlock()
+
+	newMap := make(map[string]ProgressionItemMeta)
+	dbPath := "/opt/warlink-server/progression_db.json"
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "internal/progression/progression_db.json"
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "progression/progression_db.json"
+	}
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		dbPath = "progression_db.json"
+	}
+	data, err := os.ReadFile(dbPath)
+	if err != nil {
+		progressionItemsMap = newMap
+		return progressionItemsMap
+	}
+	var parsed struct {
+		Unlocks []struct {
+			UnlockID   string `json:"unlock_id"`
+			Name       string `json:"name"`
+			NameRu     string `json:"name_ru"`
+			CategoryRu string `json:"category_ru"`
+			Role       string `json:"role"`
+			Level      int    `json:"level"`
+			Price      int    `json:"price"`
+			Icon       string `json:"icon"`
+		} `json:"unlocks"`
+		Catalog []struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			NameRu     string `json:"name_ru"`
+			CategoryRu string `json:"category_ru"`
+			Role       string `json:"role"`
+			Price      int    `json:"price"`
+			Icon       string `json:"icon"`
+		} `json:"catalog"`
+	}
+	if err := json.Unmarshal(data, &parsed); err == nil {
+		for _, u := range parsed.Unlocks {
+			catRu := u.CategoryRu
+			if catRu == "" {
+				catRu = "Разблокировка"
+			}
+			newMap[u.UnlockID] = ProgressionItemMeta{
+				ID:         u.UnlockID,
+				Name:       u.Name,
+				NameRu:     u.NameRu,
+				CategoryRu: catRu,
+				Role:       u.Role,
+				Level:      u.Level,
+				Price:      u.Price,
+				Icon:       u.Icon,
+			}
 		}
-		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-			dbPath = "progression/progression_db.json"
-		}
-		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-			dbPath = "progression_db.json"
-		}
-		data, err := os.ReadFile(dbPath)
-		if err != nil {
-			return
-		}
-		var parsed struct {
-			Unlocks []struct {
-				UnlockID   string `json:"unlock_id"`
-				Name       string `json:"name"`
-				NameRu     string `json:"name_ru"`
-				CategoryRu string `json:"category_ru"`
-				Role       string `json:"role"`
-				Level      int    `json:"level"`
-				Price      int    `json:"price"`
-				Icon       string `json:"icon"`
-			} `json:"unlocks"`
-			Catalog []struct {
-				ID         string `json:"id"`
-				Name       string `json:"name"`
-				NameRu     string `json:"name_ru"`
-				CategoryRu string `json:"category_ru"`
-				Role       string `json:"role"`
-				Price      int    `json:"price"`
-				Icon       string `json:"icon"`
-			} `json:"catalog"`
-		}
-		if err := json.Unmarshal(data, &parsed); err == nil {
-			for _, u := range parsed.Unlocks {
-				catRu := u.CategoryRu
+		for _, c := range parsed.Catalog {
+			if _, exists := newMap[c.ID]; !exists {
+				catRu := c.CategoryRu
 				if catRu == "" {
-					catRu = "Разблокировка"
+					catRu = "Снаряжение"
 				}
-				progressionItemsMap[u.UnlockID] = ProgressionItemMeta{
-					ID:         u.UnlockID,
-					Name:       u.Name,
-					NameRu:     u.NameRu,
+				newMap[c.ID] = ProgressionItemMeta{
+					ID:         c.ID,
+					Name:       c.Name,
+					NameRu:     c.NameRu,
 					CategoryRu: catRu,
-					Role:       u.Role,
-					Level:      u.Level,
-					Price:      u.Price,
-					Icon:       u.Icon,
-				}
-			}
-			for _, c := range parsed.Catalog {
-				if _, exists := progressionItemsMap[c.ID]; !exists {
-					catRu := c.CategoryRu
-					if catRu == "" {
-						catRu = "Снаряжение"
-					}
-					progressionItemsMap[c.ID] = ProgressionItemMeta{
-						ID:         c.ID,
-						Name:       c.Name,
-						NameRu:     c.NameRu,
-						CategoryRu: catRu,
-						Role:       c.Role,
-						Price:      c.Price,
-						Icon:       c.Icon,
-					}
+					Role:       c.Role,
+					Price:      c.Price,
+					Icon:       c.Icon,
 				}
 			}
 		}
-	})
+	}
+	progressionItemsMap = newMap
 	return progressionItemsMap
+}
+
+func loadProgressionItemsMap() map[string]ProgressionItemMeta {
+	progressionItemsMu.RLock()
+	if progressionItemsMap != nil && len(progressionItemsMap) > 0 {
+		m := progressionItemsMap
+		progressionItemsMu.RUnlock()
+		return m
+	}
+	progressionItemsMu.RUnlock()
+	return reloadProgressionItemsMap()
 }
 
 func (s *AppState) handleProgressionAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -9372,14 +9440,12 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 	isInfraCovered := displayDays >= 20 || balRub >= monthlyTarget
 
 	statusText := fmt.Sprintf("Оплачено на %d дн.", displayDays)
-	if len(nodes) >= 3 {
-		statusText = fmt.Sprintf("Оплачено на %d дн. (Стокгольм + Москва + Франкфурт в строю)", displayDays)
-	} else if len(nodes) >= 2 {
-		statusText = fmt.Sprintf("Оплачено на %d дн. (Кластер в строю)", displayDays)
+	if len(nodes) >= 2 {
+		statusText = fmt.Sprintf("Оплачено на %d дн. (Стокгольм + Москва в строю)", displayDays)
 	}
 
 	infra := InfrastructureGoalData{
-		Title:             "Инфраструктура кластера (Стокгольм + Москва + Франкфурт)",
+		Title:             "Инфраструктура кластера: Стокгольм + Москва (8 € / мес)",
 		TargetAmountRub:   monthlyTarget,
 		TargetAmountEur:   MonthlyInfrastructureCostEur,
 		CurrentBalanceRub: balRub,
@@ -9393,19 +9459,14 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 		Nodes:             nodes,
 	}
 
-	// Frankfurt is now an active gaming edge node integrated into the cluster infrastructure (13 EUR/mo)
+	// Frankfurt is decommissioned and removed from expansion and goals
 	expansion := ExpansionGoalData{
-		ID:               "frankfurt",
-		Title:            "Шлюз Франкфурт (Германия)",
-		Role:             "В СТРОЮ",
-		Description:      "Европейский игровой узел с ультранизким пингом. Включен в базовую инфраструктуру кластера (13 € / мес).",
-		TargetAmountRub:  monthlyTarget,
-		TargetAmountEur:  MonthlyInfrastructureCostEur,
-		CurrentAmountRub: balRub,
-		CurrentAmountEur: math.Round(balEur*100) / 100,
-		Percent:          infraPercent,
-		IsCovered:        true,
-		IsActive:         false,
+		ID:          "",
+		Title:       "",
+		Role:        "ВЫВЕДЕН",
+		Description: "",
+		IsCovered:   false,
+		IsActive:    false,
 	}
 
 	// Universal Special Projects (Loaded from PostgreSQL)
@@ -11756,3 +11817,551 @@ func (s *AppState) handleGoldMarket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"gold_market_unavailable"}`, http.StatusServiceUnavailable)
 	}
 }
+
+// =============================================================================
+// Static Asset Manager & CDN Admin API
+// =============================================================================
+
+type StaticAssetItem struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	URL       string `json:"url,omitempty"`
+	Size      int64  `json:"size"`
+	ModTime   string `json:"mod_time"`
+	Ext       string `json:"ext,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	IsImage   bool   `json:"is_image"`
+	IsDir     bool   `json:"is_dir"`
+	ItemCount int    `json:"item_count,omitempty"`
+}
+
+type StaticBreadcrumb struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+func (s *AppState) handleAdminStaticFiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	baseDir := filepath.Clean(s.staticDir)
+	rawRel := strings.TrimSpace(r.URL.Query().Get("path"))
+	cleanRel := filepath.Clean("/" + rawRel)
+	cleanRel = strings.TrimPrefix(cleanRel, "/")
+	cleanRel = strings.TrimPrefix(cleanRel, "\\")
+	if cleanRel == "." {
+		cleanRel = ""
+	}
+
+	targetDir := filepath.Join(baseDir, cleanRel)
+	cleanTarget := filepath.Clean(targetDir)
+	if !strings.HasPrefix(cleanTarget, baseDir) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_path"})
+		return
+	}
+
+	entries, err := os.ReadDir(cleanTarget)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "directory_not_found"})
+		return
+	}
+
+	searchQuery := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
+	filterType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("filter")))
+	sortBy := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort")))
+
+	var folders []StaticAssetItem
+	var files []StaticAssetItem
+	var totalSize int64
+
+	// Build breadcrumbs
+	var breadcrumbs []StaticBreadcrumb
+	breadcrumbs = append(breadcrumbs, StaticBreadcrumb{Name: "Корень", Path: ""})
+	if cleanRel != "" {
+		parts := strings.Split(filepath.ToSlash(cleanRel), "/")
+		accumPath := ""
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			if accumPath == "" {
+				accumPath = part
+			} else {
+				accumPath = accumPath + "/" + part
+			}
+			breadcrumbs = append(breadcrumbs, StaticBreadcrumb{Name: part, Path: accumPath})
+		}
+	}
+
+	cdnBase := "https://static-warlink.max-alekseyev.com/static"
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		relItemPath := name
+		if cleanRel != "" {
+			relItemPath = filepath.ToSlash(filepath.Join(cleanRel, name))
+		}
+
+		if entry.IsDir() || (info.Mode()&os.ModeSymlink != 0) {
+			subCount := 0
+			if subEntries, err := os.ReadDir(filepath.Join(cleanTarget, name)); err == nil {
+				subCount = len(subEntries)
+			}
+			folders = append(folders, StaticAssetItem{
+				Name:      name,
+				Path:      relItemPath,
+				IsDir:     true,
+				ItemCount: subCount,
+				ModTime:   info.ModTime().Format(time.RFC3339),
+			})
+		} else {
+			ext := strings.ToLower(filepath.Ext(name))
+			isImg := ext == ".webp" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".svg" || ext == ".gif" || ext == ".ico"
+
+			if searchQuery != "" && !strings.Contains(strings.ToLower(name), searchQuery) {
+				continue
+			}
+			if filterType == "images" && !isImg {
+				continue
+			}
+
+			fileItem := StaticAssetItem{
+				Name:    name,
+				Path:    relItemPath,
+				URL:     fmt.Sprintf("%s/%s", cdnBase, relItemPath),
+				Size:    info.Size(),
+				ModTime: info.ModTime().Format(time.RFC3339),
+				Ext:     ext,
+				IsImage: isImg,
+				IsDir:   false,
+			}
+			totalSize += info.Size()
+
+			if isImg && ext != ".svg" {
+				fullFilePath := filepath.Join(cleanTarget, name)
+				if imgFile, err := os.Open(fullFilePath); err == nil {
+					if cfg, _, err := image.DecodeConfig(imgFile); err == nil {
+						fileItem.Width = cfg.Width
+						fileItem.Height = cfg.Height
+					}
+					_ = imgFile.Close()
+				}
+			}
+
+			files = append(files, fileItem)
+		}
+	}
+
+	// Sort folders alphabetically
+	sort.Slice(folders, func(i, j int) bool {
+		return strings.ToLower(folders[i].Name) < strings.ToLower(folders[j].Name)
+	})
+
+	// Sort files
+	switch sortBy {
+	case "date_desc":
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].ModTime > files[j].ModTime
+		})
+	case "date_asc":
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].ModTime < files[j].ModTime
+		})
+	case "size_desc":
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].Size > files[j].Size
+		})
+	case "size_asc":
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].Size < files[j].Size
+		})
+	default: // name_asc
+		sort.Slice(files, func(i, j int) bool {
+			return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+		})
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       true,
+		"current_path":  cleanRel,
+		"breadcrumbs":   breadcrumbs,
+		"cdn_base_url":  cdnBase,
+		"folders":       folders,
+		"files":         files,
+		"total_files":   len(files),
+		"total_folders": len(folders),
+		"total_size":    totalSize,
+	})
+}
+
+func (s *AppState) handleAdminStaticUpload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	// 50 MB max memory buffer
+	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "upload_payload_too_large"})
+		return
+	}
+
+	baseDir := filepath.Clean(s.staticDir)
+	rawRel := strings.TrimSpace(r.FormValue("path"))
+	cleanRel := filepath.Clean("/" + rawRel)
+	cleanRel = strings.TrimPrefix(cleanRel, "/")
+	cleanRel = strings.TrimPrefix(cleanRel, "\\")
+	if cleanRel == "." {
+		cleanRel = ""
+	}
+
+	targetDir := filepath.Join(baseDir, cleanRel)
+	cleanTarget := filepath.Clean(targetDir)
+	if !strings.HasPrefix(cleanTarget, baseDir) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_path"})
+		return
+	}
+
+	if err := os.MkdirAll(cleanTarget, 0755); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "cannot_create_dir"})
+		return
+	}
+
+	overwrite := r.FormValue("overwrite") == "true"
+	cdnBase := "https://static-warlink.max-alekseyev.com/static"
+
+	formFiles := r.MultipartForm.File["files"]
+	if len(formFiles) == 0 {
+		formFiles = r.MultipartForm.File["file"]
+	}
+	if len(formFiles) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "no_files_provided"})
+		return
+	}
+
+	allowedExts := map[string]bool{
+		".webp": true, ".png": true, ".jpg": true, ".jpeg": true,
+		".svg": true, ".gif": true, ".ico": true, ".json": true,
+		".css": true, ".js": true,
+	}
+
+	var uploaded []StaticAssetItem
+	slugifyRegex := regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`)
+
+	for _, fileHeader := range formFiles {
+		origName := fileHeader.Filename
+		ext := strings.ToLower(filepath.Ext(origName))
+		if !allowedExts[ext] {
+			continue
+		}
+
+		baseName := strings.TrimSuffix(origName, filepath.Ext(origName))
+		cleanBase := strings.ToLower(strings.ReplaceAll(baseName, " ", "_"))
+		cleanBase = slugifyRegex.ReplaceAllString(cleanBase, "")
+		if cleanBase == "" {
+			cleanBase = "asset_" + strconv.FormatInt(time.Now().Unix(), 10)
+		}
+
+		finalName := cleanBase + ext
+		destPath := filepath.Join(cleanTarget, finalName)
+
+		if !overwrite {
+			counter := 1
+			for {
+				if _, err := os.Stat(destPath); os.IsNotExist(err) {
+					break
+				}
+				finalName = fmt.Sprintf("%s_%d%s", cleanBase, counter, ext)
+				destPath = filepath.Join(cleanTarget, finalName)
+				counter++
+			}
+		}
+
+		src, err := fileHeader.Open()
+		if err != nil {
+			continue
+		}
+
+		dst, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			_ = src.Close()
+			continue
+		}
+
+		written, err := io.Copy(dst, src)
+		_ = src.Close()
+		_ = dst.Close()
+		if err != nil {
+			continue
+		}
+
+		relPath := finalName
+		if cleanRel != "" {
+			relPath = filepath.ToSlash(filepath.Join(cleanRel, finalName))
+		}
+
+		isImg := ext == ".webp" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".svg" || ext == ".gif" || ext == ".ico"
+		item := StaticAssetItem{
+			Name:    finalName,
+			Path:    relPath,
+			URL:     fmt.Sprintf("%s/%s", cdnBase, relPath),
+			Size:    written,
+			ModTime: time.Now().Format(time.RFC3339),
+			Ext:     ext,
+			IsImage: isImg,
+		}
+
+		if isImg && ext != ".svg" {
+			if f, err := os.Open(destPath); err == nil {
+				if cfg, _, err := image.DecodeConfig(f); err == nil {
+					item.Width = cfg.Width
+					item.Height = cfg.Height
+				}
+				_ = f.Close()
+			}
+		}
+
+		uploaded = append(uploaded, item)
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"uploaded": uploaded,
+		"count":    len(uploaded),
+	})
+}
+
+func (s *AppState) handleAdminStaticMkdir(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "bad_request"})
+		return
+	}
+
+	baseDir := filepath.Clean(s.staticDir)
+	cleanRel := filepath.Clean("/" + strings.TrimSpace(req.Path))
+	cleanRel = strings.TrimPrefix(cleanRel, "/")
+	cleanRel = strings.TrimPrefix(cleanRel, "\\")
+	if cleanRel == "." {
+		cleanRel = ""
+	}
+
+	rawName := strings.TrimSpace(req.Name)
+	rawName = strings.ReplaceAll(rawName, "/", "")
+	rawName = strings.ReplaceAll(rawName, "\\", "")
+	rawName = strings.ReplaceAll(rawName, "..", "")
+	slugRegex := regexp.MustCompile(`[^a-zA-Z0-9_\-]`)
+	cleanName := strings.ToLower(slugRegex.ReplaceAllString(rawName, "_"))
+	if cleanName == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_folder_name"})
+		return
+	}
+
+	targetDir := filepath.Join(baseDir, cleanRel, cleanName)
+	cleanTarget := filepath.Clean(targetDir)
+	if !strings.HasPrefix(cleanTarget, baseDir) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_path"})
+		return
+	}
+
+	if err := os.MkdirAll(cleanTarget, 0755); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "cannot_create_dir"})
+		return
+	}
+
+	newRelPath := cleanName
+	if cleanRel != "" {
+		newRelPath = filepath.ToSlash(filepath.Join(cleanRel, cleanName))
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"path":    newRelPath,
+		"name":    cleanName,
+	})
+}
+
+func (s *AppState) handleAdminStaticRename(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		OldPath string `json:"old_path"`
+		NewName string `json:"new_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "bad_request"})
+		return
+	}
+
+	baseDir := filepath.Clean(s.staticDir)
+	cleanOldRel := filepath.Clean("/" + strings.TrimSpace(req.OldPath))
+	cleanOldRel = strings.TrimPrefix(cleanOldRel, "/")
+	cleanOldRel = strings.TrimPrefix(cleanOldRel, "\\")
+	if cleanOldRel == "" || cleanOldRel == "." {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "cannot_rename_root"})
+		return
+	}
+
+	oldFullPath := filepath.Join(baseDir, cleanOldRel)
+	cleanOld := filepath.Clean(oldFullPath)
+	if !strings.HasPrefix(cleanOld, baseDir) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_path"})
+		return
+	}
+
+	rawNew := strings.TrimSpace(req.NewName)
+	rawNew = strings.ReplaceAll(rawNew, "/", "")
+	rawNew = strings.ReplaceAll(rawNew, "\\", "")
+	rawNew = strings.ReplaceAll(rawNew, "..", "")
+	ext := strings.ToLower(filepath.Ext(rawNew))
+	basePart := strings.TrimSuffix(rawNew, filepath.Ext(rawNew))
+	slugRegex := regexp.MustCompile(`[^a-zA-Z0-9_\-]`)
+	cleanBase := strings.ToLower(slugRegex.ReplaceAllString(basePart, "_"))
+	if cleanBase == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_new_name"})
+		return
+	}
+	finalNewName := cleanBase + ext
+
+	parentDir := filepath.Dir(cleanOld)
+	newFullPath := filepath.Join(parentDir, finalNewName)
+	cleanNew := filepath.Clean(newFullPath)
+	if !strings.HasPrefix(cleanNew, baseDir) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_destination"})
+		return
+	}
+
+	if _, err := os.Stat(cleanNew); err == nil {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "destination_exists"})
+		return
+	}
+
+	if err := os.Rename(cleanOld, cleanNew); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "rename_failed"})
+		return
+	}
+
+	relParent := filepath.Dir(cleanOldRel)
+	newRelPath := finalNewName
+	if relParent != "." && relParent != "" && relParent != "/" {
+		newRelPath = filepath.ToSlash(filepath.Join(relParent, finalNewName))
+	}
+	cdnBase := "https://static-warlink.max-alekseyev.com/static"
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"new_path": newRelPath,
+		"new_name": finalNewName,
+		"new_url":  fmt.Sprintf("%s/%s", cdnBase, newRelPath),
+	})
+}
+
+func (s *AppState) handleAdminStaticDelete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.checkAdminAuth(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "bad_request"})
+		return
+	}
+
+	baseDir := filepath.Clean(s.staticDir)
+	deletedCount := 0
+
+	for _, itemPath := range req.Paths {
+		cleanRel := filepath.Clean("/" + strings.TrimSpace(itemPath))
+		cleanRel = strings.TrimPrefix(cleanRel, "/")
+		cleanRel = strings.TrimPrefix(cleanRel, "\\")
+		if cleanRel == "" || cleanRel == "." {
+			continue // Never delete root directory
+		}
+
+		targetPath := filepath.Join(baseDir, cleanRel)
+		cleanTarget := filepath.Clean(targetPath)
+		if !strings.HasPrefix(cleanTarget, baseDir) || cleanTarget == baseDir {
+			continue
+		}
+
+		if err := os.RemoveAll(cleanTarget); err == nil {
+			deletedCount++
+		}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       true,
+		"deleted_count": deletedCount,
+	})
+}
+

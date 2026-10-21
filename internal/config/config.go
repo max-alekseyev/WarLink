@@ -92,14 +92,11 @@ func (p *PlayerProgression) IsConfigured() bool {
 	if p.Season >= 2 || len(p.History) > 0 {
 		return true
 	}
-	if p.CareerLevel > 1 || p.WishlistID != "" || len(p.UnlockedItems) > 0 {
+	if p.CareerLevel > 0 || p.WishlistID != "" || len(p.UnlockedItems) > 0 {
 		return true
 	}
-	for role, lvl := range p.Roles {
-		if role == "assault" && lvl > 1 {
-			return true
-		}
-		if role != "assault" && lvl > 0 {
+	for _, lvl := range p.Roles {
+		if lvl > 0 {
 			return true
 		}
 	}
@@ -220,6 +217,16 @@ func GetConfigPath() string {
 	if envPath := os.Getenv("WARLINK_CONFIG_PATH"); envPath != "" {
 		_ = os.MkdirAll(filepath.Dir(envPath), 0755)
 		return envPath
+	}
+	candidates := []string{
+		filepath.Join("warlink_core", "config.json"),
+		filepath.Join("..", "warlink_core", "config.json"),
+		filepath.Join("..", "..", "warlink_core", "config.json"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
 	}
 	exePath, err := os.Executable()
 	if err != nil {
@@ -402,11 +409,18 @@ func Load() *Config {
 				}
 			}
 			cfg.Progression.Season = 2
-			cfg.Progression.CareerLevel = 1
-			cfg.Progression.Roles = map[string]int{"assault": 1}
+			cfg.Progression.CareerLevel = 0
+			cfg.Progression.Roles = make(map[string]int)
 			cfg.Progression.XPProgress = make(map[string]float64)
 			cfg.Progression.UnlockedItems = nil
 			cfg.Progression.LastUpdated = time.Now().Unix()
+			_ = cfg.saveLocked()
+		}
+
+		// Fixup for any configs that got the legacy default of CareerLevel=1 / assault=1 after Season 2 wipe
+		if cfg.Progression.Season >= 2 && cfg.Progression.CareerLevel == 1 && len(cfg.Progression.Roles) == 1 && cfg.Progression.Roles["assault"] == 1 && len(cfg.Progression.XPProgress) == 0 && len(cfg.Progression.UnlockedItems) == 0 {
+			cfg.Progression.CareerLevel = 0
+			cfg.Progression.Roles = make(map[string]int)
 			_ = cfg.saveLocked()
 		}
 
@@ -710,21 +724,17 @@ func (c *Config) GetGames() []GameProfile {
 func (c *Config) GetNetworkRouteMode() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.NetworkRouteMode != "" {
+	if c.NetworkRouteMode == RouteModeDirectMoscow {
 		return c.NetworkRouteMode
 	}
-	return RouteModeTransit
+	return RouteModeDirectMoscow
 }
 
 func (c *Config) SetNetworkRouteMode(mode string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	switch mode {
-	case RouteModeDirectFrankfurt, RouteModeDirectMoscow, RouteModeDirectStockholm:
-		c.NetworkRouteMode = mode
-	default:
-		c.NetworkRouteMode = RouteModeTransit
-	}
+	// Frankfurt is decommissioned. All traffic routes through Moscow Gateway
+	c.NetworkRouteMode = RouteModeDirectMoscow
 	_ = c.saveLocked()
 }
 

@@ -38,8 +38,71 @@ async function fetchJSON(url, options = {}) {
 document.addEventListener('DOMContentLoaded', async () => {
     handleHashNavigation();
     window.addEventListener('hashchange', handleHashNavigation);
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const keyParam = urlParams.get('key');
+    if (keyParam) {
+        try {
+            await submitLoginByKey(keyParam, false);
+            return;
+        } catch (e) {
+            console.error('Key auto-login failed:', e);
+        }
+    }
+
     await checkAuthStatus();
 });
+
+function switchLoginMode(mode) {
+    const tabKeyBtn = document.getElementById('tab-auth-key-btn');
+    const tabCredBtn = document.getElementById('tab-auth-cred-btn');
+    const stepKey = document.getElementById('login-step-key');
+    const stepCred = document.getElementById('login-step-credentials');
+    const stepOtp = document.getElementById('login-step-otp');
+
+    if (tabKeyBtn) tabKeyBtn.classList.toggle('active', mode === 'key');
+    if (tabCredBtn) tabCredBtn.classList.toggle('active', mode === 'cred');
+
+    if (mode === 'key') {
+        if (stepKey) stepKey.style.display = 'block';
+        if (stepCred) stepCred.style.display = 'none';
+        if (stepOtp) stepOtp.style.display = 'none';
+    } else {
+        if (stepKey) stepKey.style.display = 'none';
+        if (stepCred) stepCred.style.display = 'block';
+        if (stepOtp) stepOtp.style.display = 'none';
+    }
+}
+
+async function submitLoginByKey(keyInput, showErrors = true) {
+    let key = keyInput;
+    if (!key) {
+        const input = document.getElementById('login-dashboard-key');
+        key = input ? input.value.trim() : '';
+    }
+    if (!key) {
+        if (showErrors) showToast('Введите секретный мастер-ключ', 'error');
+        return;
+    }
+
+    try {
+        const data = await fetchJSON('/api/v1/admin/auth/key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+        });
+        if (!data.success) throw new Error(data.error || 'Неверный секретный ключ');
+
+        currentUser = data.username || 'admin';
+        document.getElementById('header-admin-user').textContent = currentUser;
+        showScreen('screen-dashboard');
+        loadActiveTabData();
+        showToast('Успешный вход в систему', 'success');
+    } catch (err) {
+        if (showErrors) showToast(err.message, 'error');
+        throw err;
+    }
+}
 
 async function checkAuthStatus() {
     try {
@@ -82,12 +145,20 @@ function handleHashNavigation() {
         hashParams.forEach((val, key) => queryParams.set(key, val));
     }
 
-    let hash = rawHash || 'view-special-projects';
+    let hash = rawHash;
+    if (!hash) {
+        if (window.location.hostname.includes('static-warlink') || window.location.pathname.includes('/static')) {
+            hash = 'view-static';
+        } else {
+            hash = 'view-special-projects';
+        }
+    }
 
     // Handle legacy Grafana links
     if (hash.includes('support_tickets') || hash.includes('dialogs')) hash = 'view-support';
     if (hash.includes('accounts') || hash.includes('sponsors')) hash = 'view-monetization';
     if (hash.includes('nodes') || hash.includes('cluster')) hash = 'view-nodes';
+    if (hash.includes('static') || hash.includes('cdn')) hash = 'view-static';
 
     const tabKey = hash.replace('view-', '');
     switchAdminTab(tabKey, false);
@@ -140,6 +211,8 @@ function loadActiveTabData(tabKey) {
         case 'notifications': loadNotifications(); break;
         case 'support': loadTickets(); break;
         case 'games-kanban': loadKanbanAndGold(); break;
+        case 'static': loadStaticManager(); break;
+        case 'progression': loadProgressionAdmin(); break;
         case 'system-ops': loadSystemOps(); break;
     }
 }
@@ -1309,6 +1382,7 @@ function escapeHtml(str) {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 }
+const escapeHTML = escapeHtml;
 
 // =============================================================================
 // Account Card Modal (Карточка аккаунта со всеми данными из БД и RAM)
@@ -1615,4 +1689,1405 @@ async function unbanModalAccount() {
         showToast(err.message, 'error');
     }
 }
+
+// =============================================================================
+// Static Asset & CDN Manager
+// =============================================================================
+
+let currentStaticPath = '';
+let staticFilesData = [];
+let staticFoldersData = [];
+let staticCdnBaseUrl = 'https://static-warlink.max-alekseyev.com/static';
+let currentStaticViewMode = 'grid'; // 'grid' | 'list'
+let selectedStaticPaths = new Set();
+let activePreviewItem = null;
+let staticDropzoneInitialized = false;
+
+function formatBytes(bytes, decimals = 1) {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+async function loadStaticManager(path = currentStaticPath) {
+    currentStaticPath = path || '';
+    selectedStaticPaths.clear();
+    updateStaticBulkActions();
+
+    const sortBy = document.getElementById('static-sort-by') ? document.getElementById('static-sort-by').value : 'name_asc';
+    const summaryEl = document.getElementById('static-summary-text');
+    if (summaryEl) summaryEl.textContent = 'Загрузка ассетов...';
+
+    initStaticDropzone();
+
+    try {
+        const data = await fetchJSON(`/api/v1/admin/static/files?path=${encodeURIComponent(currentStaticPath)}&sort=${encodeURIComponent(sortBy)}`);
+        if (!data.success) throw new Error(data.error || 'Ошибка загрузки файлов');
+
+        staticFilesData = data.files || [];
+        staticFoldersData = data.folders || [];
+        staticCdnBaseUrl = data.cdn_base_url || 'https://static-warlink.max-alekseyev.com/static';
+
+        renderStaticBreadcrumbs(data.breadcrumbs || []);
+        renderStaticFolders(data.folders || []);
+        renderStaticGallery();
+
+        if (summaryEl) {
+            const count = staticFilesData.length;
+            const size = formatBytes(data.total_size || 0);
+            summaryEl.textContent = `Папка: /${currentStaticPath} — ${count} файлов (${size})`;
+        }
+    } catch (err) {
+        showToast(err.message, 'error');
+        if (summaryEl) summaryEl.textContent = 'Ошибка загрузки каталога';
+    }
+}
+
+function renderStaticBreadcrumbs(crumbs) {
+    const container = document.getElementById('static-breadcrumbs');
+    if (!container) return;
+    container.innerHTML = '';
+
+    crumbs.forEach((crumb, idx) => {
+        if (idx > 0) {
+            const sep = document.createElement('span');
+            sep.className = 'breadcrumb-sep';
+            sep.textContent = '/';
+            container.appendChild(sep);
+        }
+
+        const isLast = idx === crumbs.length - 1;
+        const item = document.createElement('span');
+        item.className = `breadcrumb-item ${isLast ? 'active' : ''}`;
+        item.textContent = crumb.name || 'Корень';
+        if (!isLast) {
+            item.onclick = () => navigateToStaticPath(crumb.path);
+        }
+        container.appendChild(item);
+    });
+}
+
+function navigateToStaticPath(path) {
+    currentStaticPath = path || '';
+    loadStaticManager(currentStaticPath);
+}
+
+function refreshStaticList() {
+    loadStaticManager(currentStaticPath);
+}
+
+function renderStaticFolders(folders) {
+    const container = document.getElementById('static-folders-container');
+    if (!container) return;
+
+    if (!folders || folders.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+    }
+
+    container.style.display = 'grid';
+    container.innerHTML = '';
+
+    folders.forEach(f => {
+        const card = document.createElement('div');
+        card.className = 'folder-card';
+        card.onclick = () => navigateToStaticPath(f.path);
+
+        const countText = f.item_count !== undefined ? `${f.item_count} файлов` : '';
+
+        card.innerHTML = `
+            <div class="folder-card-left">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="stroke: var(--accent); flex-shrink: 0;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span class="folder-card-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+            </div>
+            <span class="folder-card-count">${countText}</span>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function renderStaticGallery() {
+    const searchVal = (document.getElementById('static-search-input') ? document.getElementById('static-search-input').value : '').toLowerCase().trim();
+    const filterExt = document.getElementById('static-filter-ext') ? document.getElementById('static-filter-ext').value : 'all';
+
+    const filtered = staticFilesData.filter(f => {
+        if (searchVal && !f.name.toLowerCase().includes(searchVal)) return false;
+        if (filterExt === 'images' && !f.is_image) return false;
+        if (filterExt.startsWith('.') && f.ext !== filterExt) return false;
+        return true;
+    });
+
+    const gridEl = document.getElementById('static-gallery-grid');
+    const listEl = document.getElementById('static-gallery-list');
+    const tbody = document.getElementById('static-tbody-files');
+
+    if (currentStaticViewMode === 'grid') {
+        if (gridEl) gridEl.style.display = 'grid';
+        if (listEl) listEl.style.display = 'none';
+
+        if (filtered.length === 0) {
+            gridEl.innerHTML = `
+                <div style="grid-column: 1 / -1; padding: 40px 16px; text-align: center; color: var(--text-muted); background: var(--bg-card); border: 1px dashed var(--border-card); border-radius: var(--radius-sm);">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="stroke: var(--text-muted); margin-bottom: 8px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                    <div>В текущей директории нет файлов, соответствующих фильтру</div>
+                </div>
+            `;
+            return;
+        }
+
+        gridEl.innerHTML = '';
+        filtered.forEach(f => {
+            const card = document.createElement('div');
+            card.className = 'static-card';
+
+            const extUpper = (f.ext || '').replace('.', '').toUpperCase() || 'FILE';
+            const dimText = (f.width && f.height) ? `${f.width}×${f.height}` : (f.ext === '.svg' ? 'SVG' : 'Файл');
+            const sizeText = formatBytes(f.size);
+
+            let thumbContent = '';
+            if (f.is_image) {
+                thumbContent = `<img class="static-thumb-img" src="${escapeHtml(f.url)}" alt="${escapeHtml(f.name)}" loading="lazy" onerror="this.src=''; this.alt='Ошибка загрузки';">`;
+            } else {
+                thumbContent = `<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="stroke: var(--text-muted);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+            }
+
+            card.innerHTML = `
+                <div class="static-thumb-wrap">
+                    <span class="static-card-ext">${extUpper}</span>
+                    ${thumbContent}
+                    <div class="static-card-overlay">
+                        <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); copyStaticURL('${escapeHtml(f.url)}', this)">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                            Копировать URL
+                        </button>
+                        <div style="display: flex; gap: 4px;">
+                            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); openStaticPreviewModalByPath('${escapeHtml(f.path)}')">
+                                Просмотр
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteStaticFile('${escapeHtml(f.path)}')">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="static-card-info" onclick="openStaticPreviewModalByPath('${escapeHtml(f.path)}')">
+                    <span class="static-card-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+                    <div class="static-card-meta">
+                        <span>${dimText}</span>
+                        <span>${sizeText}</span>
+                    </div>
+                </div>
+            `;
+            gridEl.appendChild(card);
+        });
+    } else {
+        if (gridEl) gridEl.style.display = 'none';
+        if (listEl) listEl.style.display = 'block';
+
+        if (!tbody) return;
+        tbody.innerHTML = '';
+
+        if (filtered.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="7" class="text-secondary" style="text-align: center; padding: 24px;">Нет файлов в текущей папке</td></tr>`;
+            return;
+        }
+
+        filtered.forEach(f => {
+            const tr = document.createElement('tr');
+            const dimText = (f.width && f.height) ? `${f.width}×${f.height}` : '—';
+            const sizeText = formatBytes(f.size);
+            const dateText = f.mod_time ? new Date(f.mod_time).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
+            let thumbIcon = '';
+            if (f.is_image) {
+                thumbIcon = `<div style="width: 28px; height: 28px; background: repeating-conic-gradient(#181818 0% 25%, #121212 0% 50%) 50% / 8px 8px; border: 1px solid var(--border-card); display: flex; align-items: center; justify-content: center; border-radius: 2px; overflow: hidden;"><img src="${escapeHtml(f.url)}" style="max-width: 100%; max-height: 100%; object-fit: contain;"></div>`;
+            } else {
+                thumbIcon = `<div style="width: 28px; height: 28px; background: var(--bg-card); border: 1px solid var(--border-card); display: flex; align-items: center; justify-content: center; border-radius: 2px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="stroke: var(--text-muted);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>`;
+            }
+
+            const isChecked = selectedStaticPaths.has(f.path) ? 'checked' : '';
+
+            tr.innerHTML = `
+                <td><input type="checkbox" ${isChecked} onchange="toggleSelectStaticFile('${escapeHtml(f.path)}', this.checked)"></td>
+                <td>${thumbIcon}</td>
+                <td>
+                    <span class="font-mono" style="font-size: 12px; font-weight: 500; cursor: pointer; color: var(--text-link);" onclick="openStaticPreviewModalByPath('${escapeHtml(f.path)}')">${escapeHtml(f.name)}</span>
+                </td>
+                <td class="font-mono text-secondary" style="font-size: 11px;">${dimText}</td>
+                <td class="font-mono text-secondary" style="font-size: 11px;">${sizeText}</td>
+                <td class="font-mono text-secondary" style="font-size: 11px;">${dateText}</td>
+                <td style="text-align: right;">
+                    <div style="display: flex; gap: 4px; justify-content: flex-end;">
+                        <button class="btn btn-secondary btn-sm" onclick="copyStaticURL('${escapeHtml(f.url)}', this)" title="Скопировать CDN URL">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="openStaticPreviewModalByPath('${escapeHtml(f.path)}')" title="Просмотр">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="openRenameStaticModal('${escapeHtml(f.path)}', '${escapeHtml(f.name)}')" title="Переименовать">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteStaticFile('${escapeHtml(f.path)}')" title="Удалить">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+}
+
+function setStaticViewMode(mode) {
+    currentStaticViewMode = mode;
+    const btnGrid = document.getElementById('btn-view-grid');
+    const btnList = document.getElementById('btn-view-list');
+    if (btnGrid) btnGrid.classList.toggle('active', mode === 'grid');
+    if (btnList) btnList.classList.toggle('active', mode === 'list');
+    renderStaticGallery();
+}
+
+function filterStaticGallery() {
+    renderStaticGallery();
+}
+
+function changeStaticSort() {
+    loadStaticManager(currentStaticPath);
+}
+
+function copyStaticURL(url, btn) {
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(() => {
+        showToast('CDN URL скопирован в буфер', 'success');
+        if (btn) {
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="stroke: #10b981;"><polyline points="20 6 9 17 4 12"/></svg> Скопировано!`;
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+            }, 1500);
+        }
+    }).catch(err => {
+        showToast('Не удалось скопировать URL: ' + err.message, 'error');
+    });
+}
+
+function copyStaticInputVal(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input || !input.value) return;
+    navigator.clipboard.writeText(input.value).then(() => {
+        showToast('Скопировано в буфер обмена', 'success');
+        if (btn) {
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="stroke: #10b981;"><polyline points="20 6 9 17 4 12"/></svg> Скопировано!`;
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+            }, 1500);
+        }
+    }).catch(err => {
+        showToast('Ошибка копирования: ' + err.message, 'error');
+    });
+}
+
+function toggleSelectStaticFile(path, isSelected) {
+    if (isSelected) {
+        selectedStaticPaths.add(path);
+    } else {
+        selectedStaticPaths.delete(path);
+    }
+    updateStaticBulkActions();
+}
+
+function toggleSelectAllStaticFiles(masterCheckbox) {
+    const isChecked = masterCheckbox.checked;
+    staticFilesData.forEach(f => {
+        if (isChecked) {
+            selectedStaticPaths.add(f.path);
+        } else {
+            selectedStaticPaths.delete(f.path);
+        }
+    });
+    renderStaticGallery();
+    updateStaticBulkActions();
+}
+
+function updateStaticBulkActions() {
+    const bulkWrap = document.getElementById('static-bulk-actions');
+    const countEl = document.getElementById('static-selected-count');
+    if (!bulkWrap || !countEl) return;
+
+    if (selectedStaticPaths.size > 0) {
+        bulkWrap.style.display = 'flex';
+        countEl.textContent = `Выбрано: ${selectedStaticPaths.size}`;
+    } else {
+        bulkWrap.style.display = 'none';
+    }
+}
+
+async function deleteSelectedStaticFiles() {
+    if (selectedStaticPaths.size === 0) return;
+    if (!confirm(`Удалить выбранные файлы (${selectedStaticPaths.size} шт.)? Это действие необратимо.`)) return;
+
+    try {
+        const data = await fetchJSON('/api/v1/admin/static/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: Array.from(selectedStaticPaths) })
+        });
+        if (!data.success) throw new Error(data.error || 'Ошибка удаления');
+        showToast(`Удалено файлов: ${data.deleted_count}`, 'success');
+        selectedStaticPaths.clear();
+        loadStaticManager(currentStaticPath);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Drag & Drop and Upload Pipeline
+// -----------------------------------------------------------------------------
+
+function initStaticDropzone() {
+    if (staticDropzoneInitialized) return;
+    const dropzone = document.getElementById('static-dropzone');
+    if (!dropzone) return;
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.add('dragover');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove('dragover');
+        }, false);
+    });
+
+    dropzone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+            handleStaticFilesUpload(files);
+        }
+    });
+
+    dropzone.addEventListener('click', (e) => {
+        if (e.target.closest('.dropzone-options')) return;
+        const fileInput = document.getElementById('static-file-input');
+        if (fileInput) fileInput.click();
+    });
+
+    staticDropzoneInitialized = true;
+}
+
+function triggerStaticUpload() {
+    const fileInput = document.getElementById('static-file-input');
+    if (fileInput) fileInput.click();
+}
+
+function handleStaticFileSelect(event) {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+        handleStaticFilesUpload(files);
+    }
+    event.target.value = '';
+}
+
+async function convertImageFileToWebP(file) {
+    return new Promise((resolve) => {
+        if (!file.type.startsWith('image/') || file.type === 'image/webp' || file.type === 'image/svg+xml') {
+            return resolve(file);
+        }
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob((blob) => {
+                if (!blob) return resolve(file);
+                const newName = file.name.replace(/\.[^/.]+$/, "") + ".webp";
+                const webpFile = new File([blob], newName, { type: 'image/webp' });
+                resolve(webpFile);
+            }, 'image/webp', 0.92);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(file);
+        };
+        img.src = objectUrl;
+    });
+}
+
+async function handleStaticFilesUpload(rawFiles) {
+    if (!rawFiles || rawFiles.length === 0) return;
+
+    const progressWrap = document.getElementById('static-upload-progress-wrap');
+    const progressBar = document.getElementById('static-upload-progress-fill');
+    const percentText = document.getElementById('static-upload-percent-text');
+    const statusText = document.getElementById('static-upload-status-text');
+
+    const shouldConvert = document.getElementById('static-opt-convert-webp') ? document.getElementById('static-opt-convert-webp').checked : false;
+    const shouldOverwrite = document.getElementById('static-opt-overwrite') ? document.getElementById('static-opt-overwrite').checked : false;
+
+    if (progressWrap) progressWrap.style.display = 'block';
+    if (progressBar) progressBar.style.width = '0%';
+    if (percentText) percentText.textContent = '0%';
+    if (statusText) statusText.textContent = `Подготовка ${rawFiles.length} файлов к отправке...`;
+
+    const processedFiles = [];
+    for (let i = 0; i < rawFiles.length; i++) {
+        const f = rawFiles[i];
+        if (shouldConvert) {
+            const converted = await convertImageFileToWebP(f);
+            processedFiles.push(converted);
+        } else {
+            processedFiles.push(f);
+        }
+    }
+
+    if (statusText) statusText.textContent = `Загрузка ${processedFiles.length} файлов в /${currentStaticPath}...`;
+
+    const formData = new FormData();
+    formData.append('path', currentStaticPath);
+    formData.append('overwrite', shouldOverwrite ? 'true' : 'false');
+
+    for (let i = 0; i < processedFiles.length; i++) {
+        formData.append('files', processedFiles[i]);
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/v1/admin/static/upload', true);
+
+    xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            if (progressBar) progressBar.style.width = percent + '%';
+            if (percentText) percentText.textContent = percent + '%';
+        }
+    };
+
+    xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+                const res = JSON.parse(xhr.responseText);
+                if (res.success) {
+                    showToast(`Успешно загружено файлов: ${res.count || processedFiles.length}`, 'success');
+                    setTimeout(() => {
+                        if (progressWrap) progressWrap.style.display = 'none';
+                        loadStaticManager(currentStaticPath);
+                    }, 500);
+                } else {
+                    throw new Error(res.error || 'Ошибка загрузки');
+                }
+            } catch (err) {
+                showToast(err.message, 'error');
+                if (progressWrap) progressWrap.style.display = 'none';
+            }
+        } else {
+            showToast(`Ошибка сервера (${xhr.status})`, 'error');
+            if (progressWrap) progressWrap.style.display = 'none';
+        }
+    };
+
+    xhr.onerror = () => {
+        showToast('Сетевая ошибка при загрузке файлов', 'error');
+        if (progressWrap) progressWrap.style.display = 'none';
+    };
+
+    xhr.send(formData);
+}
+
+// -----------------------------------------------------------------------------
+// Modals and Asset Inspector
+// -----------------------------------------------------------------------------
+
+function openStaticPreviewModalByPath(path) {
+    const item = staticFilesData.find(f => f.path === path);
+    if (!item) return;
+    openStaticPreviewModal(item);
+}
+
+function openStaticPreviewModal(item) {
+    activePreviewItem = item;
+    const modal = document.getElementById('modal-static-preview');
+    if (!modal) return;
+
+    const titleEl = document.getElementById('static-preview-title');
+    const badgeEl = document.getElementById('static-preview-ext-badge');
+    const imgEl = document.getElementById('static-preview-img');
+    const dimEl = document.getElementById('static-preview-dimensions');
+    const sizeEl = document.getElementById('static-preview-size');
+    const formatEl = document.getElementById('static-preview-format');
+    const dateEl = document.getElementById('static-preview-date');
+    const urlInput = document.getElementById('static-preview-url-input');
+    const pathInput = document.getElementById('static-preview-path-input');
+    const downloadBtn = document.getElementById('static-preview-download-btn');
+
+    if (titleEl) titleEl.textContent = item.name;
+    if (badgeEl) badgeEl.textContent = (item.ext || '').replace('.', '').toUpperCase() || 'FILE';
+
+    if (imgEl) {
+        if (item.is_image) {
+            imgEl.style.display = 'block';
+            imgEl.src = item.url;
+        } else {
+            imgEl.style.display = 'none';
+            imgEl.src = '';
+        }
+    }
+
+    if (dimEl) dimEl.textContent = (item.width && item.height) ? `${item.width} × ${item.height} px` : (item.ext === '.svg' ? 'Векторный SVG' : '—');
+    if (sizeEl) sizeEl.textContent = formatBytes(item.size);
+    if (formatEl) formatEl.textContent = (item.ext || '').toUpperCase();
+    if (dateEl) dateEl.textContent = item.mod_time ? new Date(item.mod_time).toLocaleString('ru-RU') : '—';
+
+    if (urlInput) urlInput.value = item.url;
+    if (pathInput) pathInput.value = item.path;
+    if (downloadBtn) {
+        downloadBtn.href = item.url;
+        downloadBtn.download = item.name;
+    }
+
+    modal.style.display = 'flex';
+}
+
+function closeStaticPreviewModal() {
+    const modal = document.getElementById('modal-static-preview');
+    if (modal) modal.style.display = 'none';
+    activePreviewItem = null;
+}
+
+function openNewFolderModal() {
+    const modal = document.getElementById('modal-static-mkdir');
+    if (!modal) return;
+
+    const parentInput = document.getElementById('static-mkdir-parent');
+    const nameInput = document.getElementById('static-mkdir-name');
+
+    if (parentInput) parentInput.value = currentStaticPath ? `/${currentStaticPath}` : '/ (Корень)';
+    if (nameInput) {
+        nameInput.value = '';
+        setTimeout(() => nameInput.focus(), 50);
+    }
+
+    modal.style.display = 'flex';
+}
+
+function closeNewFolderModal() {
+    const modal = document.getElementById('modal-static-mkdir');
+    if (modal) modal.style.display = 'none';
+}
+
+async function submitNewFolder() {
+    const nameInput = document.getElementById('static-mkdir-name');
+    if (!nameInput) return;
+    const name = nameInput.value.trim();
+    if (!name) return showToast('Укажите название папки', 'error');
+
+    try {
+        const data = await fetchJSON('/api/v1/admin/static/mkdir', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: currentStaticPath, name })
+        });
+        if (!data.success) throw new Error(data.error || 'Ошибка создания папки');
+        showToast(`Папка ${data.name} успешно создана`, 'success');
+        closeNewFolderModal();
+        loadStaticManager(currentStaticPath);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+let staticRenameTargetPath = '';
+
+function openRenameStaticModal(path, currentName) {
+    staticRenameTargetPath = path;
+    const modal = document.getElementById('modal-static-rename');
+    if (!modal) return;
+
+    const oldInput = document.getElementById('static-rename-old');
+    const newInput = document.getElementById('static-rename-new');
+
+    if (oldInput) oldInput.value = currentName;
+    if (newInput) {
+        newInput.value = currentName;
+        setTimeout(() => newInput.focus(), 50);
+    }
+
+    modal.style.display = 'flex';
+}
+
+function closeRenameStaticModal() {
+    const modal = document.getElementById('modal-static-rename');
+    if (modal) modal.style.display = 'none';
+    staticRenameTargetPath = '';
+}
+
+async function submitRenameStatic() {
+    const newInput = document.getElementById('static-rename-new');
+    if (!newInput || !staticRenameTargetPath) return;
+    const newName = newInput.value.trim();
+    if (!newName) return showToast('Укажите новое имя', 'error');
+
+    try {
+        const data = await fetchJSON('/api/v1/admin/static/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ old_path: staticRenameTargetPath, new_name: newName })
+        });
+        if (!data.success) throw new Error(data.error || 'Ошибка переименования');
+        showToast('Файл успешно переименован', 'success');
+        closeRenameStaticModal();
+        loadStaticManager(currentStaticPath);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function deleteStaticFile(path) {
+    if (!confirm(`Удалить файл "${path}"? Это действие необратимо.`)) return;
+    try {
+        const data = await fetchJSON('/api/v1/admin/static/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: [path] })
+        });
+        if (!data.success) throw new Error(data.error || 'Ошибка удаления');
+        showToast('Файл успешно удален', 'success');
+        loadStaticManager(currentStaticPath);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+function deleteCurrentStaticPreviewFile() {
+    if (!activePreviewItem) return;
+    const path = activePreviewItem.path;
+    closeStaticPreviewModal();
+    deleteStaticFile(path);
+}
+
+function renameCurrentStaticPreviewFile() {
+    if (!activePreviewItem) return;
+    const path = activePreviewItem.path;
+    const name = activePreviewItem.name;
+    closeStaticPreviewModal();
+    openRenameStaticModal(path, name);
+}
+
+function replaceCurrentStaticPreviewFile() {
+    if (!activePreviewItem) return;
+    const input = document.getElementById('static-replace-file-input');
+    if (input) input.click();
+}
+
+async function handleStaticReplaceSelected(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file || !activePreviewItem) return;
+
+    const targetPath = activePreviewItem.path;
+    const parentDir = targetPath.includes('/') ? targetPath.substring(0, targetPath.lastIndexOf('/')) : '';
+
+    const formData = new FormData();
+    formData.append('path', parentDir);
+    formData.append('overwrite', 'true');
+
+    const replacementFile = new File([file], activePreviewItem.name, { type: file.type });
+    formData.append('files', replacementFile);
+
+    try {
+        const res = await fetch('/api/v1/admin/static/upload', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Ошибка замены файла');
+        showToast('Файл успешно заменен', 'success');
+        closeStaticPreviewModal();
+        loadStaticManager(currentStaticPath);
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+// =============================================================================
+// TAB 9: Progression Database Editor (Dark Cloudflare Utility)
+// =============================================================================
+
+let currentProgressionDB = {
+    version: "2.0.0",
+    source: "MetaForge.app/wardogs",
+    total_unlocks: 0,
+    roles: ["career", "assault", "medic", "recon", "support", "driver", "pilot"],
+    unlocks: [],
+    catalog: []
+};
+
+let progActiveRole = "all";
+let progActiveType = "";
+let progSearchTerm = "";
+let progSort = "lvl_asc";
+let progEditingIndex = -1;
+let progRawJSONVisible = false;
+let progIconPickerCache = [];
+
+const PROG_ROLES = [
+    { id: "all", label: "Все ветки" },
+    { id: "career", label: "Карьера" },
+    { id: "assault", label: "Штурмовик" },
+    { id: "medic", label: "Медик" },
+    { id: "recon", label: "Разведчик" },
+    { id: "support", label: "Поддержка" },
+    { id: "driver", label: "Водитель" },
+    { id: "pilot", label: "Пилот" }
+];
+
+async function loadProgressionAdmin(force = false) {
+    const statusText = document.getElementById('prog-status-text');
+    if (statusText) statusText.textContent = 'Загрузка базы данных прокачки...';
+
+    try {
+        const url = '/api/v1/admin/progression/database' + (force ? '?t=' + Date.now() : '');
+        const data = await fetchJSON(url);
+        if (data && Array.isArray(data.unlocks)) {
+            currentProgressionDB = data;
+            if (!Array.isArray(currentProgressionDB.roles) || currentProgressionDB.roles.length === 0) {
+                currentProgressionDB.roles = ["career", "assault", "medic", "recon", "support", "driver", "pilot"];
+            }
+
+            const verBadge = document.getElementById('prog-version-badge');
+            if (verBadge) verBadge.textContent = currentProgressionDB.version || 'v2.0.0';
+
+            const totalBadge = document.getElementById('prog-total-badge');
+            if (totalBadge) totalBadge.textContent = `${currentProgressionDB.unlocks.length} наград`;
+
+            renderProgRoleTabs();
+            renderProgTable();
+        } else {
+            throw new Error('Некорректный формат базы данных прогрессии');
+        }
+    } catch (err) {
+        console.error('Failed to load progression database:', err);
+        showToast(err.message || 'Ошибка загрузки базы прокачки', 'error');
+        if (statusText) statusText.textContent = 'Ошибка загрузки базы прокачки';
+    }
+}
+
+function renderProgRoleTabs() {
+    const container = document.getElementById('prog-role-tabs-container');
+    if (!container) return;
+
+    container.innerHTML = PROG_ROLES.map(r => {
+        const isActive = r.id === progActiveRole;
+        let count = 0;
+        if (currentProgressionDB && Array.isArray(currentProgressionDB.unlocks)) {
+            if (r.id === 'all') {
+                count = currentProgressionDB.unlocks.length;
+            } else {
+                count = currentProgressionDB.unlocks.filter(it => (it.role || '').toLowerCase() === r.id).length;
+            }
+        }
+        return `
+            <button type="button" class="prog-role-btn ${isActive ? 'active' : ''}" onclick="setProgRole('${r.id}')">
+                <span>${r.label}</span>
+                <span style="opacity: 0.7; font-size: 10px; margin-left: 2px;">(${count})</span>
+            </button>
+        `;
+    }).join('');
+}
+
+function setProgRole(role) {
+    progActiveRole = role;
+    renderProgRoleTabs();
+    renderProgTable();
+}
+
+function onProgSearchChange() {
+    const input = document.getElementById('prog-search-input');
+    progSearchTerm = input ? input.value.trim().toLowerCase() : '';
+    renderProgTable();
+}
+
+function onProgFilterChange() {
+    const select = document.getElementById('prog-type-select');
+    progActiveType = select ? select.value : '';
+    renderProgTable();
+}
+
+function onProgSortChange() {
+    const select = document.getElementById('prog-sort-select');
+    progSort = select ? select.value : 'lvl_asc';
+    renderProgTable();
+}
+
+function normalizeProgIconURL(icon) {
+    if (!icon) return 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="36" height="36"%3E%3Crect width="36" height="36" fill="%231a1a1a"/%3E%3C/svg%3E';
+    if (icon.startsWith('http://') || icon.startsWith('https://')) return icon;
+    if (icon.startsWith('data:')) return icon;
+
+    let clean = icon.trim();
+    if (clean.startsWith('/')) clean = clean.substring(1);
+
+    if (clean.startsWith('guides/icons/')) {
+        clean = 'static/wardogs/items/' + clean.slice(13);
+    } else if (clean.startsWith('guides/images/')) {
+        clean = 'static/wardogs/renders/' + clean.slice(14);
+    } else if (clean.startsWith('wardogs/')) {
+        clean = 'static/' + clean;
+    } else if (!clean.startsWith('static/')) {
+        clean = 'static/wardogs/items/' + clean;
+    }
+
+    return 'https://static-warlink.max-alekseyev.com/' + clean;
+}
+
+function renderProgTable() {
+    const tbody = document.getElementById('prog-items-tbody');
+    const statusText = document.getElementById('prog-status-text');
+    if (!tbody) return;
+
+    if (!currentProgressionDB || !Array.isArray(currentProgressionDB.unlocks)) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 30px; color: var(--text-muted);">База данных пуста</td></tr>`;
+        return;
+    }
+
+    let items = currentProgressionDB.unlocks.map((item, originalIndex) => ({
+        ...item,
+        _originalIndex: originalIndex
+    }));
+
+    // Filter by role
+    if (progActiveRole !== 'all') {
+        items = items.filter(it => (it.role || '').toLowerCase() === progActiveRole);
+    }
+
+    // Filter by type
+    if (progActiveType) {
+        items = items.filter(it => {
+            const tab = (it.tab || '').toLowerCase();
+            const sub = (it.subcategory || '').toLowerCase();
+            return tab.includes(progActiveType) || sub.includes(progActiveType);
+        });
+    }
+
+    // Search query
+    if (progSearchTerm) {
+        items = items.filter(it => {
+            const name = (it.name || '').toLowerCase();
+            const nameRu = (it.name_ru || '').toLowerCase();
+            const uid = (it.unlock_id || '').toLowerCase();
+            const slug = (it.slug || '').toLowerCase();
+            const catRu = (it.category_ru || '').toLowerCase();
+            const subcat = (it.subcategory || '').toLowerCase();
+            return name.includes(progSearchTerm) ||
+                   nameRu.includes(progSearchTerm) ||
+                   uid.includes(progSearchTerm) ||
+                   slug.includes(progSearchTerm) ||
+                   catRu.includes(progSearchTerm) ||
+                   subcat.includes(progSearchTerm);
+        });
+    }
+
+    // Sort
+    items.sort((a, b) => {
+        switch (progSort) {
+            case 'lvl_asc':
+                return (a.level || 0) - (b.level || 0);
+            case 'lvl_desc':
+                return (b.level || 0) - (a.level || 0);
+            case 'price_asc':
+                return (a.price || 0) - (b.price || 0);
+            case 'price_desc':
+                return (b.price || 0) - (a.price || 0);
+            case 'name_asc':
+                return (a.name_ru || a.name || '').localeCompare(b.name_ru || b.name || '');
+            default:
+                return (a.level || 0) - (b.level || 0);
+        }
+    });
+
+    if (statusText) {
+        statusText.textContent = `Наград в выборке: ${items.length} из ${currentProgressionDB.unlocks.length}`;
+    }
+
+    if (items.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 40px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;">Наград по заданным критериям фильтра не найдено</td></tr>`;
+        return;
+    }
+
+    const rowsHtml = items.map(item => {
+        const role = (item.role || 'career').toLowerCase();
+        const roleLabel = (PROG_ROLES.find(r => r.id === role) || {}).label || role;
+        const iconUrl = normalizeProgIconURL(item.icon);
+        const nameRu = escapeHtml(item.name_ru || item.name || '—');
+        const nameEn = escapeHtml(item.name || '');
+        const unlockId = escapeHtml(item.unlock_id || '—');
+        const slug = escapeHtml(item.slug || '—');
+        const cat = escapeHtml(item.category_ru || item.subcategory || item.tab || 'Разблокировка');
+        const price = item.price != null ? Number(item.price).toLocaleString('ru-RU') : '—';
+        const unlockCost = item.unlock_cost != null ? Number(item.unlock_cost).toLocaleString('ru-RU') : '—';
+
+        return `
+            <tr>
+                <td>
+                    <span class="prog-level-badge">${item.level != null ? item.level : 0}</span>
+                </td>
+                <td>
+                    <span class="prog-role-tag ${role}">${roleLabel}</span>
+                </td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <img src="${iconUrl}" class="prog-icon-thumb" alt="${nameRu}" loading="lazy" onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'36\\' height=\\'36\\'%3E%3Crect width=\\'36\\' height=\\'36\\' fill=\\'%231a1a1a\\'/ %3E%3C/svg%3E'">
+                        <div>
+                            <div style="font-weight: 600; color: var(--text-primary); font-size: 12px;">${nameRu}</div>
+                            ${nameEn && nameEn !== nameRu ? `<div style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${nameEn}</div>` : ''}
+                        </div>
+                    </div>
+                </td>
+                <td>
+                    <div class="font-mono" style="font-size: 11px; color: var(--text-primary);">${unlockId}</div>
+                    <div class="font-mono" style="font-size: 10px; color: var(--text-muted);">${slug}</div>
+                </td>
+                <td>
+                    <span class="badge badge-outline font-mono" style="font-size: 10px;">${cat}</span>
+                </td>
+                <td style="text-align: right;">
+                    <span class="font-mono" style="font-weight: 600; color: #10b981;">${price} $</span>
+                </td>
+                <td style="text-align: right;">
+                    <span class="font-mono" style="color: var(--accent);">${unlockCost}</span>
+                </td>
+                <td style="text-align: right;">
+                    <div style="display: flex; justify-content: flex-end; gap: 4px;">
+                        <button class="btn btn-secondary btn-sm" onclick="openProgEditModal(${item._originalIndex})" title="Редактировать награду" style="padding: 3px 6px;">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="duplicateProgItem(${item._originalIndex})" title="Дублировать награду" style="padding: 3px 6px;">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteProgItem(${item._originalIndex})" title="Удалить награду" style="padding: 3px 6px;">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+}
+
+function openProgAddItemModal() {
+    progEditingIndex = -1;
+    const title = document.getElementById('modal-prog-title');
+    if (title) title.textContent = 'Добавление новой награды';
+
+    const delBtn = document.getElementById('btn-prog-modal-delete');
+    if (delBtn) delBtn.style.display = 'none';
+
+    document.getElementById('prog-field-name-ru').value = '';
+    document.getElementById('prog-field-name-en').value = '';
+    document.getElementById('prog-field-role').value = progActiveRole !== 'all' ? progActiveRole : 'career';
+    document.getElementById('prog-field-level').value = '1';
+    document.getElementById('prog-field-price').value = '1000';
+    document.getElementById('prog-field-unlock-cost').value = '1000';
+    document.getElementById('prog-field-unlock-id').value = '';
+    document.getElementById('prog-field-slug').value = '';
+    document.getElementById('prog-field-tab').value = 'weapons';
+    document.getElementById('prog-field-subcategory').value = '';
+    document.getElementById('prog-field-category-ru').value = '';
+    document.getElementById('prog-field-icon').value = 'static/wardogs/items/';
+    document.getElementById('prog-field-description').value = '';
+
+    updateProgIconPreview('static/wardogs/items/');
+
+    const modal = document.getElementById('modal-prog-item');
+    if (modal) modal.style.display = 'flex';
+}
+
+function openProgEditModal(index) {
+    if (!currentProgressionDB || !currentProgressionDB.unlocks || !currentProgressionDB.unlocks[index]) return;
+    progEditingIndex = index;
+    const item = currentProgressionDB.unlocks[index];
+
+    const title = document.getElementById('modal-prog-title');
+    if (title) title.textContent = `Редактирование: ${item.name_ru || item.name || 'Награда'}`;
+
+    const delBtn = document.getElementById('btn-prog-modal-delete');
+    if (delBtn) delBtn.style.display = 'inline-flex';
+
+    document.getElementById('prog-field-name-ru').value = item.name_ru || '';
+    document.getElementById('prog-field-name-en').value = item.name || '';
+    document.getElementById('prog-field-role').value = (item.role || 'career').toLowerCase();
+    document.getElementById('prog-field-level').value = item.level != null ? item.level : 0;
+    document.getElementById('prog-field-price').value = item.price != null ? item.price : 0;
+    document.getElementById('prog-field-unlock-cost').value = item.unlock_cost != null ? item.unlock_cost : 0;
+    document.getElementById('prog-field-unlock-id').value = item.unlock_id || '';
+    document.getElementById('prog-field-slug').value = item.slug || '';
+    document.getElementById('prog-field-tab').value = item.tab || '';
+    document.getElementById('prog-field-subcategory').value = item.subcategory || '';
+    document.getElementById('prog-field-category-ru').value = item.category_ru || '';
+    document.getElementById('prog-field-icon').value = item.icon || '';
+    document.getElementById('prog-field-description').value = item.description || '';
+
+    updateProgIconPreview(item.icon || '');
+
+    const modal = document.getElementById('modal-prog-item');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeProgItemModal() {
+    const modal = document.getElementById('modal-prog-item');
+    if (modal) modal.style.display = 'none';
+}
+
+function updateProgIconPreview(path) {
+    const img = document.getElementById('prog-field-icon-preview');
+    if (img) {
+        img.src = normalizeProgIconURL(path);
+    }
+}
+
+function saveProgModalItem() {
+    const nameRu = document.getElementById('prog-field-name-ru').value.trim();
+    const nameEn = document.getElementById('prog-field-name-en').value.trim();
+    const role = document.getElementById('prog-field-role').value.trim().toLowerCase();
+    const level = parseInt(document.getElementById('prog-field-level').value, 10) || 0;
+    const price = parseInt(document.getElementById('prog-field-price').value, 10) || 0;
+    const unlockCost = parseInt(document.getElementById('prog-field-unlock-cost').value, 10) || 0;
+    const unlockId = document.getElementById('prog-field-unlock-id').value.trim();
+    const slug = document.getElementById('prog-field-slug').value.trim();
+    const tab = document.getElementById('prog-field-tab').value.trim();
+    const subcategory = document.getElementById('prog-field-subcategory').value.trim();
+    const categoryRu = document.getElementById('prog-field-category-ru').value.trim();
+    const icon = document.getElementById('prog-field-icon').value.trim();
+    const description = document.getElementById('prog-field-description').value;
+
+    if (!nameRu && !nameEn) {
+        showToast('Укажите название предмета', 'error');
+        return;
+    }
+    if (!unlockId) {
+        showToast('Укажите уникальный Unlock ID (например: Id.Item.TCX_SPR)', 'error');
+        return;
+    }
+
+    let cleanIcon = icon;
+    if (cleanIcon.startsWith('/')) cleanIcon = cleanIcon.substring(1);
+    if (cleanIcon.startsWith('wardogs/')) {
+        cleanIcon = 'static/' + cleanIcon;
+    } else if (cleanIcon.startsWith('items/')) {
+        cleanIcon = 'static/wardogs/' + cleanIcon;
+    }
+
+    const itemObj = {
+        unlock_id: unlockId,
+        slug: slug || nameEn.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+        name: nameEn || nameRu,
+        name_ru: nameRu || nameEn,
+        role: role,
+        level: level,
+        total_xp: null,
+        tab: tab || 'weapons',
+        subcategory: subcategory,
+        category_ru: categoryRu || subcategory || 'Разблокировка',
+        price: price,
+        unlock_cost: unlockCost,
+        icon: cleanIcon,
+        image: '',
+        guide: '',
+        description: description,
+        specs: {}
+    };
+
+    if (progEditingIndex >= 0 && progEditingIndex < currentProgressionDB.unlocks.length) {
+        // Keep existing specs or other fields if present
+        const oldItem = currentProgressionDB.unlocks[progEditingIndex];
+        currentProgressionDB.unlocks[progEditingIndex] = {
+            ...oldItem,
+            ...itemObj
+        };
+        showToast(`Награда "${itemObj.name_ru}" обновлена в таблице`, 'success');
+    } else {
+        currentProgressionDB.unlocks.push(itemObj);
+        showToast(`Награда "${itemObj.name_ru}" добавлена в таблицу`, 'success');
+    }
+
+    currentProgressionDB.total_unlocks = currentProgressionDB.unlocks.length;
+    const totalBadge = document.getElementById('prog-total-badge');
+    if (totalBadge) totalBadge.textContent = `${currentProgressionDB.unlocks.length} наград`;
+
+    closeProgItemModal();
+    renderProgRoleTabs();
+    renderProgTable();
+}
+
+function duplicateProgItem(index) {
+    if (!currentProgressionDB || !currentProgressionDB.unlocks || !currentProgressionDB.unlocks[index]) return;
+    const orig = currentProgressionDB.unlocks[index];
+    const copy = JSON.parse(JSON.stringify(orig));
+
+    copy.unlock_id = copy.unlock_id + '_Copy';
+    copy.slug = copy.slug + '-copy';
+    copy.name_ru = copy.name_ru + ' (Копия)';
+    copy.name = copy.name + ' (Copy)';
+
+    currentProgressionDB.unlocks.splice(index + 1, 0, copy);
+    currentProgressionDB.total_unlocks = currentProgressionDB.unlocks.length;
+
+    const totalBadge = document.getElementById('prog-total-badge');
+    if (totalBadge) totalBadge.textContent = `${currentProgressionDB.unlocks.length} наград`;
+
+    showToast(`Награда скопирована как "${copy.name_ru}"`, 'success');
+    renderProgRoleTabs();
+    renderProgTable();
+}
+
+function deleteProgItem(index) {
+    if (!currentProgressionDB || !currentProgressionDB.unlocks || !currentProgressionDB.unlocks[index]) return;
+    const item = currentProgressionDB.unlocks[index];
+    if (!confirm(`Удалить награду "${item.name_ru || item.name}" (ID: ${item.unlock_id})?`)) return;
+
+    currentProgressionDB.unlocks.splice(index, 1);
+    currentProgressionDB.total_unlocks = currentProgressionDB.unlocks.length;
+
+    const totalBadge = document.getElementById('prog-total-badge');
+    if (totalBadge) totalBadge.textContent = `${currentProgressionDB.unlocks.length} наград`;
+
+    showToast(`Награда "${item.name_ru || item.name}" удалена из таблицы`, 'success');
+    renderProgRoleTabs();
+    renderProgTable();
+}
+
+function deleteCurrentProgModalItem() {
+    if (progEditingIndex >= 0) {
+        closeProgItemModal();
+        deleteProgItem(progEditingIndex);
+    }
+}
+
+async function saveProgressionDatabase() {
+    const btn = document.getElementById('btn-prog-save');
+    const originalHTML = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Сохранение и деплой...`;
+    }
+
+    try {
+        currentProgressionDB.total_unlocks = currentProgressionDB.unlocks.length;
+        if (Array.isArray(currentProgressionDB.catalog)) {
+            currentProgressionDB.total_catalog_items = currentProgressionDB.catalog.length;
+        }
+
+        const res = await fetchJSON('/api/v1/admin/progression/database', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(currentProgressionDB)
+        });
+
+        if (!res.success) {
+            throw new Error(res.error || 'Ошибка сохранения на сервере');
+        }
+
+        showToast(`База данных прокачки успешно сохранена (${res.total_unlocks} наград) и применена во всех клиентах!`, 'success');
+        const saveStatus = document.getElementById('prog-save-status');
+        if (saveStatus) {
+            saveStatus.textContent = `Синхронизировано: ${new Date().toLocaleTimeString('ru-RU')}`;
+        }
+    } catch (err) {
+        console.error('Failed to save progression database:', err);
+        showToast(err.message || 'Ошибка сохранения на сервере', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalHTML;
+        }
+    }
+}
+
+function toggleProgJSONView() {
+    const tableWrap = document.getElementById('prog-table-wrap');
+    const jsonWrap = document.getElementById('prog-json-wrap');
+    const toggleText = document.getElementById('prog-json-toggle-text');
+    const textarea = document.getElementById('prog-raw-json-textarea');
+
+    progRawJSONVisible = !progRawJSONVisible;
+
+    if (progRawJSONVisible) {
+        if (tableWrap) tableWrap.style.display = 'none';
+        if (jsonWrap) jsonWrap.style.display = 'block';
+        if (toggleText) toggleText.textContent = 'Табличный режим';
+        if (textarea) textarea.value = JSON.stringify(currentProgressionDB, null, 2);
+    } else {
+        if (tableWrap) tableWrap.style.display = 'block';
+        if (jsonWrap) jsonWrap.style.display = 'none';
+        if (toggleText) toggleText.textContent = 'JSON режим';
+    }
+}
+
+function applyProgRawJSON() {
+    const textarea = document.getElementById('prog-raw-json-textarea');
+    if (!textarea) return;
+
+    try {
+        const parsed = JSON.parse(textarea.value);
+        if (!parsed || !Array.isArray(parsed.unlocks)) {
+            throw new Error('JSON должен содержать массив "unlocks"');
+        }
+        currentProgressionDB = parsed;
+        currentProgressionDB.total_unlocks = parsed.unlocks.length;
+
+        const totalBadge = document.getElementById('prog-total-badge');
+        if (totalBadge) totalBadge.textContent = `${currentProgressionDB.unlocks.length} наград`;
+
+        showToast(`JSON успешно применен в таблицу (${parsed.unlocks.length} наград)`, 'success');
+        toggleProgJSONView();
+        renderProgRoleTabs();
+        renderProgTable();
+    } catch (err) {
+        showToast('Ошибка синтаксиса JSON: ' + err.message, 'error');
+    }
+}
+
+function formatProgRawJSON() {
+    const textarea = document.getElementById('prog-raw-json-textarea');
+    if (!textarea) return;
+    try {
+        const parsed = JSON.parse(textarea.value);
+        textarea.value = JSON.stringify(parsed, null, 2);
+        showToast('JSON отформатирован', 'success');
+    } catch (err) {
+        showToast('Невозможно отформатировать: ошибка в JSON', 'error');
+    }
+}
+
+function exportProgressionJSON() {
+    try {
+        const str = JSON.stringify(currentProgressionDB, null, 2);
+        const blob = new Blob([str], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `progression_db_${new Date().toISOString().slice(0,10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('Экспорт progression_db.json завершен', 'success');
+    } catch (err) {
+        showToast('Ошибка экспорта: ' + err.message, 'error');
+    }
+}
+
+function importProgressionJSON(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = JSON.parse(e.target.result);
+            if (!data || !Array.isArray(data.unlocks)) {
+                throw new Error('Файл не содержит массив "unlocks"');
+            }
+            currentProgressionDB = data;
+            currentProgressionDB.total_unlocks = data.unlocks.length;
+
+            const totalBadge = document.getElementById('prog-total-badge');
+            if (totalBadge) totalBadge.textContent = `${currentProgressionDB.unlocks.length} наград`;
+
+            renderProgRoleTabs();
+            renderProgTable();
+            showToast(`Успешно импортировано ${data.unlocks.length} наград из файла`, 'success');
+        } catch (err) {
+            showToast('Ошибка импорта: ' + err.message, 'error');
+        }
+        event.target.value = '';
+    };
+    reader.readAsText(file);
+}
+
+// -----------------------------------------------------------------------------
+// Icon Picker modal integrating with Static CDN
+// -----------------------------------------------------------------------------
+async function openProgIconPicker() {
+    const modal = document.getElementById('modal-prog-icon-picker');
+    if (modal) modal.style.display = 'flex';
+    await loadProgIconPickerFolder('wardogs/items');
+}
+
+function closeProgIconPicker() {
+    const modal = document.getElementById('modal-prog-icon-picker');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadProgIconPickerFolder(folder) {
+    const grid = document.getElementById('prog-icon-picker-grid');
+    if (grid) grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;">Загрузка списка иконок...</div>';
+
+    try {
+        const data = await fetchJSON(`/api/v1/admin/static/files?path=${encodeURIComponent(folder)}`);
+        if (data && Array.isArray(data.files)) {
+            progIconPickerCache = data.files.filter(f => !f.is_dir && f.is_image);
+            renderProgIconPickerGrid(progIconPickerCache);
+        } else {
+            throw new Error('Не удалось получить список ассетов');
+        }
+    } catch (err) {
+        console.error('Failed to load icon picker files:', err);
+        if (grid) grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;">Ошибка: ${err.message}</div>`;
+    }
+}
+
+function filterProgIconPicker() {
+    const search = document.getElementById('prog-icon-picker-search').value.trim().toLowerCase();
+    const filtered = progIconPickerCache.filter(f => f.name.toLowerCase().includes(search));
+    renderProgIconPickerGrid(filtered);
+}
+
+function renderProgIconPickerGrid(files) {
+    const grid = document.getElementById('prog-icon-picker-grid');
+    if (!grid) return;
+
+    if (!files || files.length === 0) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 20px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px;">Иконки не найдены</div>';
+        return;
+    }
+
+    grid.innerHTML = files.map(f => {
+        const fullRelPath = 'static/' + f.path;
+        const imgUrl = f.url || f.cdn_url || ('https://static-warlink.max-alekseyev.com/static/' + f.path);
+        return `
+            <div class="prog-icon-picker-card" onclick="selectProgIcon('${fullRelPath}')" title="${f.name}">
+                <img src="${imgUrl}" alt="${f.name}" loading="lazy" onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'48\\' height=\\'48\\'%3E%3Crect width=\\'48\\' height=\\'48\\' fill=\\'%231a1a1a\\'/ %3E%3C/svg%3E'">
+                <span class="name">${f.name}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function selectProgIcon(path) {
+    const input = document.getElementById('prog-field-icon');
+    if (input) {
+        input.value = path;
+        updateProgIconPreview(path);
+    }
+    closeProgIconPicker();
+    showToast(`Выбрана иконка: ${path.split('/').pop()}`, 'success');
+}
+
 

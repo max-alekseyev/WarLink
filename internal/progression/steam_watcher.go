@@ -175,6 +175,67 @@ func (w *SteamWatcher) Start(ctx context.Context) {
 	}
 }
 
+// CheckLatest scans for the newest screenshot across discovered Steam folders.
+// If valid and acceptable, it invokes onSuccess. This allows recovering the most recent
+// screenshot without requiring another F12 press in game.
+func (w *SteamWatcher) CheckLatest() {
+	w.mu.Lock()
+	dirs := append([]string(nil), w.dirs...)
+	w.mu.Unlock()
+
+	if len(dirs) == 0 {
+		return
+	}
+
+	var newestPath string
+	var newestTime int64
+
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			lower := strings.ToLower(e.Name())
+			if !strings.HasSuffix(lower, ".jpg") && !strings.HasSuffix(lower, ".png") {
+				continue
+			}
+			fPath := filepath.Join(d, e.Name())
+			fi, err := e.Info()
+			if err != nil {
+				continue
+			}
+			t := fi.ModTime().UnixNano()
+			if t > newestTime && fi.Size() >= 20*1024 {
+				newestTime = t
+				newestPath = fPath
+			}
+		}
+	}
+
+	if newestPath == "" {
+		return
+	}
+
+	res, parseErr := ParseScreenshotFile(newestPath)
+	if parseErr != nil {
+		return
+	}
+
+	isAcceptable := res != nil && (res.Valid || (res.CareerLevel > 0 && res.SumRoles > 0 && math.Abs(float64(res.CareerLevel-res.SumRoles)) <= 2))
+	if isAcceptable && res.CareerLevel > 0 {
+		if w.logger != nil {
+			w.logger("[STEAM-F12] Автоматическая синхронизация свежего снимка: %s (Карьера=%d, сумма ролей=%d). Применяю...", filepath.Base(newestPath), res.CareerLevel, res.SumRoles)
+		}
+		if w.onSuccess != nil {
+			w.onSuccess(res, newestPath)
+		}
+	}
+}
+
 func (w *SteamWatcher) scanOnce() {
 	w.mu.Lock()
 	dirs := append([]string(nil), w.dirs...)

@@ -1,0 +1,1317 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WarLink // Редактор базы данных прогрессии WARDOGS</title>
+    <style>
+        :root {
+            --bg-base: #111111;
+            --bg-surface: #161616;
+            --bg-elevated: #1e1e1e;
+            --bg-hover: #262626;
+            --border: #2a2a2a;
+            --border-focus: #3e3e3e;
+            --primary: #FF5E1F;
+            --primary-hover: #e04f16;
+            --text-main: #f0f0f0;
+            --text-muted: #888888;
+            --text-dim: #555555;
+            --success: #00e676;
+            --danger: #ef5350;
+            --radius: 2px;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: "JetBrains Mono", Consolas, "SF Mono", monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            line-height: 1.4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Top Header */
+        header {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-badge {
+            background: var(--primary);
+            color: #ffffff;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: 11px;
+            padding: 3px 6px;
+            border-radius: var(--radius);
+            letter-spacing: 0.5px;
+        }
+
+        .header-title {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--text-main);
+        }
+
+        .header-version {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-elevated);
+            padding: 2px 6px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Buttons */
+        .btn {
+            background: var(--bg-elevated);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 600;
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.15s, border-color 0.15s;
+            user-select: none;
+        }
+
+        .btn:hover {
+            background: var(--bg-hover);
+            border-color: var(--border-focus);
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #ffffff;
+            border-color: var(--primary);
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+
+        .btn-success {
+            background: #153322;
+            color: var(--success);
+            border-color: #1e5233;
+        }
+
+        .btn-success:hover {
+            background: #1b442c;
+        }
+
+        .btn-danger {
+            background: #331515;
+            color: var(--danger);
+            border-color: #521e1e;
+        }
+
+        .btn-danger:hover {
+            background: #441b1b;
+        }
+
+        .btn svg {
+            width: 14px;
+            height: 14px;
+            stroke-width: 2.2;
+        }
+
+        /* Stats & Filter Bar */
+        .toolbar {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 8px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .role-tabs {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            overflow-x: auto;
+        }
+
+        .role-tab {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid transparent;
+            padding: 4px 10px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s;
+        }
+
+        .role-tab:hover {
+            color: var(--text-main);
+            background: var(--bg-elevated);
+        }
+
+        .role-tab.active {
+            color: #ffffff;
+            background: var(--bg-elevated);
+            border-color: var(--primary);
+        }
+
+        .tab-badge {
+            font-size: 10px;
+            background: var(--bg-base);
+            padding: 1px 5px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+        }
+
+        .role-tab.active .tab-badge {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .search-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .search-input-wrap {
+            position: relative;
+            flex: 1;
+        }
+
+        .search-input-wrap svg {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            width: 14px;
+            height: 14px;
+        }
+
+        .search-input {
+            width: 100%;
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            padding: 6px 10px 6px 32px;
+            border-radius: var(--radius);
+            outline: none;
+        }
+
+        .search-input:focus {
+            border-color: var(--primary);
+        }
+
+        .select-filter {
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: var(--radius);
+            outline: none;
+            cursor: pointer;
+        }
+
+        .select-filter:focus {
+            border-color: var(--primary);
+        }
+
+        /* Main Content Container */
+        main {
+            flex: 1;
+            overflow: auto;
+            position: relative;
+        }
+
+        /* Table */
+        .table-wrap {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        thead {
+            position: sticky;
+            top: 0;
+            background: var(--bg-surface);
+            z-index: 10;
+            border-bottom: 2px solid var(--border);
+        }
+
+        th {
+            text-align: left;
+            padding: 8px 12px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            user-select: none;
+            white-space: nowrap;
+        }
+
+        tbody tr {
+            border-bottom: 1px solid var(--border);
+            transition: background 0.1s;
+        }
+
+        tbody tr:hover {
+            background: var(--bg-surface);
+        }
+
+        td {
+            padding: 6px 12px;
+            vertical-align: middle;
+        }
+
+        .td-lvl {
+            width: 60px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            color: #ffb74d;
+        }
+
+        .lvl-badge {
+            display: inline-block;
+            background: #2b2010;
+            border: 1px solid #5a3d15;
+            color: #ffb74d;
+            padding: 2px 6px;
+            border-radius: var(--radius);
+            text-align: center;
+            min-width: 32px;
+        }
+
+        .td-role {
+            width: 100px;
+        }
+
+        .role-pill {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: var(--radius);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: inline-block;
+            white-space: nowrap;
+        }
+
+        .role-career { background: #261b0a; color: #ffb74d; border: 1px solid #4d3314; }
+        .role-assault { background: #291212; color: #ef5350; border: 1px solid #5c1e1e; }
+        .role-medic { background: #0e291b; color: #00e676; border: 1px solid #175234; }
+        .role-recon { background: #0f2336; color: #29b6f6; border: 1px solid #18446b; }
+        .role-support { background: #271433; color: #ab47bc; border: 1px solid #541d70; }
+        .role-driver { background: #2e280d; color: #ffca28; border: 1px solid #574a12; }
+        .role-pilot { background: #0c2b2e; color: #26c6da; border: 1px solid #13565c; }
+
+        .td-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .item-icon {
+            width: 34px;
+            height: 34px;
+            object-fit: contain;
+            background: #0d0d0d;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 2px;
+            flex-shrink: 0;
+        }
+
+        .item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .item-name-ru {
+            font-weight: 600;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .item-name-en {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .td-id {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            max-width: 140px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .td-cat {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .td-price {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: var(--success);
+            white-space: nowrap;
+        }
+
+        .td-cost {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: #ffd54f;
+            white-space: nowrap;
+        }
+
+        .td-actions {
+            text-align: right;
+            white-space: nowrap;
+            width: 100px;
+        }
+
+        .btn-action-icon {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--text-muted);
+            padding: 4px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .btn-action-icon:hover {
+            color: var(--text-main);
+            background: var(--bg-elevated);
+            border-color: var(--border);
+        }
+
+        .btn-action-icon.danger:hover {
+            color: var(--danger);
+            background: #331515;
+            border-color: #521e1e;
+        }
+
+        .btn-action-icon svg {
+            width: 14px;
+            height: 14px;
+            stroke-width: 2.2;
+        }
+
+        /* Modal Overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            backdrop-filter: blur(2px);
+        }
+
+        .modal {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-focus);
+            border-radius: var(--radius);
+            width: 680px;
+            max-width: 95vw;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .modal-header {
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .modal-title {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--text-main);
+        }
+
+        .modal-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: inline-flex;
+            padding: 4px;
+            border-radius: var(--radius);
+        }
+
+        .modal-close:hover {
+            color: var(--text-main);
+            background: var(--bg-elevated);
+        }
+
+        .modal-body {
+            padding: 16px 18px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .form-full {
+            grid-column: span 2;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-label {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .form-control {
+            background: var(--bg-base);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: var(--radius);
+            outline: none;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary);
+        }
+
+        textarea.form-control {
+            resize: vertical;
+            min-height: 60px;
+            font-family: var(--font-sans);
+            font-size: 12px;
+        }
+
+        .modal-footer {
+            padding: 12px 18px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-surface);
+        }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--primary);
+            color: var(--text-main);
+            padding: 10px 16px;
+            border-radius: var(--radius);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            display: none;
+            align-items: center;
+            gap: 8px;
+            z-index: 200;
+            animation: fadeIn 0.2s;
+        }
+
+        .toast.success {
+            border-color: var(--success);
+        }
+
+        .toast.error {
+            border-color: var(--danger);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Status bar */
+        footer {
+            background: var(--bg-surface);
+            border-top: 1px solid var(--border);
+            padding: 6px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .status-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header>
+        <div class="header-left">
+            <span class="logo-badge">WARLINK</span>
+            <span class="header-title">PROGRESSION DATABASE // SEASON 2</span>
+            <span class="header-version" id="db-version-badge">v2.0.0</span>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-primary" onclick="openAddItemModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Добавить предмет</span>
+            </button>
+            <button class="btn btn-success" onclick="saveDatabaseToDisk()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                <span>Сохранить на диск</span>
+            </button>
+            <button class="btn" onclick="exportJSONFile()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                <span>Экспорт JSON</span>
+            </button>
+            <button class="btn" onclick="document.getElementById('import-file-input').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                <span>Импорт JSON</span>
+            </button>
+            <input type="file" id="import-file-input" accept=".json" style="display:none;" onchange="importJSONFile(event)">
+            <button class="btn" onclick="syncWithMasterVPS()" title="Синхронизировать базу с сервером Стокгольм">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                <span>Деплой на VPS</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Toolbar: Role Tabs & Search -->
+    <div class="toolbar">
+        <div class="role-tabs" id="role-tabs-container">
+            <!-- Tabs rendered dynamically -->
+        </div>
+        <div class="search-row">
+            <div class="search-input-wrap">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input type="text" id="search-input" class="search-input" placeholder="Поиск по названию, ID, модулю, роли..." oninput="onSearchChange(event)">
+            </div>
+            <select id="tab-filter-select" class="select-filter" onchange="onTabFilterChange(event)">
+                <option value="">Все типы</option>
+                <option value="weapons">Оружие (weapons)</option>
+                <option value="attachments">Модули (attachments)</option>
+                <option value="gear">Снаряжение (gear)</option>
+                <option value="vehicles">Техника (vehicles)</option>
+                <option value="equipment">Экипировка (equipment)</option>
+            </select>
+            <select id="sort-select" class="select-filter" onchange="onSortChange(event)">
+                <option value="lvl_asc">Уровень: по возрастанию</option>
+                <option value="lvl_desc">Уровень: по убыванию</option>
+                <option value="price_asc">Цена: дешевле</option>
+                <option value="price_desc">Цена: дороже</option>
+                <option value="name_asc">Название: А-Я</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Main Table -->
+    <main>
+        <table class="table-wrap">
+            <thead>
+                <tr>
+                    <th style="width: 50px;">УР.</th>
+                    <th style="width: 100px;">РОЛЬ</th>
+                    <th>НАГРАДА</th>
+                    <th>ID / SLUG</th>
+                    <th>КАТЕГОРИЯ</th>
+                    <th>ЦЕНА В ИГРЕ</th>
+                    <th>ОЧКИ РАЗБЛОКИРОВКИ</th>
+                    <th style="text-align: right; width: 100px;">ДЕЙСТВИЯ</th>
+                </tr>
+            </thead>
+            <tbody id="items-tbody">
+                <!-- Rows rendered dynamically -->
+            </tbody>
+        </table>
+    </main>
+
+    <!-- Status Bar -->
+    <footer>
+        <div class="status-left">
+            <span><span class="status-dot"></span> <span id="status-storage-info">Локальная база данных</span></span>
+            <span id="status-counts">Всего наград: 0 | Отфильтровано: 0</span>
+        </div>
+        <div class="status-right">
+            <span id="status-timestamp">Последнее сохранение: —</span>
+        </div>
+    </footer>
+
+    <!-- Item Edit / Add Modal -->
+    <div class="modal-overlay" id="item-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title" id="modal-title">РЕДАКТИРОВАНИЕ ПРЕДМЕТА</span>
+                <button class="modal-close" onclick="closeModal()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">Название (RU):</label>
+                        <input type="text" id="field-name-ru" class="form-control" placeholder="Штурмовая винтовка TCX-SPR">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Название (EN):</label>
+                        <input type="text" id="field-name-en" class="form-control" placeholder="TCX-SPR">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Роль:</label>
+                        <select id="field-role" class="form-control">
+                            <option value="career">Карьера (career)</option>
+                            <option value="assault">Штурмовик (assault)</option>
+                            <option value="medic">Медик (medic)</option>
+                            <option value="recon">Разведчик (recon)</option>
+                            <option value="support">Поддержка (support)</option>
+                            <option value="driver">Водитель (driver)</option>
+                            <option value="pilot">Пилот (pilot)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Уровень разблокировки:</label>
+                        <input type="number" id="field-level" class="form-control" min="0" max="100" value="1">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Цена в игре ($):</label>
+                        <input type="number" id="field-price" class="form-control" min="0" value="1000">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Очки разблокировки (Unlock Cost):</label>
+                        <input type="number" id="field-unlock-cost" class="form-control" min="0" value="10000">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Unlock ID:</label>
+                        <input type="text" id="field-unlock-id" class="form-control" placeholder="Id.Item.TCX_SPR">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Slug:</label>
+                        <input type="text" id="field-slug" class="form-control" placeholder="tcx-spr">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Вкладка (tab):</label>
+                        <input type="text" id="field-tab" class="form-control" placeholder="weapons">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Подкатегория (subcategory):</label>
+                        <input type="text" id="field-subcategory" class="form-control" placeholder="Assault Rifles">
+                    </div>
+
+                    <div class="form-group form-full">
+                        <label class="form-label">Категория (RU):</label>
+                        <input type="text" id="field-category-ru" class="form-control" placeholder="Штурмовые винтовки">
+                    </div>
+
+                    <div class="form-group form-full">
+                        <label class="form-label">Путь к иконке (Icon):</label>
+                        <input type="text" id="field-icon" class="form-control" placeholder="static/wardogs/items/tcx_spr.webp">
+                    </div>
+
+                    <div class="form-group form-full">
+                        <label class="form-label">Описание предмета (характеристики, калибр, магазин):</label>
+                        <textarea id="field-description" class="form-control" placeholder="- 7.62x39mm ammo&#10;- 28 Rounds"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger" id="btn-modal-delete" onclick="deleteCurrentModalItem()" style="display:none;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                    <span>Удалить</span>
+                </button>
+                <div style="display:flex; gap: 8px; margin-left: auto;">
+                    <button class="btn" onclick="closeModal()">Отмена</button>
+                    <button class="btn btn-primary" onclick="saveModalItem()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        <span>Применить</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">
+        <span id="toast-text">Изменения сохранены</span>
+    </div>
+
+    <script>
+        // State
+        let currentDB = {
+            version: "2.0.0",
+            source: "MetaForge.app/wardogs",
+            total_unlocks: 0,
+            roles: ["career", "assault", "medic", "recon", "support", "driver", "pilot"],
+            unlocks: [],
+            catalog: []
+        };
+
+        let activeRoleFilter = "all";
+        let activeTabFilter = "";
+        let searchTerm = "";
+        let activeSort = "lvl_asc";
+        let editingIndex = -1; // -1 means adding new item
+
+        const ROLES = [
+            { id: "all", label: "Все ветки" },
+            { id: "career", label: "Карьера" },
+            { id: "assault", label: "Штурмовик" },
+            { id: "medic", label: "Медик" },
+            { id: "recon", label: "Разведчик" },
+            { id: "support", label: "Поддержка" },
+            { id: "driver", label: "Водитель" },
+            { id: "pilot", label: "Пилот" }
+        ];
+
+        // Init
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadInitialData();
+            renderRoleTabs();
+            renderTable();
+        });
+
+        async function loadInitialData() {
+            // First check if server API /api/db is available (when served by python)
+            try {
+                const resp = await fetch('/api/db');
+                if (resp.ok) {
+                    currentDB = await resp.json();
+                    showToast('База данных успешно загружена из progression_db.json', 'success');
+                    updateStatusStorage('Серверный режим (активна автосинхронизация)');
+                    return;
+                }
+            } catch (e) {
+                // Standalone mode or direct file
+            }
+
+            // Fallback: check localStorage
+            const localSaved = localStorage.getItem('wl_progression_db_edit');
+            if (localSaved) {
+                try {
+                    currentDB = JSON.parse(localSaved);
+                    updateStatusStorage('Хранилище браузера (localStorage)');
+                    return;
+                } catch (e) {}
+            }
+
+            // Fallback: fetch relative progression_db.json
+            try {
+                const resp = await fetch('../internal/progression/progression_db.json');
+                if (resp.ok) {
+                    currentDB = await resp.json();
+                    updateStatusStorage('Загружено из локального JSON');
+                    return;
+                }
+            } catch (e) {}
+        }
+
+        function updateStatusStorage(txt) {
+            document.getElementById('status-storage-info').textContent = txt;
+            document.getElementById('db-version-badge').textContent = 'v' + (currentDB.version || '2.0.0');
+        }
+
+        function renderRoleTabs() {
+            const container = document.getElementById('role-tabs-container');
+            const counts = {};
+            for (const r of currentDB.roles || []) counts[r] = 0;
+            for (const it of currentDB.unlocks || []) {
+                const r = (it.role || 'career').toLowerCase();
+                counts[r] = (counts[r] || 0) + 1;
+            }
+
+            let html = '';
+            for (const r of ROLES) {
+                const count = r.id === 'all' ? (currentDB.unlocks || []).length : (counts[r.id] || 0);
+                const activeCls = activeRoleFilter === r.id ? 'active' : '';
+                html += `
+                    <button class="role-tab ${activeCls}" onclick="setRoleFilter('${r.id}')">
+                        <span>${r.label}</span>
+                        <span class="tab-badge">${count}</span>
+                    </button>
+                `;
+            }
+            container.innerHTML = html;
+        }
+
+        function setRoleFilter(role) {
+            activeRoleFilter = role;
+            renderRoleTabs();
+            renderTable();
+        }
+
+        function onSearchChange(e) {
+            searchTerm = e.target.value.trim().toLowerCase();
+            renderTable();
+        }
+
+        function onTabFilterChange(e) {
+            activeTabFilter = e.target.value;
+            renderTable();
+        }
+
+        function onSortChange(e) {
+            activeSort = e.target.value;
+            renderTable();
+        }
+
+        function getFilteredItems() {
+            let items = (currentDB.unlocks || []).map((it, idx) => ({ ...it, _originalIndex: idx }));
+
+            // Role filter
+            if (activeRoleFilter !== 'all') {
+                items = items.filter(it => (it.role || '').toLowerCase() === activeRoleFilter);
+            }
+
+            // Tab filter
+            if (activeTabFilter) {
+                items = items.filter(it => (it.tab || '').toLowerCase() === activeTabFilter);
+            }
+
+            // Search filter
+            if (searchTerm) {
+                items = items.filter(it => {
+                    const nameEn = (it.name || '').toLowerCase();
+                    const nameRu = (it.name_ru || '').toLowerCase();
+                    const id = (it.unlock_id || '').toLowerCase();
+                    const slug = (it.slug || '').toLowerCase();
+                    const cat = (it.category_ru || it.subcategory || '').toLowerCase();
+                    const desc = (it.description || '').toLowerCase();
+                    return nameEn.includes(searchTerm) || nameRu.includes(searchTerm) || id.includes(searchTerm) || slug.includes(searchTerm) || cat.includes(searchTerm) || desc.includes(searchTerm);
+                });
+            }
+
+            // Sort
+            items.sort((a, b) => {
+                if (activeSort === 'lvl_asc') return (a.level || 0) - (b.level || 0);
+                if (activeSort === 'lvl_desc') return (b.level || 0) - (a.level || 0);
+                if (activeSort === 'price_asc') return (a.price || 0) - (b.price || 0);
+                if (activeSort === 'price_desc') return (b.price || 0) - (a.price || 0);
+                if (activeSort === 'name_asc') return (a.name_ru || a.name || '').localeCompare(b.name_ru || b.name || '');
+                return 0;
+            });
+
+            return items;
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('items-tbody');
+            const items = getFilteredItems();
+
+            document.getElementById('status-counts').textContent = 
+                `Всего наград: ${(currentDB.unlocks || []).length} | Отфильтровано: ${items.length}`;
+
+            if (items.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 40px; color: var(--text-muted); font-family: var(--font-mono);">Ничего не найдено по заданным параметрам</td></tr>`;
+                return;
+            }
+
+            let html = '';
+            for (const it of items) {
+                const roleClass = `role-${(it.role || 'career').toLowerCase()}`;
+                const priceFormatted = it.price ? '$' + Number(it.price).toLocaleString('en-US') : '—';
+                const costFormatted = it.unlock_cost ? Number(it.unlock_cost).toLocaleString('en-US') : '0';
+                const iconSrc = it.icon ? it.icon : 'wardogs_icon.png';
+                const catText = it.category_ru || it.subcategory || it.tab || '—';
+
+                html += `
+                    <tr>
+                        <td class="td-lvl">
+                            <span class="lvl-badge">${it.level}</span>
+                        </td>
+                        <td class="td-role">
+                            <span class="role-pill ${roleClass}">${it.role || 'career'}</span>
+                        </td>
+                        <td>
+                            <div class="td-item">
+                                <img class="item-icon" src="${escapeHtml(iconSrc)}" alt="${escapeHtml(it.name)}" onerror="this.src='https://placehold.co/34x34/222/fff?text=?'">
+                                <div class="item-info">
+                                    <span class="item-name-ru">${escapeHtml(it.name_ru || it.name)}</span>
+                                    <span class="item-name-en">${escapeHtml(it.name || '')}</span>
+                                </div>
+                            </div>
+                        </td>
+                        <td class="td-id" title="${escapeHtml(it.unlock_id || it.slug)}">${escapeHtml(it.unlock_id || it.slug)}</td>
+                        <td class="td-cat">${escapeHtml(catText)}</td>
+                        <td class="td-price">${priceFormatted}</td>
+                        <td class="td-cost">${costFormatted}</td>
+                        <td class="td-actions">
+                            <button class="btn-action-icon" title="Редактировать" onclick="openEditItemModal(${it._originalIndex})">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                            </button>
+                            <button class="btn-action-icon" title="Дублировать" onclick="cloneItem(${it._originalIndex})">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            </button>
+                            <button class="btn-action-icon danger" title="Удалить" onclick="deleteItem(${it._originalIndex})">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }
+            tbody.innerHTML = html;
+        }
+
+        // Modal Controls
+        function openAddItemModal() {
+            editingIndex = -1;
+            document.getElementById('modal-title').textContent = 'ДОБАВЛЕНИЕ НОВОГО ПРЕДМЕТА';
+            document.getElementById('btn-modal-delete').style.display = 'none';
+
+            document.getElementById('field-name-ru').value = '';
+            document.getElementById('field-name-en').value = '';
+            document.getElementById('field-role').value = activeRoleFilter !== 'all' ? activeRoleFilter : 'career';
+            document.getElementById('field-level').value = '1';
+            document.getElementById('field-price').value = '1000';
+            document.getElementById('field-unlock-cost').value = '10000';
+            document.getElementById('field-unlock-id').value = '';
+            document.getElementById('field-slug').value = '';
+            document.getElementById('field-tab').value = 'weapons';
+            document.getElementById('field-subcategory').value = 'Assault Rifles';
+            document.getElementById('field-category-ru').value = '';
+            document.getElementById('field-icon').value = 'static/wardogs/items/';
+            document.getElementById('field-description').value = '';
+
+            document.getElementById('item-modal').style.display = 'flex';
+        }
+
+        function openEditItemModal(idx) {
+            editingIndex = idx;
+            const item = currentDB.unlocks[idx];
+            if (!item) return;
+
+            document.getElementById('modal-title').textContent = 'РЕДАКТИРОВАНИЕ: ' + (item.name_ru || item.name);
+            document.getElementById('btn-modal-delete').style.display = 'inline-flex';
+
+            document.getElementById('field-name-ru').value = item.name_ru || '';
+            document.getElementById('field-name-en').value = item.name || '';
+            document.getElementById('field-role').value = (item.role || 'career').toLowerCase();
+            document.getElementById('field-level').value = item.level !== undefined ? item.level : 1;
+            document.getElementById('field-price').value = item.price !== undefined ? item.price : 0;
+            document.getElementById('field-unlock-cost').value = item.unlock_cost !== undefined ? item.unlock_cost : 0;
+            document.getElementById('field-unlock-id').value = item.unlock_id || '';
+            document.getElementById('field-slug').value = item.slug || '';
+            document.getElementById('field-tab').value = item.tab || '';
+            document.getElementById('field-subcategory').value = item.subcategory || '';
+            document.getElementById('field-category-ru').value = item.category_ru || '';
+            document.getElementById('field-icon').value = item.icon || '';
+            document.getElementById('field-description').value = item.description || '';
+
+            document.getElementById('item-modal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('item-modal').style.display = 'none';
+        }
+
+        function saveModalItem() {
+            const nameEn = document.getElementById('field-name-en').value.trim();
+            const nameRu = document.getElementById('field-name-ru').value.trim();
+            const role = document.getElementById('field-role').value;
+            const level = parseInt(document.getElementById('field-level').value) || 0;
+            const price = parseInt(document.getElementById('field-price').value) || 0;
+            const unlockCost = parseInt(document.getElementById('field-unlock-cost').value) || 0;
+            let unlockId = document.getElementById('field-unlock-id').value.trim();
+            let slug = document.getElementById('field-slug').value.trim();
+            const tab = document.getElementById('field-tab').value.trim();
+            const subcat = document.getElementById('field-subcategory').value.trim();
+            const catRu = document.getElementById('field-category-ru').value.trim();
+            const icon = document.getElementById('field-icon').value.trim();
+            const desc = document.getElementById('field-description').value.trim();
+
+            if (!nameEn && !nameRu) {
+                alert('Укажите название предмета!');
+                return;
+            }
+
+            if (!slug) {
+                slug = (nameEn || nameRu).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            }
+            if (!unlockId) {
+                unlockId = 'Id.Item.' + slug.replace(/-/g, '_');
+            }
+
+            const itemData = {
+                unlock_id: unlockId,
+                slug: slug,
+                name: nameEn || nameRu,
+                name_ru: nameRu || nameEn,
+                role: role,
+                level: level,
+                total_xp: null,
+                tab: tab || 'weapons',
+                subcategory: subcat || 'General',
+                category_ru: catRu || subcat || 'Предмет',
+                price: price,
+                unlock_cost: unlockCost,
+                icon: icon,
+                image: "",
+                guide: "",
+                description: desc,
+                specs: {}
+            };
+
+            if (editingIndex >= 0) {
+                // Update existing
+                currentDB.unlocks[editingIndex] = { ...currentDB.unlocks[editingIndex], ...itemData };
+                showToast(`Предмет «${itemData.name_ru}» обновлен`, 'success');
+            } else {
+                // Append new
+                currentDB.unlocks.push(itemData);
+                showToast(`Предмет «${itemData.name_ru}» добавлен в базу`, 'success');
+            }
+
+            currentDB.total_unlocks = currentDB.unlocks.length;
+            persistLocalBackup();
+            closeModal();
+            renderRoleTabs();
+            renderTable();
+        }
+
+        function cloneItem(idx) {
+            const item = currentDB.unlocks[idx];
+            if (!item) return;
+
+            const cloned = JSON.parse(JSON.stringify(item));
+            cloned.name = (cloned.name || '') + ' (Copy)';
+            cloned.name_ru = (cloned.name_ru || '') + ' (Копия)';
+            cloned.slug = (cloned.slug || '') + '-copy';
+            cloned.unlock_id = (cloned.unlock_id || '') + '_copy';
+
+            currentDB.unlocks.push(cloned);
+            currentDB.total_unlocks = currentDB.unlocks.length;
+            persistLocalBackup();
+            showToast(`Создана копия «${cloned.name_ru}»`, 'success');
+            renderRoleTabs();
+            renderTable();
+        }
+
+        function deleteItem(idx) {
+            const item = currentDB.unlocks[idx];
+            if (!item) return;
+            if (!confirm(`Удалить «${item.name_ru || item.name}» из базы?`)) return;
+
+            currentDB.unlocks.splice(idx, 1);
+            currentDB.total_unlocks = currentDB.unlocks.length;
+            persistLocalBackup();
+            showToast(`Предмет удален`, 'success');
+            renderRoleTabs();
+            renderTable();
+        }
+
+        function deleteCurrentModalItem() {
+            if (editingIndex >= 0) {
+                deleteItem(editingIndex);
+                closeModal();
+            }
+        }
+
+        function persistLocalBackup() {
+            try {
+                localStorage.setItem('wl_progression_db_edit', JSON.stringify(currentDB));
+                document.getElementById('status-timestamp').textContent = 'Локально изменено: ' + new Date().toLocaleTimeString();
+            } catch (e) {}
+        }
+
+        // Disk Save (via local python HTTP API)
+        async function saveDatabaseToDisk() {
+            try {
+                const resp = await fetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentDB)
+                });
+                if (resp.ok) {
+                    const result = await resp.json();
+                    showToast('Успешно сохранено в internal/progression/progression_db.json!', 'success');
+                    document.getElementById('status-timestamp').textContent = 'Сохранено на диск: ' + new Date().toLocaleTimeString();
+                } else {
+                    throw new Error('Server returned ' + resp.status);
+                }
+            } catch (e) {
+                // If python server is not running, offer download
+                console.warn('POST /api/save failed, offering manual download:', e);
+                exportJSONFile();
+                showToast('Сервер недоступен. Скачан обновленный файл progression_db.json', 'success');
+            }
+        }
+
+        // Deploy to VPS
+        async function syncWithMasterVPS() {
+            if (!confirm('Отправить текущую базу progression_db.json на боевой сервер Стокгольм?')) return;
+            try {
+                showToast('Синхронизация с VPS Стокгольм...', '');
+                const resp = await fetch('/api/deploy', { method: 'POST' });
+                if (resp.ok) {
+                    showToast('База данных успешно развернута на сервере Стокгольм!', 'success');
+                } else {
+                    throw new Error('Deploy failed: ' + resp.status);
+                }
+            } catch (e) {
+                alert('Ошибка деплоя: ' + e.message);
+            }
+        }
+
+        // Export / Import
+        function exportJSONFile() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentDB, null, 2));
+            const dlAnchor = document.createElement('a');
+            dlAnchor.setAttribute("href", dataStr);
+            dlAnchor.setAttribute("download", "progression_db.json");
+            document.body.appendChild(dlAnchor);
+            dlAnchor.click();
+            dlAnchor.remove();
+        }
+
+        function importJSONFile(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const parsed = JSON.parse(e.target.result);
+                    if (parsed && Array.isArray(parsed.unlocks)) {
+                        currentDB = parsed;
+                        persistLocalBackup();
+                        showToast(`Импортировано ${parsed.unlocks.length} наград!`, 'success');
+                        renderRoleTabs();
+                        renderTable();
+                    } else {
+                        alert('Неверный формат progression_db.json: отсутствует массив unlocks');
+                    }
+                } catch (err) {
+                    alert('Ошибка парсинга JSON: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function showToast(text, type) {
+            const toast = document.getElementById('toast');
+            toast.className = 'toast ' + (type || '');
+            document.getElementById('toast-text').textContent = text;
+            toast.style.display = 'flex';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3500);
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+    </script>
+</body>
+</html>

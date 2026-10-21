@@ -245,3 +245,70 @@ func TestValidateNickname(t *testing.T) {
 		}
 	}
 }
+
+func TestProgressionSeason2WipeDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	t.Setenv("WARLINK_CONFIG_PATH", configPath)
+
+	// Case 1: Season 1 migration sets level 0 and empty roles
+	s1JSON := `{
+		"account_number": "1111-2222-3333-4444",
+		"progression": {
+			"season": 1,
+			"career_level": 85,
+			"roles": {"assault": 50, "medic": 35}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(s1JSON), 0644); err != nil {
+		t.Fatalf("failed writing test config: %v", err)
+	}
+	cfg1 := Load()
+	if cfg1.Progression == nil {
+		t.Fatal("expected Progression to not be nil")
+	}
+	if cfg1.Progression.Season != 2 {
+		t.Errorf("expected Season 2, got %d", cfg1.Progression.Season)
+	}
+	if cfg1.Progression.CareerLevel != 0 {
+		t.Errorf("expected CareerLevel 0 after wipe, got %d", cfg1.Progression.CareerLevel)
+	}
+	if len(cfg1.Progression.Roles) != 0 {
+		t.Errorf("expected empty roles after wipe, got %v", cfg1.Progression.Roles)
+	}
+	if len(cfg1.Progression.History) != 1 || cfg1.Progression.History[0].CareerLevel != 85 {
+		t.Errorf("expected archived history with level 85, got %v", cfg1.Progression.History)
+	}
+
+	// Case 2: Legacy Season 2 fixup (from previously erroneous assault:1 default)
+	s2LegacyJSON := `{
+		"account_number": "1111-2222-3333-4444",
+		"progression": {
+			"season": 2,
+			"career_level": 1,
+			"roles": {"assault": 1},
+			"xp_progress": {}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(s2LegacyJSON), 0644); err != nil {
+		t.Fatalf("failed writing legacy test config: %v", err)
+	}
+	cfg2 := Load()
+	if cfg2.Progression.CareerLevel != 0 {
+		t.Errorf("expected CareerLevel 0 after fixup, got %d", cfg2.Progression.CareerLevel)
+	}
+	if len(cfg2.Progression.Roles) != 0 {
+		t.Errorf("expected empty roles after fixup, got %v", cfg2.Progression.Roles)
+	}
+
+	// Case 3: IsConfigured returns true for Season 2 level 0
+	progZero := &PlayerProgression{
+		Season:      2,
+		CareerLevel: 0,
+		Roles:       make(map[string]int),
+	}
+	if !progZero.IsConfigured() {
+		t.Error("expected IsConfigured to return true for Season 2 with level 0")
+	}
+}
+

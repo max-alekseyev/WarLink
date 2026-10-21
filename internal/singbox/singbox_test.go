@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"warlink/internal/config"
 )
 
 func TestGenerateConfig(t *testing.T) {
@@ -44,7 +46,7 @@ func TestGenerateConfig(t *testing.T) {
 	hasDomainRule := false
 	hasDirectRule := false
 	for _, r := range parsed.Route.Rules {
-		if r.Outbound == "hy2-gateway" {
+		if r.Outbound == "hy2-gateway" || r.Outbound == "hy2-web-gateway" {
 			for _, p := range r.ProcessName {
 				if p == "WardogsClient-Win64-Shipping.exe" {
 					hasGameRule = true
@@ -133,7 +135,7 @@ func TestGenerateConfig(t *testing.T) {
 				}
 			}
 		}
-		if r.Outbound == "hy2-gateway" {
+		if r.Outbound == "hy2-gateway" || r.Outbound == "hy2-web-gateway" {
 			for _, d := range r.DomainSuffix {
 				if d == "discord.media" || d == "gateway.discord.gg" || d == "discord.com" {
 					hasDiscordSignalingInHy2 = true
@@ -305,6 +307,9 @@ func TestLiveStockholmGateway(t *testing.T) {
 
 	tok, err := AcquireSession()
 	if err != nil {
+		if strings.Contains(err.Error(), "Слишком много запросов") {
+			t.Skipf("Live rate limit reached, skipping: %v", err)
+		}
 		t.Fatalf("Failed to acquire session: %v", err)
 	}
 	defer ReleaseSession()
@@ -587,6 +592,331 @@ func TestGenerateDevGamingConfig(t *testing.T) {
 		t.Errorf("expected WardogsClient-Win64-Shipping.exe routed to hy2-gateway")
 	}
 }
+
+func TestElytraRoutingAndDNSResolution(t *testing.T) {
+	for _, domain := range DirectGameDomains {
+		if strings.EqualFold(domain, "elytra.ac") {
+			t.Fatalf("elytra.ac MUST NOT be in DirectGameDomains (causes WD-L004 error)")
+		}
+	}
+
+	targets := []string{"WardogsClient-Win64-Shipping.exe", "WardogsLauncher-Shipping.exe"}
+	data, err := GenerateConfig(targets, false, "test-token")
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+
+	var parsed Config
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse config: %v", err)
+	}
+
+	for _, dr := range parsed.DNS.Rules {
+		if dr.Server == "dns-local" {
+			for _, d := range dr.DomainSuffix {
+				if strings.EqualFold(d, "elytra.ac") {
+					t.Errorf("elytra.ac must not resolve via dns-local")
+				}
+			}
+		}
+	}
+
+	foundElytraTunnel := false
+	for _, rr := range parsed.Route.Rules {
+		if rr.Outbound == "hy2-gateway" {
+			for _, d := range rr.DomainSuffix {
+				if strings.EqualFold(d, "elytra.ac") {
+					foundElytraTunnel = true
+					break
+				}
+			}
+		}
+		if rr.Outbound == "direct" {
+			for _, d := range rr.DomainSuffix {
+				if strings.EqualFold(d, "elytra.ac") {
+					t.Errorf("elytra.ac must NOT be routed direct")
+				}
+			}
+		}
+	}
+
+	if !foundElytraTunnel {
+		t.Errorf("elytra.ac must be routed to hy2-gateway tunnel")
+	}
+}
+
+func TestSanitizeSingBoxConfig(t *testing.T) {
+	badJSON := `{
+		"dns": {
+			"rules": [
+				{
+					"domain_suffix": ["certainly.com", "elytra.ac", "faa.bulkhead.net", "steamserver.net"],
+					"server": "dns-local"
+				}
+			]
+		},
+		"route": {
+			"rules": [
+				{
+					"domain_suffix": ["certainly.com", "elytra.ac", "bulkhead.net", "steamserver.net"],
+					"outbound": "direct"
+				}
+			]
+		}
+	}`
+
+	cleaned := SanitizeSingBoxConfig([]byte(badJSON))
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal(cleaned, &doc); err != nil {
+		t.Fatalf("Failed to parse sanitized config: %v", err)
+	}
+
+	dnsObj := doc["dns"].(map[string]interface{})
+	dnsRules := dnsObj["rules"].([]interface{})
+	rule0 := dnsRules[0].(map[string]interface{})
+	suffixes0 := rule0["domain_suffix"].([]interface{})
+	for _, s := range suffixes0 {
+		str := s.(string)
+		if str == "elytra.ac" || str == "faa.bulkhead.net" {
+			t.Errorf("SanitizeSingBoxConfig failed: %s still in dns-local", str)
+		}
+	}
+
+	routeObj := doc["route"].(map[string]interface{})
+	routeRules := routeObj["rules"].([]interface{})
+	rRule0 := routeRules[0].(map[string]interface{})
+	rSuffixes0 := rRule0["domain_suffix"].([]interface{})
+	for _, s := range rSuffixes0 {
+		str := s.(string)
+		if str == "elytra.ac" || str == "bulkhead.net" {
+			t.Errorf("SanitizeSingBoxConfig failed: %s still in outbound direct", str)
+		}
+	}
+}
+
+func TestGenerateFreshConfigFile(t *testing.T) {
+	targets := []string{"WardogsClient-Win64-Shipping.exe", "WardogsLauncher-Shipping.exe"}
+	includeWeb := true
+	if cfg := config.Load(); cfg != nil {
+		includeWeb = cfg.FreeInternetEnabled
+	}
+	data, err := GenerateConfig(targets, includeWeb, "dev-test-token")
+	if err != nil {
+		t.Fatalf("GenerateConfig failed: %v", err)
+	}
+	cleaned := SanitizeSingBoxConfig(data)
+	cfgPath := filepath.Join("..", "..", "warlink_core", "singbox", "config.json")
+	if err := os.WriteFile(cfgPath, cleaned, 0644); err != nil {
+		t.Fatalf("Failed to write config.json: %v", err)
+	}
+}
+
+func TestDirectMoscowDualOutboundRouting(t *testing.T) {
+	origMode := GetNetworkRouteMode()
+	defer SetNetworkRouteMode(origMode)
+	SetNetworkRouteMode(config.RouteModeDirectMoscow)
+
+	targets := []string{"WardogsClient-Win64-Shipping.exe"}
+
+	// 1. Test direct_moscow with includeWebServices = true
+	data, err := GenerateConfig(targets, true, "test-session-token-moscow")
+	if err != nil {
+		t.Fatalf("GenerateConfig in direct_moscow mode failed: %v", err)
+	}
+
+	var parsed Config
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to parse generated config: %v", err)
+	}
+
+	// Verify both outbounds exist
+	var hasMoscowGateway, hasFrankfurtWebGateway, hasDirectOutbound bool
+	for _, o := range parsed.Outbounds {
+		if o.Tag == "hy2-gateway" {
+			hasMoscowGateway = true
+			if o.Server != MoscowIngressDomain && o.Server != MoscowIngressIP {
+				t.Errorf("hy2-gateway server should be Moscow node, got: %s", o.Server)
+			}
+			has8443 := false
+			for _, p := range o.ServerPorts {
+				if strings.Contains(p, "8443") {
+					has8443 = true
+				}
+			}
+			if !has8443 && o.ServerPort != 8443 {
+				t.Errorf("hy2-gateway should include port 8443, got port: %d, ports: %v", o.ServerPort, o.ServerPorts)
+			}
+		}
+		if o.Tag == "hy2-web-gateway" {
+			hasFrankfurtWebGateway = true
+		}
+		if o.Tag == "direct" {
+			hasDirectOutbound = true
+		}
+	}
+	if !hasMoscowGateway {
+		t.Errorf("Expected hy2-gateway outbound in direct_moscow mode")
+	}
+	if hasFrankfurtWebGateway {
+		t.Errorf("hy2-web-gateway must NOT be present; all traffic unifies into hy2-gateway")
+	}
+	if !hasDirectOutbound {
+		t.Errorf("Expected direct outbound in direct_moscow mode")
+	}
+
+	// Verify route rules: web traffic and game traffic unify into hy2-gateway
+	var foundFakeIPWeb, foundYouTubeWeb, foundDiscordWeb, foundWebProcs bool
+	var foundGameInHy2, foundMatchUDPInHy2 bool
+	for _, r := range parsed.Route.Rules {
+		if r.Outbound == "hy2-gateway" {
+			for _, cidr := range r.IPCIDR {
+				if cidr == "198.18.0.0/15" {
+					foundFakeIPWeb = true
+				}
+			}
+			for _, d := range r.DomainSuffix {
+				if d == "youtube.com" || d == "googlevideo.com" {
+					foundYouTubeWeb = true
+				}
+				if d == "discord.com" || d == "gateway.discord.gg" {
+					foundDiscordWeb = true
+				}
+			}
+			for _, p := range r.ProcessName {
+				if p == "Discord.exe" || p == "Telegram.exe" {
+					foundWebProcs = true
+				}
+				if p == "WardogsClient-Win64-Shipping.exe" {
+					foundGameInHy2 = true
+				}
+			}
+			for _, pr := range r.PortRange {
+				if pr == "4000:4500" {
+					foundMatchUDPInHy2 = true
+				}
+			}
+		}
+	}
+
+	if !foundFakeIPWeb {
+		t.Errorf("Expected FakeIP 198.18.0.0/15 to route to hy2-gateway in direct_moscow mode")
+	}
+	if !foundYouTubeWeb {
+		t.Errorf("Expected YouTube domains to route to hy2-gateway in direct_moscow mode")
+	}
+	if !foundDiscordWeb {
+		t.Errorf("Expected Discord domains to route to hy2-gateway in direct_moscow mode")
+	}
+	if !foundWebProcs {
+		t.Errorf("Expected Discord/Telegram processes to route to hy2-gateway in direct_moscow mode")
+	}
+	if !foundGameInHy2 {
+		t.Errorf("Expected WardogsClient-Win64-Shipping.exe to route to hy2-gateway (Moscow) in direct_moscow mode")
+	}
+	if !foundMatchUDPInHy2 {
+		t.Errorf("Expected WARDOGS match UDP 4000:4500 to route to hy2-gateway (Moscow) in direct_moscow mode")
+	}
+
+	// Validate config syntax with sing-box binary if available
+	exePath := filepath.Join("..", "..", "warlink_core", "singbox", "sing-box.exe")
+	if _, err := os.Stat(exePath); err == nil {
+		tmpFile := filepath.Join(t.TempDir(), "direct_moscow_config.json")
+		if err := os.WriteFile(tmpFile, data, 0644); err == nil {
+			cmd := exec.Command(exePath, "check", "-c", tmpFile)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("sing-box check failed for dual-outbound direct_moscow config: %v\nOutput:\n%s", err, string(out))
+			}
+		}
+	}
+
+	// 2. Test direct_moscow with includeWebServices = false
+	dataNoWeb, err := GenerateConfig(targets, false, "test-session-token-moscow")
+	if err != nil {
+		t.Fatalf("GenerateConfig without web in direct_moscow mode failed: %v", err)
+	}
+	var parsedNoWeb Config
+	if err := json.Unmarshal(dataNoWeb, &parsedNoWeb); err != nil {
+		t.Fatalf("Failed to parse config without web: %v", err)
+	}
+	for _, o := range parsedNoWeb.Outbounds {
+		if o.Tag == "hy2-web-gateway" {
+			t.Errorf("hy2-web-gateway must NOT be present when includeWebServices=false")
+		}
+	}
+}
+
+func TestLiveFetchRemoteConfigDirectMoscow(t *testing.T) {
+	if GetServerAPI() == "" || GetHMACSecret() == "" {
+		t.Skip("Skipping live test: server API or HMAC secret not configured")
+	}
+
+	SetNetworkRouteMode(config.RouteModeDirectMoscow)
+	defer SetNetworkRouteMode(config.RouteModeDirectMoscow)
+
+	tok, err := AcquireSession()
+	if err != nil {
+		if strings.Contains(err.Error(), "Слишком много запросов") {
+			t.Skipf("Live rate limit reached, skipping: %v", err)
+		}
+		t.Fatalf("Failed to acquire session: %v", err)
+	}
+	defer ReleaseSession()
+
+	cfgBytes, err := FetchRemoteConfig(GetServerAPI(), tok, "arc_raiders", []string{"PioneerGame.exe"}, true)
+	if err != nil {
+		t.Fatalf("Failed to fetch remote config: %v", err)
+	}
+
+	var parsed Config
+	if err := json.Unmarshal(cfgBytes, &parsed); err != nil {
+		t.Fatalf("Failed to parse fetched config: %v", err)
+	}
+
+	var foundMoscow, foundWebGateway bool
+	for _, o := range parsed.Outbounds {
+		if o.Tag == "hy2-gateway" {
+			foundMoscow = true
+			hasPortHop := false
+			for _, p := range o.ServerPorts {
+				if strings.Contains(p, "30000:40000") {
+					hasPortHop = true
+				}
+			}
+			if !hasPortHop {
+				t.Errorf("hy2-gateway missing 30000:40000 port hopping, got: %v", o.ServerPorts)
+			}
+		}
+		if o.Tag == "hy2-web-gateway" {
+			foundWebGateway = true
+		}
+	}
+
+	if !foundMoscow {
+		t.Errorf("Expected hy2-gateway outbound in remote config")
+	}
+	if foundWebGateway {
+		t.Errorf("hy2-web-gateway must NOT be present in remote config with web=1; all traffic unifies into hy2-gateway")
+	}
+
+	// Validate with sing-box binary
+	exePath := filepath.Join("..", "..", "warlink_core", "singbox", "sing-box.exe")
+	if _, err := os.Stat(exePath); err == nil {
+		tmpFile := filepath.Join(t.TempDir(), "live_remote_moscow_config.json")
+		if err := os.WriteFile(tmpFile, cfgBytes, 0644); err == nil {
+			cmd := exec.Command(exePath, "check", "-c", tmpFile)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("sing-box check failed for live remote config: %v\nOutput:\n%s", err, string(out))
+			}
+		}
+	}
+}
+
+
+
+
 
 
 

@@ -178,8 +178,7 @@ func checkGatewaysReachability() []CheckResult {
 		url  string
 		tcp  string
 	}{
-		{"gw_frankfurt", "Шлюз Франкфурт (Европа)", "https://" + singbox.FrankfurtEdgeIP + "/", singbox.FrankfurtEdgeIP + ":443"},
-		{"gw_moscow", "Шлюз Москва (Транзит)", "http://" + singbox.MoscowIngressIP + "/", singbox.MoscowIngressIP + ":80"},
+		{"gw_moscow", "Шлюз Москва (Игровой шлюз)", "http://" + singbox.MoscowIngressIP + "/", singbox.MoscowIngressIP + ":80"},
 		{"gw_master", "Узел управления (Master API)", masterAPI + "/api/v1/status", masterHost + ":80"},
 	}
 

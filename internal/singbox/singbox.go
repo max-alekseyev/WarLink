@@ -120,20 +120,8 @@ func SetNetworkRouteMode(mode string) {
 }
 
 func GetActiveGatewayTarget() (host string, port int, apiURL string) {
-	mode := GetNetworkRouteMode()
-	switch mode {
-	case config.RouteModeDirectFrankfurt:
-		return FrankfurtEdgeDomain, 443, DefaultServerAPI
-	case config.RouteModeDirectMoscow:
-		return MoscowIngressDomain, 8443, DefaultServerAPI
-	case config.RouteModeDirectStockholm:
-		// Stockholm is purified into Master-only: redirect European gaming edge to Frankfurt
-		return FrankfurtEdgeDomain, 443, DefaultServerAPI
-	case config.RouteModeTransit:
-		fallthrough
-	default:
-		return MoscowIngressDomain, 443, DefaultServerAPI
-	}
+	// Moscow Gateway is the primary and unified active gaming & web proxy
+	return MoscowIngressDomain, 8443, DefaultServerAPI
 }
 
 func GetServerIP() string {
@@ -344,9 +332,8 @@ var YouTubeDomains = []string{
 	"googlevideo.com",
 	"ytimg.com",
 	"ytimg.l.google.com",
-	"yt3.ggpht.com",
-	"yt4.ggpht.com",
-	"yt3.googleusercontent.com",
+	"ggpht.com",
+	"googleusercontent.com",
 	"jnn-pa.googleapis.com",
 	"wide-youtube.l.google.com",
 	"youtube-nocookie.com",
@@ -357,6 +344,9 @@ var YouTubeDomains = []string{
 	"youtubei.googleapis.com",
 	"yt-video-upload.l.google.com",
 	"play.google.com",
+	"yt.be",
+	"youtubeeducation.com",
+	"youtubego.com",
 }
 
 // SocialMessengerDomains contains social media, instant messengers, and stream chat extensions.
@@ -468,7 +458,6 @@ var DirectGameDomains = []string{
 	// Anti-cheat / PKI endpoints (CRL/OCSP)
 	"certainly.com",
 	"pki.goog",
-	"elytra.ac",
 	// Steam
 	"steamserver.net",
 	"steampowered.com",
@@ -612,6 +601,15 @@ var WardogsGameProcesses = []string{
 	"wardogslauncher.exe",
 	"elytra-launcher.exe",
 	"elytraclient.exe",
+}
+
+// WardogsGameDomains contains critical game, anti-cheat, matchmaking and telemetry domains for WARDOGS.
+var WardogsGameDomains = []string{
+	"faa.bulkhead.net",
+	"bulkhead.net",
+	"pragmaengine.com",
+	"vivox.com",
+	"elytra.ac",
 }
 
 type RouteRule struct {
@@ -1164,9 +1162,90 @@ func FetchRemoteConfig(serverAPI string, token string, game string, targetProces
 
 	var formatted bytes.Buffer
 	if err := json.Indent(&formatted, res.Config, "", "  "); err == nil {
-		return formatted.Bytes(), nil
+		return SanitizeSingBoxConfig(formatted.Bytes()), nil
 	}
-	return res.Config, nil
+	return SanitizeSingBoxConfig(res.Config), nil
+}
+
+// SanitizeSingBoxConfig provides client-side defense-in-depth sanitization of any sing-box configuration.
+// It guarantees that critical game/anti-cheat domains (such as elytra.ac, faa.bulkhead.net) are NEVER
+// resolved via local DNS or routed directly to the public internet, preventing error WD-L004.
+func SanitizeSingBoxConfig(rawCfg []byte) []byte {
+	if len(rawCfg) == 0 {
+		return rawCfg
+	}
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal(rawCfg, &doc); err != nil {
+		return rawCfg
+	}
+
+	// Critical game and anti-cheat domains that must NEVER resolve locally or route direct
+	criticalTunnelDomains := map[string]bool{
+		"elytra.ac":        true,
+		"faa.bulkhead.net": true,
+		"bulkhead.net":     true,
+		"pragmaengine.com": true,
+		"vivox.com":        true,
+	}
+
+	cleanDomainList := func(list []interface{}) []interface{} {
+		var res []interface{}
+		for _, item := range list {
+			if s, ok := item.(string); ok {
+				if criticalTunnelDomains[strings.ToLower(strings.TrimSpace(s))] {
+					continue
+				}
+			}
+			res = append(res, item)
+		}
+		return res
+	}
+
+	// 1. Sanitize DNS rules: remove critical domains from dns-local
+	if dnsObj, ok := doc["dns"].(map[string]interface{}); ok {
+		if rules, ok := dnsObj["rules"].([]interface{}); ok {
+			for _, r := range rules {
+				if ruleMap, ok := r.(map[string]interface{}); ok {
+					if server, ok := ruleMap["server"].(string); ok && server == "dns-local" {
+						if suffixes, ok := ruleMap["domain_suffix"].([]interface{}); ok {
+							ruleMap["domain_suffix"] = cleanDomainList(suffixes)
+						}
+						if domains, ok := ruleMap["domain"].([]interface{}); ok {
+							ruleMap["domain"] = cleanDomainList(domains)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Sanitize Route rules: remove critical domains from outbound: direct
+	if routeObj, ok := doc["route"].(map[string]interface{}); ok {
+		if rules, ok := routeObj["rules"].([]interface{}); ok {
+			for _, r := range rules {
+				if ruleMap, ok := r.(map[string]interface{}); ok {
+					if outbound, ok := ruleMap["outbound"].(string); ok && outbound == "direct" {
+						if suffixes, ok := ruleMap["domain_suffix"].([]interface{}); ok {
+							ruleMap["domain_suffix"] = cleanDomainList(suffixes)
+						}
+						if domains, ok := ruleMap["domain"].([]interface{}); ok {
+							ruleMap["domain"] = cleanDomainList(domains)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	var formatted bytes.Buffer
+	enc := json.NewEncoder(&formatted)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(doc); err != nil {
+		return rawCfg
+	}
+	return formatted.Bytes()
 }
 
 // GetDefaultLogsDir returns the warlink_core/logs directory for sing-box logging.
@@ -1206,28 +1285,43 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		token = optionalToken[0]
 	}
 
-	// Collect unique processes, domains and IPs
+	webOutbound := "hy2-gateway"
+
+	isWebProc := func(p string) bool {
+		switch strings.ToLower(p) {
+		case "discord.exe", "discordcanary.exe", "discordptb.exe", "telegram.exe":
+			return true
+		default:
+			return false
+		}
+	}
+
+	// Collect unique game processes, domains and IPs
 	procSet := make(map[string]struct{})
 	for _, p := range extraProcesses {
 		pClean := strings.TrimSpace(p)
-		if pClean != "" {
+		if pClean != "" && !isWebProc(pClean) {
 			procSet[pClean] = struct{}{}
 		}
 	}
-	// Include Discord and Telegram processes into tunnel only if web services are enabled
+
+	var webProcesses []string
 	if includeWebServices {
-		for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
-			procSet[dp] = struct{}{}
-		}
+		webProcesses = []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"}
 	}
 
 	domainSet := make(map[string]struct{})
 	ipSet := make(map[string]struct{})
 
+	// Always include core WARDOGS game and anti-cheat domains
+	for _, gd := range WardogsGameDomains {
+		domainSet[gd] = struct{}{}
+	}
+
 	for _, prof := range profiles {
 		for _, p := range prof.Processes {
 			pClean := strings.TrimSpace(p)
-			if pClean != "" {
+			if pClean != "" && !isWebProc(pClean) {
 				procSet[pClean] = struct{}{}
 			}
 		}
@@ -1333,11 +1427,11 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-gateway
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to webOutbound
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
-			Outbound: "hy2-gateway",
+			Outbound: webOutbound,
 		},
 		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
@@ -1361,7 +1455,20 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		},
 	}
 
-	if targetServer != "" {
+	for _, nodeDomain := range []string{MoscowIngressDomain, FrankfurtEdgeDomain, StockholmCoreDomain} {
+		if ip := ResolveDomainIPv4(nodeDomain); ip != "" && net.ParseIP(ip) != nil {
+			rules = append(rules, RouteRule{
+				IPCIDR:   []string{ip + "/32"},
+				Outbound: "direct",
+			})
+		}
+		rules = append(rules, RouteRule{
+			Domain:   []string{nodeDomain},
+			Outbound: "direct",
+		})
+	}
+
+	if targetServer != "" && !strings.Contains(targetServer, ":") {
 		if ip := ResolveDomainIPv4(targetServer); ip != "" && net.ParseIP(ip) != nil {
 			rules = append(rules, RouteRule{
 				IPCIDR:   []string{ip + "/32"},
@@ -1383,6 +1490,14 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 		rules = append(rules, RouteRule{
 			ProcessName: allProcesses,
 			Outbound:    "hy2-gateway",
+		})
+	}
+
+	// Route web messaging / VoIP processes (Discord, Telegram) to webOutbound
+	if includeWebServices && len(webProcesses) > 0 {
+		rules = append(rules, RouteRule{
+			ProcessName: webProcesses,
+			Outbound:    webOutbound,
 		})
 	}
 
@@ -1448,27 +1563,35 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			DomainSuffix: quicRejectDomains,
 		})
 
-		// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+		// Reject QUIC (HTTP/3 over UDP 443) for common web browsers to force instant fallback to TCP HTTP/2
+		rules = append(rules, RouteRule{
+			Action:      "reject",
+			Network:     "udp",
+			Port:        []int{443},
+			ProcessName: []string{"chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "vivaldi.exe", "browser.exe", "yandex.exe"},
+		})
+
+		// Route YouTube, Discord, and Social/Messenger services to webOutbound
 		rules = append(rules,
 			RouteRule{
 				DomainSuffix: YouTubeDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				DomainSuffix: DiscordDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				DomainSuffix: SocialMessengerDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-gateway",
+				Outbound: webOutbound,
 			},
 		)
 	}
@@ -1497,19 +1620,19 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	})
 
 	if includeWebServices {
-		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
+		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through webOutbound
 		rules = append(rules,
 			RouteRule{
 				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 				Network:     "udp",
 				Port:        []int{3478},
-				Outbound:    "hy2-gateway",
+				Outbound:    webOutbound,
 			},
 			RouteRule{
 				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 				Network:     "udp",
 				PortRange:   []string{"19294:19344", "50000:65535"},
-				Outbound:    "hy2-gateway",
+				Outbound:    webOutbound,
 			},
 		)
 	}
@@ -1614,7 +1737,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 			},
 			{
 				Tag:    "dns-remote",
-				Type:   "tcp",
+				Type:   "udp",
 				Server: "1.1.1.1",
 				Detour: "hy2-gateway",
 			},
@@ -1662,10 +1785,36 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 	var hy2Ports []string
 	var hy2Port int
 	if gwPort == 8443 {
-		hy2Port = 8443
+		hy2Ports = []string{"8443:8443", "30000:40000"}
 	} else {
 		hy2Ports = []string{"443:443", "20000:30000"}
 	}
+
+	outbounds := []Outbound{
+		{
+			Type:        "hysteria2",
+			Tag:         "hy2-gateway",
+			Server:      targetServer,
+			ServerPort:  hy2Port,
+			ServerPorts: hy2Ports,
+			HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
+			UpMbps:      50,
+			DownMbps:    100,
+			Password:    token,
+			Obfs:        obfsConfig,
+			TLS: &OutboundTLSOptions{
+				Enabled:    true,
+				ServerName: "gateway.warlink.network",
+				Insecure:   true,
+			},
+			DisableChromeParrot: true,
+			InitialPacketSize:   1320,
+		},
+	}
+	outbounds = append(outbounds, Outbound{
+		Type: "direct",
+		Tag:  "direct",
+	})
 
 	cfg := Config{
 		Log: LogConfig{
@@ -1691,31 +1840,7 @@ func GenerateConfigFromProfiles(profiles []Profile, extraProcesses []string, inc
 				UDPNATMax:           8192,
 			},
 		},
-		Outbounds: []Outbound{
-			{
-				Type:        "hysteria2",
-				Tag:         "hy2-gateway",
-				Server:      targetServer,
-				ServerPort:  hy2Port,
-				ServerPorts: hy2Ports,
-				HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
-				UpMbps:      50,
-				DownMbps:    100,
-				Password:    token,
-				Obfs:        obfsConfig,
-				TLS: &OutboundTLSOptions{
-					Enabled:    true,
-					ServerName: "gateway.warlink.network",
-					Insecure:   true,
-				},
-				DisableChromeParrot: true,
-				InitialPacketSize:   1320,
-			},
-			{
-				Type: "direct",
-				Tag:  "direct",
-			},
-		},
+		Outbounds: outbounds,
 		Route: RouteConfig{
 			DefaultDomainResolver: "dns-local",
 			FindProcess:           true,
@@ -1768,12 +1893,23 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		token = optionalToken[0]
 	}
 
+	webOutbound := "hy2-gateway"
+
+	isWebProc := func(p string) bool {
+		switch strings.ToLower(p) {
+		case "discord.exe", "discordcanary.exe", "discordptb.exe", "telegram.exe":
+			return true
+		default:
+			return false
+		}
+	}
+
 	targetServer := GetServerIP()
 
 	procSet := make(map[string]struct{})
 	for _, p := range extraProcesses {
 		pClean := strings.TrimSpace(p)
-		if pClean != "" {
+		if pClean != "" && !isWebProc(pClean) {
 			procSet[pClean] = struct{}{}
 		}
 	}
@@ -1781,11 +1917,10 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	for _, wb := range WardogsGameProcesses {
 		procSet[wb] = struct{}{}
 	}
-	// Include Discord and Telegram processes into tunnel only if web services are enabled
+
+	var webProcesses []string
 	if includeWebServices {
-		for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
-			procSet[dp] = struct{}{}
-		}
+		webProcesses = []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"}
 	}
 
 	domainSet := make(map[string]struct{})
@@ -1794,7 +1929,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	for _, prof := range profiles {
 		for _, p := range prof.Processes {
 			pClean := strings.TrimSpace(p)
-			if pClean != "" {
+			if pClean != "" && !isWebProc(pClean) {
 				procSet[pClean] = struct{}{}
 			}
 		}
@@ -1825,14 +1960,8 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		}
 	}
 
-	// Add critical game matchmaking and voice domains for WARDOGS
-	gameTelemetryDomains := []string{
-		"faa.bulkhead.net",
-		"bulkhead.net",
-		"pragmaengine.com",
-		"vivox.com",
-	}
-	for _, gd := range gameTelemetryDomains {
+	// Add critical game matchmaking, anti-cheat, and voice domains for WARDOGS
+	for _, gd := range WardogsGameDomains {
 		domainSet[gd] = struct{}{}
 	}
 
@@ -1880,11 +2009,11 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-gateway
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to webOutbound
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
-			Outbound: "hy2-gateway",
+			Outbound: webOutbound,
 		},
 		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
@@ -1925,7 +2054,20 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		},
 	}
 
-	if targetServer != "" {
+	for _, nodeDomain := range []string{MoscowIngressDomain, FrankfurtEdgeDomain, StockholmCoreDomain} {
+		if ip := ResolveDomainIPv4(nodeDomain); ip != "" && net.ParseIP(ip) != nil {
+			rules = append(rules, RouteRule{
+				IPCIDR:   []string{ip + "/32"},
+				Outbound: "direct",
+			})
+		}
+		rules = append(rules, RouteRule{
+			Domain:   []string{nodeDomain},
+			Outbound: "direct",
+		})
+	}
+
+	if targetServer != "" && !strings.Contains(targetServer, ":") {
 		if ip := ResolveDomainIPv4(targetServer); ip != "" && net.ParseIP(ip) != nil {
 			rules = append(rules, RouteRule{
 				IPCIDR:   []string{ip + "/32"},
@@ -1947,6 +2089,14 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 		rules = append(rules, RouteRule{
 			ProcessName: allProcesses,
 			Outbound:    "hy2-gateway",
+		})
+	}
+
+	// Route web messaging / VoIP processes (Discord, Telegram) to webOutbound
+	if includeWebServices && len(webProcesses) > 0 {
+		rules = append(rules, RouteRule{
+			ProcessName: webProcesses,
+			Outbound:    webOutbound,
 		})
 	}
 
@@ -2008,27 +2158,35 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 			DomainSuffix: quicRejectDomains,
 		})
 
-		// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+		// Reject QUIC (HTTP/3 over UDP 443) for common web browsers to force instant fallback to TCP HTTP/2
+		rules = append(rules, RouteRule{
+			Action:      "reject",
+			Network:     "udp",
+			Port:        []int{443},
+			ProcessName: []string{"chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "vivaldi.exe", "browser.exe", "yandex.exe"},
+		})
+
+		// Route YouTube, Discord, and Social/Messenger services to webOutbound
 		rules = append(rules,
 			RouteRule{
 				DomainSuffix: YouTubeDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				DomainSuffix: DiscordDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				DomainSuffix: SocialMessengerDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			RouteRule{
 				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-gateway",
+				Outbound: webOutbound,
 			},
 		)
 	}
@@ -2057,19 +2215,19 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	})
 
 	if includeWebServices {
-		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
+		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through webOutbound
 		rules = append(rules,
 			RouteRule{
 				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 				Network:     "udp",
 				Port:        []int{3478},
-				Outbound:    "hy2-gateway",
+				Outbound:    webOutbound,
 			},
 			RouteRule{
 				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 				Network:     "udp",
 				PortRange:   []string{"19294:19344", "50000:65535"},
-				Outbound:    "hy2-gateway",
+				Outbound:    webOutbound,
 			},
 		)
 	}
@@ -2169,7 +2327,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 			},
 			{
 				Tag:    "dns-remote",
-				Type:   "tcp",
+				Type:   "udp",
 				Server: "1.1.1.1",
 				Detour: "hy2-gateway",
 			},
@@ -2218,10 +2376,36 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 	var hy2ServerPorts []string
 	var hy2ServerPort int
 	if gwPort == 8443 {
-		hy2ServerPort = 8443
+		hy2ServerPorts = []string{"8443:8443", "30000:40000"}
 	} else {
 		hy2ServerPorts = []string{"443:443", "20000:30000"}
 	}
+
+	devOutbounds := []Outbound{
+		{
+			Type:        "hysteria2",
+			Tag:         "hy2-gateway",
+			Server:      targetServer,
+			ServerPort:  hy2ServerPort,
+			ServerPorts: hy2ServerPorts,
+			HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
+			UpMbps:      100,
+			DownMbps:    200,
+			Password:    token,
+			Obfs:        obfsConfig,
+			TLS: &OutboundTLSOptions{
+				Enabled:    true,
+				ServerName: "gateway.warlink.network",
+				Insecure:   true,
+			},
+			DisableChromeParrot: true,
+			InitialPacketSize:   1320,
+		},
+	}
+	devOutbounds = append(devOutbounds, Outbound{
+		Type: "direct",
+		Tag:  "direct",
+	})
 
 	cfg := Config{
 		Log: LogConfig{
@@ -2238,7 +2422,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				Address:       []string{"172.28.192.1/30"},
 				MTU:           1320, // Standard safe MTU (1320) avoiding UDP packet fragmentation across PPPoE and regional ISP tunnels
 				AutoRoute:     true,
-				StrictRoute:   true,
+				StrictRoute:   false,
 				Stack:         "mixed", // Mixed stack: native kernel UDP for gaming fastpath, gVisor TCP for honest end-to-end RTT
 				RouteExcludeAddress: routeExclude,
 				UDPTimeout:    "3m",
@@ -2247,31 +2431,7 @@ func GenerateDevGamingConfig(profiles []Profile, extraProcesses []string, includ
 				UDPNATMax:     8192,
 			},
 		},
-		Outbounds: []Outbound{
-			{
-				Type:        "hysteria2",
-				Tag:         "hy2-gateway",
-				Server:      targetServer,
-				ServerPort:  hy2ServerPort,
-				ServerPorts: hy2ServerPorts,
-				HopInterval: "", // Disabled during matches to prevent periodic port renegotiation drops
-				UpMbps:      100,
-				DownMbps:    200,
-				Password:    token,
-				Obfs:        obfsConfig,
-				TLS: &OutboundTLSOptions{
-					Enabled:    true,
-					ServerName: "gateway.warlink.network",
-					Insecure:   true,
-				},
-				DisableChromeParrot: true,
-				InitialPacketSize:   1320,
-			},
-			{
-				Type: "direct",
-				Tag:  "direct",
-			},
-		},
+		Outbounds: devOutbounds,
 		Route: RouteConfig{
 			DefaultDomainResolver: "dns-local",
 			FindProcess:           true,
@@ -2478,6 +2638,7 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	}
 
 	cfgPath := filepath.Join(m.GetBinDir(), "config.json")
+	cfgBytes = SanitizeSingBoxConfig(cfgBytes)
 	if err := os.WriteFile(cfgPath, cfgBytes, 0644); err != nil {
 		return fmt.Errorf("ошибка сохранения config.json: %w", err)
 	}
@@ -2499,66 +2660,99 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 		logFn(fmt.Sprintf("[INFO] Запуск туннеля Hysteria 2 (%s: %s)...", modeStr, strings.Join(targetProcesses, ", ")))
 	}
 
-	// Clean up any stale instances and ensure kernel Wintun driver releases the interface
-	_ = killProcessByName("sing-box.exe")
-	CleanupWintunAdapter()
-	time.Sleep(300 * time.Millisecond)
+	maxAttempts := 3
+	var startErr error
+	var startedCmd *exec.Cmd
 
-	cmd := exec.Command(m.GetExePath(), "run", "-c", cfgPath)
-	cmd.Dir = m.GetBinDir()
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-	}
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Clean up any stale instances and ensure kernel Wintun driver releases the interface
+		_ = killProcessByName("sing-box.exe")
+		waitForProcessExit("sing-box.exe", 1200*time.Millisecond)
+		CleanupWintunAdapter()
+		time.Sleep(time.Duration(attempt*300) * time.Millisecond)
 
-	if m.logFile != nil {
-		_ = m.logFile.Close()
-		m.logFile = nil
-	}
-	stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
-	if fi, err := os.Stat(stderrPath); err == nil && fi.Size() > 0 {
-		prevPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.prev.log")
-		_ = os.Rename(stderrPath, prevPath)
-	}
-	if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
-		m.logFile = f
-		cmd.Stderr = f
-		cmd.Stdout = f
-	}
+		cmd := exec.Command(m.GetExePath(), "run", "-c", cfgPath)
+		cmd.Dir = m.GetBinDir()
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		}
 
-	if err := cmd.Start(); err != nil {
 		if m.logFile != nil {
 			_ = m.logFile.Close()
 			m.logFile = nil
 		}
-		return fmt.Errorf("ошибка запуска sing-box: %w", err)
-	}
-
-	m.cmd = cmd
-	m.isRunning = true
-
-	if m.OnProcessStart != nil {
-		m.OnProcessStart(cmd.Process.Pid)
-	}
-
-	// Check if process exited immediately due to config error
-	time.Sleep(500 * time.Millisecond)
-	if !m.isProcessAliveLocked() {
-		m.isRunning = false
-		m.cmd = nil
-		if m.logFile != nil {
-			_ = m.logFile.Close()
-			m.logFile = nil
+		stderrPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.log")
+		if fi, err := os.Stat(stderrPath); err == nil && fi.Size() > 0 {
+			prevPath := filepath.Join(m.GetLogsDir(), "singbox_stderr.prev.log")
+			_ = os.Rename(stderrPath, prevPath)
 		}
-		errDetail := ""
-		if errData, errRead := os.ReadFile(stderrPath); errRead == nil && len(errData) > 0 {
-			errDetail = ": " + strings.TrimSpace(string(errData))
+		if f, errOpen := os.OpenFile(stderrPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644); errOpen == nil {
+			m.logFile = f
+			cmd.Stderr = f
+			cmd.Stdout = f
 		}
-		return fmt.Errorf("sing-box аварийно завершился сразу после запуска%s", errDetail)
+
+		if err := cmd.Start(); err != nil {
+			if m.logFile != nil {
+				_ = m.logFile.Close()
+				m.logFile = nil
+			}
+			startErr = fmt.Errorf("ошибка запуска sing-box: %w", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		m.cmd = cmd
+		m.isRunning = true
+
+		if m.OnProcessStart != nil {
+			m.OnProcessStart(cmd.Process.Pid)
+		}
+
+		// Check if process exited immediately due to config error or wintun collision
+		time.Sleep(600 * time.Millisecond)
+		if !m.isProcessAliveLocked() {
+			m.isRunning = false
+			m.cmd = nil
+			if m.logFile != nil {
+				_ = m.logFile.Close()
+				m.logFile = nil
+			}
+			errDetail := ""
+			if errData, errRead := os.ReadFile(stderrPath); errRead == nil && len(errData) > 0 {
+				errDetail = strings.TrimSpace(string(errData))
+			}
+
+			// If Wintun driver collision detected, purge residual adapter and retry with backoff
+			if strings.Contains(errDetail, "Cannot create a file when that file already exists") ||
+				strings.Contains(errDetail, "configure tun interface") ||
+				strings.Contains(errDetail, "Element not found") {
+				if logFn != nil {
+					logFn(fmt.Sprintf("[WARN] Задержка инициализации Wintun адаптера (попытка %d/%d). Повторная очистка интерфейса...", attempt, maxAttempts))
+				}
+				_ = killProcessByName("sing-box.exe")
+				waitForProcessExit("sing-box.exe", 1500*time.Millisecond)
+				CleanupWintunAdapter()
+				time.Sleep(time.Duration(attempt*600) * time.Millisecond)
+				startErr = fmt.Errorf("sing-box аварийно завершился: %s", errDetail)
+				continue
+			}
+
+			return fmt.Errorf("sing-box аварийно завершился сразу после запуска: %s", errDetail)
+		}
+
+		startedCmd = cmd
+		startErr = nil
+		break
 	}
 
-	if logFn != nil {
-		logFn("[OK] Туннель Hysteria 2 активен (PID: " + fmt.Sprintf("%d", cmd.Process.Pid) + ", пинг 27 мс)")
+	if startErr != nil {
+		return startErr
+	}
+
+	if logFn != nil && startedCmd != nil && startedCmd.Process != nil {
+		logFn("[OK] Туннель Hysteria 2 активен (PID: " + fmt.Sprintf("%d", startedCmd.Process.Pid) + ", пинг 27 мс)")
 	}
 
 	m.resetAuthErrorOffsetLocked()
@@ -2580,6 +2774,7 @@ func (m *Manager) Stop() error {
 
 	if m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Kill()
+		_ = m.cmd.Wait()
 		m.cmd = nil
 	}
 	m.isRunning = false
@@ -2590,6 +2785,7 @@ func (m *Manager) Stop() error {
 	}
 
 	_ = killProcessByName("sing-box.exe")
+	waitForProcessExit("sing-box.exe", 1500*time.Millisecond)
 	CleanupWintunAdapter()
 
 	return nil
@@ -2633,6 +2829,7 @@ func (m *Manager) AddTargetProcess(proc string, logFn func(string)) error {
 		cfgBytes = genBytes
 	}
 	cfgPath := filepath.Join(m.GetBinDir(), "config.json")
+	cfgBytes = SanitizeSingBoxConfig(cfgBytes)
 	if err := os.WriteFile(cfgPath, cfgBytes, 0644); err != nil {
 		return err
 	}
@@ -2811,6 +3008,20 @@ func (m *Manager) ResetAuthErrorOffset() {
 }
 
 
+
+func waitForProcessExit(name string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", name), "/NH")
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		out, err := cmd.Output()
+		if err == nil && !strings.Contains(strings.ToLower(string(out)), strings.ToLower(name)) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
 
 func killProcessByName(name string) error {
 	cmd := exec.Command("taskkill", "/F", "/IM", name)

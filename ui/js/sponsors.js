@@ -150,13 +150,17 @@ async function updateCommunityGoal(sponsors) {
         if (res.ok) {
             const data = await res.json();
             if (data && data.success) {
-                // Unified Cluster infrastructure (13 EUR / 1690 RUB / mo)
+                // Unified Cluster infrastructure (8 EUR / 1040 RUB / mo)
                 if (data.infrastructure && infraFillEl) {
                     const infra = data.infrastructure;
                     const pct = Math.min(100, Math.max(0, infra.percent || 0));
                     infraFillEl.style.width = pct + '%';
                     if (infraPctEl) {
                         infraPctEl.textContent = pct + '%';
+                    }
+                    const titleEl = document.getElementById('infra-node-title');
+                    if (titleEl && infra.target_amount_eur) {
+                        titleEl.textContent = `Инфраструктура кластера (${infra.target_amount_eur} € / мес):`;
                     }
                     if (infraNode) {
                         if (infra.is_covered || pct >= 100) {

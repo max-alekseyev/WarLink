@@ -49,6 +49,12 @@ var ConflictingProcessNames = []string{
 	"redshieldvpn.exe",
 	"RedShield.exe",
 	"adguardsvc.exe",
+	// Third-party DNS / bypass interceptors that conflict with sing-box Wintun & FakeIP
+	"ag_dns.exe",
+	"agunlocker.exe",
+	"AGUnlocker.exe",
+	"AG_2.23.1.exe",
+	"ag_service.exe",
 }
 
 // FindConflicts returns a list of conflicting processes currently running.

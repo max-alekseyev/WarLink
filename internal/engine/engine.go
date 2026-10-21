@@ -395,8 +395,10 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 		selectedGameID = selectedGameID + " (гибрид)"
 	}
 
-	// Clean zombie Wintun adapter if left by previous unclean termination
-	deps.CleanupZombieWintunAdapter(e.log)
+	// Clean zombie Wintun adapter if left by previous unclean termination (do not tear down while sing-box is running)
+	if e.singboxMgr == nil || !e.singboxMgr.IsRunning() {
+		deps.CleanupZombieWintunAdapter(e.log)
+	}
 
 	if err := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID); err != nil {
 		_ = e.disconnectInternal()

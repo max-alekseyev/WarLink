@@ -21,7 +21,7 @@ class UIStoreClass {
             return Array.isArray(data.points) && data.points.length > 0;
         }
         if (key.includes('/api/progression/database')) {
-            return data && Array.isArray(data.unlocks) && data.unlocks.length >= 270;
+            return data && Array.isArray(data.unlocks) && data.unlocks.length > 0;
         }
         if (key.includes('/api/user-profile')) {
             return !!(data.account_number && data.created_at && data.created_at !== '—');

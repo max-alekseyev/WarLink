@@ -93,8 +93,8 @@ func loadDatabase() *Database {
 				TotalUnlocks int    `json:"total_unlocks"`
 			}
 			if err := json.Unmarshal(cached, &cachedMeta); err == nil {
-				// If cached database is older than embedded database, discard stale cache
-				if cachedMeta.Version < embMeta.Version || cachedMeta.TotalUnlocks < embMeta.TotalUnlocks {
+				// If cached database is empty, discard corrupt cache
+				if cachedMeta.TotalUnlocks == 0 {
 					_ = os.Remove(cachePath)
 					continue
 				}
@@ -179,8 +179,13 @@ func SyncWithServer(serverAPI string, cacheDir string) error {
 		return fmt.Errorf("empty serverAPI")
 	}
 	u := strings.TrimRight(serverAPI, "/") + "/api/v1/progression/database"
-	client := &http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Get(u)
+	client := &http.Client{Timeout: 3 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Cache-Control", "no-cache")
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

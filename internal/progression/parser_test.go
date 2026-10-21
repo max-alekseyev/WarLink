@@ -61,8 +61,8 @@ func TestParseScreenshotAllResolutions(t *testing.T) {
 func TestDatabaseUnlocks(t *testing.T) {
 	db := GetDatabase()
 	all := db.GetAllUnlocks()
-	if len(all) != 277 {
-		t.Fatalf("Expected 277 unlocks, got %d", len(all))
+	if len(all) != 264 {
+		t.Fatalf("Expected 264 unlocks, got %d", len(all))
 	}
 
 	for _, it := range all {
@@ -132,6 +132,32 @@ func TestParseUserScreenshots(t *testing.T) {
 		t.Logf("[%s] Valid=%v Career=%d SumRoles=%d Roles=%v", filepath.Base(f), res.Valid, res.CareerLevel, res.SumRoles, res.Roles)
 		if !res.Valid {
 			t.Errorf("[%s] Expected Valid=true, got Career=%d SumRoles=%d", filepath.Base(f), res.CareerLevel, res.SumRoles)
+		}
+	}
+}
+
+func TestCheckLatestSteamScreenshot(t *testing.T) {
+	var syncedRes *ProgressionResult
+	var syncedPath string
+	watcher := NewSteamWatcher(
+		func(res *ProgressionResult, path string) {
+			syncedRes = res
+			syncedPath = path
+		},
+		func(format string, args ...interface{}) {
+			t.Logf(format, args...)
+		},
+	)
+	watcher.CheckLatest()
+
+	if len(watcher.dirs) > 0 {
+		if syncedRes == nil {
+			t.Errorf("Expected CheckLatest to synchronize the newest screenshot, got nil")
+		} else {
+			if !syncedRes.Valid {
+				t.Errorf("Expected synced screenshot to be valid, got Valid=false")
+			}
+			t.Logf("Successfully synchronized latest screenshot %s: Career=%d SumRoles=%d", filepath.Base(syncedPath), syncedRes.CareerLevel, syncedRes.SumRoles)
 		}
 	}
 }

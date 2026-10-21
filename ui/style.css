@@ -4347,7 +4347,7 @@ html, body {
 .prog-table th.th-lvl { width: 36px; text-align: center; }
 .prog-table th.th-item { width: auto; }
 .prog-table th.th-cat { width: 95px; text-align: left; }
-.prog-table th.th-price { width: 66px; text-align: right; }
+.prog-table th.th-price { width: 80px; text-align: right; }
 .prog-table th.th-target { width: 38px; text-align: center; }
 
 .prog-table tbody tr {
@@ -6597,8 +6597,18 @@ html, body {
     background: #141414;
     border: 1px solid #222222;
     border-radius: 2px;
-    padding: 12px 16px;
+    padding: 10px 14px 6px 14px;
     margin-bottom: 12px;
+    transition: padding 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.prog-seasons-card.is-collapsed {
+    padding: 8px 14px;
+    background: #121212;
+}
+
+.prog-seasons-card.is-collapsed:hover {
+    border-color: #333333;
 }
 
 .prog-seasons-header {
@@ -6608,12 +6618,64 @@ html, body {
     padding-bottom: 10px;
     border-bottom: 1px solid #1c1c1c;
     margin-bottom: 10px;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 0.15s ease, margin 0.15s ease, padding 0.15s ease;
+}
+
+.prog-seasons-card.is-collapsed .prog-seasons-header {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 .prog-seasons-header-left {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 8px;
+}
+
+.prog-seasons-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.prog-seasons-toggle-btn {
+    background: transparent;
+    border: 1px solid #262626;
+    border-radius: 2px;
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #888888;
+    cursor: pointer;
+    padding: 0;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.prog-seasons-header:hover .prog-seasons-toggle-btn,
+.prog-seasons-toggle-btn:hover {
+    color: #f5f5f5;
+    border-color: #383838;
+    background: #1a1a1a;
+}
+
+.prog-seasons-chevron {
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transform-origin: center;
+}
+
+.prog-seasons-card.is-collapsed .prog-seasons-chevron {
+    transform: rotate(-90deg);
+}
+
+.prog-seasons-card.is-collapsed .prog-seasons-body,
+.prog-seasons-card.is-collapsed .prog-seasons-chart-wrap,
+.prog-seasons-card.is-collapsed .prog-seasons-cards-grid {
+    display: none;
 }
 
 .prog-seasons-title {
@@ -6631,43 +6693,34 @@ html, body {
 .prog-seasons-legend {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     font-size: 10px;
 }
 
-.prog-legend-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
+.prog-legend-badge-s1 {
+    display: inline-block;
+    padding: 2px 7px;
+    background: #181818;
+    border: 1px solid #2a2a2a;
+    border-radius: 2px;
     color: #888888;
-}
-
-.prog-legend-line {
-    width: 14px;
-    height: 2px;
-    background: #FF5E1F;
-}
-
-.prog-legend-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #FF5E1F;
+    font-size: 10px;
+    font-weight: 500;
 }
 
 .prog-legend-badge-active {
     display: inline-block;
-    padding: 2px 6px;
+    padding: 2px 7px;
     background: rgba(255, 94, 31, 0.12);
     border: 1px solid rgba(255, 94, 31, 0.4);
     border-radius: 2px;
     color: #FF5E1F;
+    font-size: 10px;
     font-weight: 600;
 }
 
 .prog-seasons-chart-wrap {
     width: 100%;
-    min-height: 180px;
     position: relative;
     user-select: none;
 }
@@ -6677,6 +6730,143 @@ html, body {
     height: auto;
     display: block;
 }
+
+/* Scalable Multi-Season Cards Grid (Dark Cloudflare Utility) */
+.prog-seasons-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #1c1c1c;
+}
+
+.prog-season-card {
+    background: #111111;
+    border: 1px solid #222222;
+    border-radius: 2px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.prog-season-card:hover {
+    border-color: #333333;
+}
+
+.prog-season-card.is-active {
+    border-color: rgba(255, 94, 31, 0.4);
+    background: #141211;
+}
+
+.prog-season-card.is-active:hover {
+    border-color: #FF5E1F;
+}
+
+.prog-season-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.prog-season-card-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #f5f5f5;
+    letter-spacing: 0.04em;
+}
+
+.prog-season-card.is-active .prog-season-card-title {
+    color: #FF5E1F;
+}
+
+.prog-season-card-badge {
+    font-size: 8.5px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+}
+
+.prog-season-card-badge.is-completed {
+    background: #181818;
+    color: #888888;
+    border: 1px solid #2a2a2a;
+}
+
+.prog-season-card-badge.is-active {
+    background: rgba(255, 94, 31, 0.14);
+    color: #FF5E1F;
+    border: 1px solid rgba(255, 94, 31, 0.4);
+}
+
+.prog-season-card-metric {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 1px;
+}
+
+.prog-season-card-val {
+    font-size: 18px;
+    font-weight: 700;
+    color: #f5f5f5;
+    line-height: 1;
+}
+
+.prog-season-card.is-active .prog-season-card-val {
+    color: #FF5E1F;
+}
+
+.prog-season-card-lbl {
+    font-size: 8.5px;
+    color: #666666;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.prog-season-card-bar-track {
+    width: 100%;
+    height: 3px;
+    background: #1a1a1a;
+    border-radius: 1px;
+    overflow: hidden;
+}
+
+.prog-season-card-bar-fill {
+    height: 100%;
+    background: #555555;
+    border-radius: 1px;
+    transition: width 0.3s ease;
+}
+
+.prog-season-card.is-active .prog-season-card-bar-fill {
+    background: #FF5E1F;
+}
+
+.prog-season-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 8.5px;
+    color: #777777;
+    margin-top: 1px;
+}
+
+.prog-season-card-dates {
+    white-space: nowrap;
+}
+
+.prog-season-card-wipe {
+    color: #e57373;
+    font-size: 8px;
+    white-space: nowrap;
+}
+
 
 
 

@@ -167,16 +167,11 @@ func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, frankfurt
 	routeMode = singbox.GetNetworkRouteMode()
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
 		moscowPing, moscowOK = probeEndpoint(singbox.MoscowIngressIP, []string{"80", "443"}, 1500*time.Millisecond)
-	}()
-
-	go func() {
-		defer wg.Done()
-		frankfurtPing, frankfurtOK = probeEndpoint(singbox.FrankfurtEdgeIP, []string{"80", "443"}, 1500*time.Millisecond)
 	}()
 
 	go func() {
@@ -217,35 +212,10 @@ func (b *AutoBeacon) CollectSnapshot() (moscowPing int, moscowOK bool, frankfurt
 		lossPct = tunnelLoss
 		jitter = tunnelJitter
 		matchServer = ""
-		switch routeMode {
-		case config.RouteModeDirectMoscow:
-			if moscowOK && moscowPing > 0 {
-				inGamePing = moscowPing + 30
-			} else if tunnelPing > 0 {
-				inGamePing = tunnelPing + 30
-			}
-		case config.RouteModeDirectFrankfurt:
-			if frankfurtOK && frankfurtPing > 0 {
-				inGamePing = frankfurtPing + 25
-			} else if tunnelPing > 0 {
-				inGamePing = tunnelPing + 25
-			}
-		case config.RouteModeDirectStockholm:
-			if stockholmOK && stockholmPing > 0 {
-				inGamePing = stockholmPing + 30
-			} else if tunnelPing > 0 {
-				inGamePing = tunnelPing + 30
-			}
-		case config.RouteModeTransit:
-			fallthrough
-		default:
-			if moscowOK && moscowPing > 0 {
-				inGamePing = moscowPing + 35
-			} else if frankfurtOK && frankfurtPing > 0 {
-				inGamePing = frankfurtPing + 25
-			} else if tunnelPing > 0 {
-				inGamePing = tunnelPing + 30
-			}
+		if moscowOK && moscowPing > 0 {
+			inGamePing = moscowPing + 30
+		} else if tunnelPing > 0 {
+			inGamePing = tunnelPing + 30
 		}
 	}
 

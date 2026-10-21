@@ -413,18 +413,26 @@
             </div>
         </div>
 
-        <!-- Section 1.5: Linear Progression of Seasons (Season 1 vs Season 2) -->
-        <div class="prog-seasons-card">
-            <div class="prog-seasons-header">
-                <div class="prog-seasons-title font-mono">ПРОГРЕСС ПО СЕЗОНАМ (WARDOGS)</div>
-                <div class="prog-seasons-legend font-mono">
-                    <span class="prog-legend-item">
-                        <span class="prog-legend-dot-s1"></span>
-                        <span>Сезон 1 (Завершен)</span>
-                    </span>
-                    <span class="prog-legend-item">
-                        <span class="prog-legend-badge-active">Сезон 2 (Активен)</span>
-                    </span>
+        <!-- Section 1.5: Seasons Progression (Collapsible) -->
+        <div class="prog-seasons-card" id="prog-seasons-card">
+            <div class="prog-seasons-header" onclick="ProgressionController.toggleSeasonsCollapse(event)" title="Свернуть / развернуть прогресс по сезонам">
+                <div class="prog-seasons-header-left">
+                    <span class="prog-seasons-title font-mono">ПРОГРЕСС ПО СЕЗОНАМ (WARDOGS)</span>
+                </div>
+                <div class="prog-seasons-header-right">
+                    <div class="prog-seasons-legend font-mono">
+                        <span class="prog-legend-item">
+                            <span class="prog-legend-badge-s1">Сезон 1 (Завершен)</span>
+                        </span>
+                        <span class="prog-legend-item">
+                            <span class="prog-legend-badge-active">Сезон 2 (Активен)</span>
+                        </span>
+                    </div>
+                    <button type="button" class="prog-seasons-toggle-btn" id="btn-prog-seasons-toggle" aria-label="Свернуть / развернуть" title="Свернуть / развернуть">
+                        <svg class="prog-seasons-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </button>
                 </div>
             </div>
             <div class="prog-seasons-chart-wrap" id="prog-seasons-chart-container">
@@ -682,9 +690,7 @@
                 <div class="setting-row" style="margin-top: 6px;">
                     <span class="setting-label">Выбор маршрута:</span>
                     <select id="select-network-route" class="setting-select" onchange="onNetworkRouteModeChange(this.value)">
-                        <option value="direct_moscow">Москва (Транзит, РФ)</option>
-                        <option value="direct_frankfurt">Франкфурт (Европа)</option>
-                        <option value="transit">Москва → Франкфурт</option>
+                        <option value="direct_moscow">Москва (Прямой игровой шлюз)</option>
                     </select>
                 </div>
                 <div id="auto-hosts-info" class="setting-info-row" style="margin-top: 6px; font-size: 11px;">
@@ -852,7 +858,7 @@
         <!-- Ultra-compact Infrastructure Goal Strip (Variant A: 34px height) -->
         <div class="community-goal-box compact-goal-strip">
             <div class="compact-strip-left font-mono">
-                <div class="compact-node-item covered" id="goal-node-infra" title="Обслуживание инфраструктуры кластера: Стокгольм + Москва + Франкфурт (13 € / мес)">
+                <div class="compact-node-item covered" id="goal-node-infra" title="Обслуживание инфраструктуры кластера: Стокгольм + Москва (8 € / мес)">
                     <div class="compact-flags">
                         <!-- Швеция (Стокгольм Master) -->
                         <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
@@ -866,14 +872,8 @@
                             <rect y="3.67" width="16" height="3.67" fill="#0039A6"/>
                             <rect y="7.33" width="16" height="3.67" rx="1" fill="#D52B1E"/>
                         </svg>
-                        <!-- Германия (Франкфурт Gaming Edge) -->
-                        <svg class="node-flag" width="12" height="9" viewBox="0 0 16 11" fill="none">
-                            <rect width="16" height="3.67" rx="1" fill="#202020"/>
-                            <rect y="3.67" width="16" height="3.67" fill="#DD1111"/>
-                            <rect y="7.33" width="16" height="3.67" rx="1" fill="#FFCE00"/>
-                        </svg>
                     </div>
-                    <span class="compact-node-title">Инфраструктура кластера (13 € / мес):</span>
+                    <span class="compact-node-title" id="infra-node-title">Инфраструктура кластера (8 € / мес):</span>
                     <div class="compact-mini-bar" style="width: 50px;">
                         <div id="infra-progress-fill" class="compact-mini-fill" style="width: 100%;"></div>
                     </div>

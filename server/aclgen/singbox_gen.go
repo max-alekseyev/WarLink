@@ -7,6 +7,15 @@ import (
 	"strings"
 )
 
+const (
+	FrankfurtEdgeIP     = "85.192.24.254"
+	FrankfurtEdgeDomain = "de.warlink.max-alekseyev.com"
+	MoscowIngressIP     = "45.12.63.85"
+	MoscowIngressDomain = "ru.warlink.max-alekseyev.com"
+	StockholmCoreIP     = "138.124.103.99"
+	StockholmCoreDomain = "api-warlink.max-alekseyev.com"
+)
+
 // BlockedServiceIPs contains IP ranges blocked at Layer 3/4 by Russian ISPs (TSPU).
 var BlockedServiceIPs = []string{
 	"157.240.0.0/16",
@@ -66,9 +75,8 @@ var YouTubeDomains = []string{
 	"googlevideo.com",
 	"ytimg.com",
 	"ytimg.l.google.com",
-	"yt3.ggpht.com",
-	"yt4.ggpht.com",
-	"yt3.googleusercontent.com",
+	"ggpht.com",
+	"googleusercontent.com",
 	"jnn-pa.googleapis.com",
 	"wide-youtube.l.google.com",
 	"youtube-nocookie.com",
@@ -79,6 +87,9 @@ var YouTubeDomains = []string{
 	"youtubei.googleapis.com",
 	"yt-video-upload.l.google.com",
 	"play.google.com",
+	"yt.be",
+	"youtubeeducation.com",
+	"youtubego.com",
 }
 
 // SocialMessengerDomains contains social media, instant messengers, and stream chat extensions.
@@ -189,7 +200,6 @@ var DirectGameDomains = []string{
 	// Anti-cheat / PKI endpoints (CRL/OCSP)
 	"certainly.com",
 	"pki.goog",
-	"elytra.ac",
 	// Steam
 	"steamserver.net",
 	"steampowered.com",
@@ -240,6 +250,15 @@ var WardogsGameProcesses = []string{
 	"wardogslauncher.exe",
 	"elytra-launcher.exe",
 	"elytraclient.exe",
+}
+
+// WardogsGameDomains contains critical game, anti-cheat, matchmaking and telemetry domains for WARDOGS.
+var WardogsGameDomains = []string{
+	"faa.bulkhead.net",
+	"bulkhead.net",
+	"pragmaengine.com",
+	"vivox.com",
+	"elytra.ac",
 }
 
 // DynamoDBRegionProbeDomains contains AWS DynamoDB regional endpoints used by WARDOGS
@@ -401,7 +420,7 @@ type SingBoxFullConfig struct {
 }
 
 // GenerateSingBoxConfig constructs a pure, validated sing-box JSON configuration from profiles.
-func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeWebServices bool, serverIP string, serverPorts string, obfsPassword string, token string) ([]byte, error) {
+func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeWebServices bool, serverIP string, serverPorts string, obfsPassword string, token string, optionalRouteMode ...string) ([]byte, error) {
 	if token == "" {
 		token = "wl_session_token"
 	}
@@ -409,27 +428,47 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		serverPorts = "443,20000-30000"
 	}
 
+	routeMode := ""
+	if len(optionalRouteMode) > 0 {
+		routeMode = optionalRouteMode[0]
+	}
+	_ = routeMode
+	webOutbound := "hy2-gateway"
+
+	isWebProc := func(p string) bool {
+		switch strings.ToLower(p) {
+		case "discord.exe", "discordcanary.exe", "discordptb.exe", "telegram.exe":
+			return true
+		default:
+			return false
+		}
+	}
+
 	procSet := make(map[string]struct{})
 	for _, p := range extraProcesses {
 		pClean := strings.TrimSpace(p)
-		if pClean != "" {
+		if pClean != "" && !isWebProc(pClean) {
 			procSet[pClean] = struct{}{}
 		}
 	}
-	// Include Discord and Telegram processes into tunnel only when web services enabled
+
+	var webProcesses []string
 	if includeWebServices {
-		for _, dp := range []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"} {
-			procSet[dp] = struct{}{}
-		}
+		webProcesses = []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe", "Telegram.exe", "telegram.exe"}
 	}
 
 	domainSet := make(map[string]struct{})
 	ipSet := make(map[string]struct{})
 
+	// Always include core WARDOGS game and anti-cheat domains
+	for _, gd := range WardogsGameDomains {
+		domainSet[gd] = struct{}{}
+	}
+
 	for _, prof := range profiles {
 		for _, p := range prof.Processes {
 			pClean := strings.TrimSpace(p)
-			if pClean != "" {
+			if pClean != "" && !isWebProc(pClean) {
 				procSet[pClean] = struct{}{}
 			}
 		}
@@ -514,11 +553,11 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			Port:     []int{123},
 			Outbound: "direct",
 		},
-		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to hy2-gateway
+		// 4. Route FakeIP synthetic pool (198.18.0.0/15) to webOutbound
 		// Must be evaluated before DirectLauncherProcesses so synthetic DNS endpoints proxy cleanly.
 		{
 			IPCIDR:   []string{"198.18.0.0/15"},
-			Outbound: "hy2-gateway",
+			Outbound: webOutbound,
 		},
 		// 5. Game launchers and anti-cheat processes route direct when connecting to real IPs
 		{
@@ -532,7 +571,20 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		},
 	}
 
-	if targetServer != "" {
+	for _, nodeIP := range []string{MoscowIngressIP, FrankfurtEdgeIP, StockholmCoreIP} {
+		rules = append(rules, SingBoxRouteRule{
+			IPCIDR:   []string{nodeIP + "/32"},
+			Outbound: "direct",
+		})
+	}
+	for _, nodeDomain := range []string{MoscowIngressDomain, FrankfurtEdgeDomain, StockholmCoreDomain} {
+		rules = append(rules, SingBoxRouteRule{
+			Domain:   []string{nodeDomain},
+			Outbound: "direct",
+		})
+	}
+
+	if targetServer != "" && targetServer != MoscowIngressIP && targetServer != FrankfurtEdgeIP && targetServer != StockholmCoreIP && !strings.Contains(targetServer, ":") {
 		rules = append(rules, SingBoxRouteRule{
 			IPCIDR:   []string{targetServer + "/32"},
 			Outbound: "direct",
@@ -546,6 +598,14 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		rules = append(rules, SingBoxRouteRule{
 			ProcessName: allProcesses,
 			Outbound:    "hy2-gateway",
+		})
+	}
+
+	// Route web messaging / VoIP processes (Discord, Telegram) to webOutbound
+	if includeWebServices && len(webProcesses) > 0 {
+		rules = append(rules, SingBoxRouteRule{
+			ProcessName: webProcesses,
+			Outbound:    webOutbound,
 		})
 	}
 
@@ -611,28 +671,36 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		DomainSuffix: quicRejectDomains,
 	})
 
+	// Reject QUIC (HTTP/3 over UDP 443) for common web browsers to force instant fallback to TCP HTTP/2
+	rules = append(rules, SingBoxRouteRule{
+		Action:      "reject",
+		Network:     "udp",
+		Port:        []int{443},
+		ProcessName: []string{"chrome.exe", "msedge.exe", "firefox.exe", "opera.exe", "brave.exe", "vivaldi.exe", "browser.exe", "yandex.exe"},
+	})
+
 	if includeWebServices {
-		// Route YouTube, Discord, and Social/Messenger services to Hysteria 2 gateway
+		// Route YouTube, Discord, and Social/Messenger services to webOutbound
 		rules = append(rules,
 			SingBoxRouteRule{
 				DomainSuffix: YouTubeDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			SingBoxRouteRule{
 				DomainSuffix: DiscordDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			SingBoxRouteRule{
 				DomainSuffix: SocialMessengerDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			SingBoxRouteRule{
 				DomainSuffix: BlockedServiceDomains,
-				Outbound:     "hy2-gateway",
+				Outbound:     webOutbound,
 			},
 			SingBoxRouteRule{
 				IPCIDR:   BlockedServiceIPs,
-				Outbound: "hy2-gateway",
+				Outbound: webOutbound,
 			},
 		)
 	}
@@ -661,19 +729,19 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 	})
 
 	if includeWebServices {
-		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through hy2-gateway
+		// Discord Voice WebRTC UDP media (ports 19294-19344, 50000-65535, 3478) routes through webOutbound
 		rules = append(rules,
 			SingBoxRouteRule{
 				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 				Network:     "udp",
 				Port:        []int{3478},
-				Outbound:    "hy2-gateway",
+				Outbound:    webOutbound,
 			},
 			SingBoxRouteRule{
 				ProcessName: []string{"Discord.exe", "discord.exe", "DiscordCanary.exe", "DiscordPTB.exe"},
 				Network:     "udp",
 				PortRange:   []string{"19294:19344", "50000:65535"},
-				Outbound:    "hy2-gateway",
+				Outbound:    webOutbound,
 			},
 		)
 	}
@@ -767,7 +835,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 			},
 			{
 				Tag:    "dns-remote",
-				Type:   "tcp",
+				Type:   "udp",
 				Server: "1.1.1.1",
 				Detour: "hy2-gateway",
 			},
@@ -812,8 +880,19 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 		"192.168.0.0/16",
 		"127.0.0.0/8",
 	}
-	if targetServer != "" && !strings.Contains(targetServer, ":") {
+	for _, nodeIP := range []string{MoscowIngressIP, FrankfurtEdgeIP, StockholmCoreIP} {
+		routeExclude = append(routeExclude, nodeIP+"/32")
+	}
+	if targetServer != "" && !strings.Contains(targetServer, ":") && targetServer != MoscowIngressIP && targetServer != FrankfurtEdgeIP && targetServer != StockholmCoreIP {
 		routeExclude = append(routeExclude, targetServer+"/32")
+	}
+
+	outbounds := []SingBoxOutbound{
+		hy2Outbound,
+		{
+			Type: "direct",
+			Tag:  "direct",
+		},
 	}
 
 	fullConfig := SingBoxFullConfig{
@@ -839,13 +918,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 				UDPNATMax:           8192,
 			},
 		},
-		Outbounds: []SingBoxOutbound{
-			hy2Outbound,
-			{
-				Type: "direct",
-				Tag:  "direct",
-			},
-		},
+		Outbounds: outbounds,
 		Route: SingBoxRouteConfig{
 			DefaultDomainResolver: "dns-local",
 			FindProcess:           true,

@@ -59,14 +59,51 @@ type roleConfig struct {
 	Ry   float64
 }
 
-var rolesGrid = []roleConfig{
-	{Name: "assault", Rx: 0.068359, Ry: 0.336806},
-	{Name: "medic",   Rx: 0.176563, Ry: 0.336806},
-	{Name: "recon",   Rx: 0.068359, Ry: 0.528472},
-	{Name: "support", Rx: 0.176563, Ry: 0.528472},
-	{Name: "driver",  Rx: 0.068359, Ry: 0.720139},
-	{Name: "pilot",   Rx: 0.176563, Ry: 0.720139},
+type layoutProfile struct {
+	Name    string
+	CardH   float64
+	NumRelX float64
+	NumRelY float64
+	NumRelW float64
+	NumRelH float64
+	Roles   []roleConfig
 }
+
+var season2Layout = layoutProfile{
+	Name:    "Season 2",
+	CardH:   0.165972,
+	NumRelX: 0.25,
+	NumRelY: 0.55,
+	NumRelW: 0.50,
+	NumRelH: 0.24,
+	Roles: []roleConfig{
+		{Name: "assault", Rx: 0.068359, Ry: 0.320139},
+		{Name: "medic",   Rx: 0.176563, Ry: 0.320139},
+		{Name: "recon",   Rx: 0.068359, Ry: 0.501389},
+		{Name: "support", Rx: 0.176563, Ry: 0.501389},
+		{Name: "driver",  Rx: 0.068359, Ry: 0.682639},
+		{Name: "pilot",   Rx: 0.176563, Ry: 0.682639},
+	},
+}
+
+var season1Layout = layoutProfile{
+	Name:    "Season 1",
+	CardH:   0.175694,
+	NumRelX: 0.2857,
+	NumRelY: 0.6089,
+	NumRelW: 0.4285,
+	NumRelH: 0.1707,
+	Roles: []roleConfig{
+		{Name: "assault", Rx: 0.068359, Ry: 0.336806},
+		{Name: "medic",   Rx: 0.176563, Ry: 0.336806},
+		{Name: "recon",   Rx: 0.068359, Ry: 0.528472},
+		{Name: "support", Rx: 0.176563, Ry: 0.528472},
+		{Name: "driver",  Rx: 0.068359, Ry: 0.720139},
+		{Name: "pilot",   Rx: 0.176563, Ry: 0.720139},
+	},
+}
+
+var rolesGrid = season1Layout.Roles
 
 // ParseScreenshotFile loads and parses a screenshot from the file path.
 func ParseScreenshotFile(path string) (*ProgressionResult, error) {
@@ -92,43 +129,32 @@ func ParseScreenshotBytes(data []byte) (*ProgressionResult, error) {
 	return ParseScreenshot(img)
 }
 
-// ParseScreenshot detects 16:9 canvas, isolates numbers, matches templates and measures XP arcs.
-func ParseScreenshot(img image.Image) (*ProgressionResult, error) {
-	bounds := img.Bounds()
-	w := bounds.Dx()
-	h := bounds.Dy()
-	if w < 640 || h < 360 {
-		return nil, errors.New("resolution too small for reliable detection")
-	}
-
-	canvasW, canvasH, xOff, yOff := calculateCanvas(w, h)
-
-	// 1. Career Level with safety margin to prevent clipping top/bottom arches
-	cx := xOff + int(math.Round(0.188*float64(canvasW)))
-	cy := yOff + int(math.Round(0.208*float64(canvasH)))
-	cw := int(math.Round(0.052 * float64(canvasW)))
-	ch := int(math.Round(0.056 * float64(canvasH)))
-	careerCrop := imaging.Crop(img, image.Rect(cx, cy, cx+cw, cy+ch))
-	careerLevel := recognizeNumber(careerCrop)
-
-	// 2. Roles Progression
+func parseWithLayout(img image.Image, canvasW, canvasH, xOff, yOff int, careerLevel int, layout layoutProfile) *ProgressionResult {
 	roles := make(map[string]RoleProgression, 6)
 	sumRoles := 0
 
-	for _, r := range rolesGrid {
-		// Crop number box with adequate vertical clearance to include top curve of digits
-		nx := xOff + int(math.Round((r.Rx+0.027344)*float64(canvasW)))
-		ny := yOff + int(math.Round((r.Ry+0.107)*float64(canvasH)))
-		nw := int(math.Round(0.041016 * float64(canvasW)))
-		nh := int(math.Round(0.030 * float64(canvasH)))
-		numCrop := imaging.Crop(img, image.Rect(nx, ny, nx+nw, ny+nh))
-		lvl := recognizeNumber(numCrop)
-
-		// Crop card for XP arc
+	for _, r := range layout.Roles {
 		cardX := xOff + int(math.Round(r.Rx*float64(canvasW)))
 		cardY := yOff + int(math.Round(r.Ry*float64(canvasH)))
 		cardW := int(math.Round(0.095703 * float64(canvasW)))
-		cardH := int(math.Round(0.175694 * float64(canvasH)))
+		cardH := int(math.Round(layout.CardH * float64(canvasH)))
+
+		var nx, ny, nw, nh int
+		if layout.Name == "Season 1" {
+			nx = xOff + int(math.Round((r.Rx+0.027344)*float64(canvasW)))
+			ny = yOff + int(math.Round((r.Ry+0.107)*float64(canvasH)))
+			nw = int(math.Round(0.041016 * float64(canvasW)))
+			nh = int(math.Round(0.030 * float64(canvasH)))
+		} else {
+			nx = cardX + int(math.Round(layout.NumRelX*float64(cardW)))
+			ny = cardY + int(math.Round(layout.NumRelY*float64(cardH)))
+			nw = int(math.Round(layout.NumRelW*float64(cardW)))
+			nh = int(math.Round(layout.NumRelH*float64(cardH)))
+		}
+
+		numCrop := imaging.Crop(img, image.Rect(nx, ny, nx+nw, ny+nh))
+		lvl := recognizeNumber(numCrop)
+
 		cardCrop := imaging.Crop(img, image.Rect(cardX, cardY, cardX+cardW, cardY+cardH))
 		xpPct := calculateXPArc(cardCrop)
 
@@ -149,7 +175,46 @@ func ParseScreenshot(img image.Image) (*ProgressionResult, error) {
 		Roles:       roles,
 		SumRoles:    sumRoles,
 		Valid:       valid,
-	}, nil
+	}
+}
+
+// ParseScreenshot detects 16:9 canvas, isolates numbers, matches templates and measures XP arcs.
+func ParseScreenshot(img image.Image) (*ProgressionResult, error) {
+	bounds := img.Bounds()
+	w := bounds.Dx()
+	h := bounds.Dy()
+	if w < 640 || h < 360 {
+		return nil, errors.New("resolution too small for reliable detection")
+	}
+
+	canvasW, canvasH, xOff, yOff := calculateCanvas(w, h)
+
+	// 1. Career Level with safety margin to prevent clipping top/bottom arches
+	cx := xOff + int(math.Round(0.188*float64(canvasW)))
+	cy := yOff + int(math.Round(0.208*float64(canvasH)))
+	cw := int(math.Round(0.052 * float64(canvasW)))
+	ch := int(math.Round(0.056 * float64(canvasH)))
+	careerCrop := imaging.Crop(img, image.Rect(cx, cy, cx+cw, cy+ch))
+	careerLevel := recognizeNumber(careerCrop)
+
+	// 2. Roles Progression with dual-layout support (Season 2 current, Season 1 legacy fallback)
+	resS2 := parseWithLayout(img, canvasW, canvasH, xOff, yOff, careerLevel, season2Layout)
+	if resS2.Valid {
+		return resS2, nil
+	}
+
+	resS1 := parseWithLayout(img, canvasW, canvasH, xOff, yOff, careerLevel, season1Layout)
+	if resS1.Valid {
+		return resS1, nil
+	}
+
+	// Neither is strictly valid, pick whichever is closer to careerLevel
+	diffS2 := math.Abs(float64(careerLevel - resS2.SumRoles))
+	diffS1 := math.Abs(float64(careerLevel - resS1.SumRoles))
+	if diffS2 <= diffS1 {
+		return resS2, nil
+	}
+	return resS1, nil
 }
 
 func calculateCanvas(w, h int) (canvasW, canvasH, xOff, yOff int) {
@@ -329,20 +394,21 @@ func calculateXPArc(card image.Image) float64 {
 	cw := float64(bounds.Dx())
 	ch := float64(bounds.Dy())
 
-	// Scaled center and radius based on reference 245x253 card
-	cx := cw * (122.5 / 245.0)
-	cy := ch * (109.0 / 253.0)
-	rTarget := cw * (86.0 / 245.0)
+	// Scaled center and radius based on reference dial card geometry (245x239)
+	cx := cw * (117.0 / 245.0)
+	cy := ch * (104.0 / 239.0)
+	rTarget := cw * (80.7 / 245.0)
 
-	totalSamples := 288
+	// Arc spans 280 degrees, starting at bottom-left (130 deg) and sweeping clockwise to bottom-right (50 deg)
+	totalSamples := 280
 	yellowSamples := 0
 
 	for deg := 0; deg < totalSamples; deg++ {
-		angleDeg := float64((216 + deg) % 360)
+		angleDeg := float64((130 + deg) % 360)
 		rad := angleDeg * (math.Pi / 180.0)
 
 		isYellow := false
-		for dr := -2.0; dr <= 2.0; dr += 1.0 {
+		for dr := -3.0; dr <= 3.0; dr += 1.0 {
 			px := int(math.Round(cx + (rTarget+dr)*math.Cos(rad)))
 			py := int(math.Round(cy + (rTarget+dr)*math.Sin(rad)))
 			if px >= 0 && px < bounds.Dx() && py >= 0 && py < bounds.Dy() {

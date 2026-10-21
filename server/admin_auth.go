@@ -119,6 +119,11 @@ func (s *AppState) checkAdminAuthWithKind(r *http.Request) (bool, string) {
 	if qk := r.Header.Get("X-Dashboard-Key"); qk != "" && s.cfg.DashboardKey != "" && qk == s.cfg.DashboardKey {
 		return true, "dashboard_key_header"
 	}
+	if auth := r.Header.Get("Authorization"); auth != "" && s.cfg.DashboardKey != "" {
+		if strings.HasPrefix(auth, "Bearer ") && strings.TrimPrefix(auth, "Bearer ") == s.cfg.DashboardKey {
+			return true, "bearer_token"
+		}
+	}
 
 	// 3. Check internal service token strictly from localhost (127.0.0.1 or ::1)
 	clientIP := getCleanIP(r.RemoteAddr)
@@ -179,6 +184,9 @@ func (s *AppState) handleAdminAuthStatus(w http.ResponseWriter, r *http.Request)
 				JOIN admin_users u ON s.user_id = u.id
 				WHERE s.id = $1 AND s.expires_at > NOW()
 			`, cookie.Value).Scan(&username)
+		}
+		if username == "" {
+			username = "admin"
 		}
 	}
 
@@ -517,11 +525,56 @@ func (s *AppState) handleAdminAuthLogout(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
+// handleAdminAuthKeyLogin authenticates an admin directly using the Master Dashboard Key.
+func (s *AppState) handleAdminAuthKeyLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method_not_allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "invalid_payload"})
+		return
+	}
+	key := strings.TrimSpace(req.Key)
+	if key == "" || s.cfg.DashboardKey == "" || key != s.cfg.DashboardKey {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Неверный секретный ключ"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_key",
+		Value:    key,
+		Path:     "/",
+		HttpOnly: true,
+		MaxAge:   30 * 24 * 3600,
+		SameSite: http.SameSiteLaxMode,
+	})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "username": "admin"})
+}
+
 // handleAdminWebSPA serves the native embedded control panel SPA.
 func (s *AppState) handleAdminWebSPA(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
+
+	if qk := strings.TrimSpace(r.URL.Query().Get("key")); qk != "" {
+		if s.cfg.DashboardKey != "" && qk == s.cfg.DashboardKey {
+			http.SetCookie(w, &http.Cookie{
+				Name:     "admin_key",
+				Value:    qk,
+				Path:     "/",
+				HttpOnly: true,
+				MaxAge:   30 * 24 * 3600,
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
+	}
 
 	if strings.HasSuffix(r.URL.Path, "style.css") {
 		css, err := adminweb.GetStyleCSS()
@@ -740,10 +793,6 @@ func (s *AppState) handleAdminNodes(w http.ResponseWriter, r *http.Request) {
 	moscowRTT := s.moscowPingRTT
 	s.moscowPingMu.RUnlock()
 
-	s.frankfurtPingMu.RLock()
-	frankfurtRTT := s.frankfurtPingRTT
-	s.frankfurtPingMu.RUnlock()
-
 	maxSlots := s.cfg.MaxSessions
 	if maxSlots <= 0 {
 		maxSlots = 100
@@ -786,33 +835,19 @@ func (s *AppState) handleAdminNodes(w http.ResponseWriter, r *http.Request) {
 			NodeID:         "moscow-gateway",
 			Name:           "Москва (Игровой шлюз РФ)",
 			Host:           "ru.warlink.max-alekseyev.com",
-			Port:           443,
+			Port:           8443,
 			IP:             "45.12.63.85",
 			IsHealthy:      true,
-			ActivePlayers:  directMoscowPlayers + transitPlayers,
-			ActiveSessions: directMoscowPlayers + transitPlayers,
-			DirectPlayers:  directMoscowPlayers,
-			TransitPlayers: transitPlayers,
+			ActivePlayers:  totalActive,
+			ActiveSessions: totalActive,
+			DirectPlayers:  totalActive,
+			TransitPlayers: 0,
 			RTTMs:          moscowRTT,
 			Role:           "Игровой шлюз РФ (UDP Ingress & Direct)",
 		},
-		{
-			NodeID:         "frankfurt-gateway",
-			Name:           "Франкфурт (Европейский игровой шлюз)",
-			Host:           "de.warlink.max-alekseyev.com",
-			Port:           443,
-			IP:             "85.192.24.254",
-			IsHealthy:      true,
-			ActivePlayers:  directFrankfurtPlayers + transitPlayers,
-			ActiveSessions: directFrankfurtPlayers + transitPlayers,
-			DirectPlayers:  directFrankfurtPlayers,
-			TransitPlayers: transitPlayers,
-			RTTMs:          frankfurtRTT,
-			Role:           "Европейский игровой шлюз (UDP Egress & Direct)",
-		},
 	}
 
-	// 3 Client Routing Modes
+	// Active Client Routing Modes
 	type RouteModeInfo struct {
 		ID            string  `json:"id"`
 		Name          string  `json:"name"`
@@ -828,24 +863,8 @@ func (s *AppState) handleAdminNodes(w http.ResponseWriter, r *http.Request) {
 			Name:          "Прямая Москва",
 			Description:   "Прямой игровой маршрут через шлюз в РФ (минимальный пинг для игроков из России)",
 			GatewayPath:   "ru.warlink.max-alekseyev.com (Москва)",
-			ActivePlayers: directMoscowPlayers,
+			ActivePlayers: totalActive,
 			RTTMs:         moscowRTT,
-		},
-		{
-			ID:            "direct_frankfurt",
-			Name:          "Прямой Франкфурт",
-			Description:   "Прямой игровой маршрут в Европу (для игроков вне РФ или с прямым чистым каналом)",
-			GatewayPath:   "de.warlink.max-alekseyev.com (Франкфурт)",
-			ActivePlayers: directFrankfurtPlayers,
-			RTTMs:         frankfurtRTT,
-		},
-		{
-			ID:            "transit",
-			Name:          "Москва → Франкфурт (Транзит)",
-			Description:   "Двухзвенный транзит с обходом ТСПУ (Ingress Москва → Egress Франкфурт)",
-			GatewayPath:   "ru.warlink.max-alekseyev.com → de.warlink.max-alekseyev.com",
-			ActivePlayers: transitPlayers,
-			RTTMs:         moscowRTT + frankfurtRTT,
 		},
 	}
 
