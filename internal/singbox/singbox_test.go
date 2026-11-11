@@ -916,6 +916,62 @@ func TestLiveFetchRemoteConfigDirectMoscow(t *testing.T) {
 	}
 }
 
+func TestIsWintunCollisionError(t *testing.T) {
+	testCases := []struct {
+		errStr   string
+		expected bool
+	}{
+		{
+			errStr:   "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: The system cannot find the file specified.",
+			expected: true,
+		},
+		{
+			errStr:   "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: The wait operation timed out.",
+			expected: true,
+		},
+		{
+			errStr:   "FATAL[0004] start service: post-start inbound/tun[tun-in]: starting tun stack: listen tcp4 172.28.192.1:0: bind: The requested address is not valid in its context.",
+			expected: true,
+		},
+		{
+			errStr:   "Cannot create a file when that file already exists.",
+			expected: true,
+		},
+		{
+			errStr:   "Element not found.",
+			expected: true,
+		},
+		{
+			errStr:   "panic: wintun driver ring buffer overflow",
+			expected: true,
+		},
+		{
+			errStr:   "dial tcp 138.124.103.99:443: connect: connection refused",
+			expected: false,
+		},
+		{
+			errStr:   "invalid character 'x' looking for beginning of value",
+			expected: false,
+		},
+		{
+			errStr:   "",
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		res := IsWintunCollisionError(tc.errStr)
+		if res != tc.expected {
+			t.Errorf("IsWintunCollisionError(%q) = %v, expected %v", tc.errStr, res, tc.expected)
+		}
+	}
+}
+
+func TestSoftCleanupWintun(t *testing.T) {
+	// Should execute cleanly without error or panicking
+	SoftCleanupWintun()
+}
+
 
 
 

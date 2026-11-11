@@ -424,6 +424,52 @@ func Load() *Config {
 			_ = cfg.saveLocked()
 		}
 
+		// Season 3 Wipe & Archive Migration:
+		// WARDOGS Season 3 starts November 12, 2026 (1794441600 Unix).
+		// Archive Season 2 progression into History and reset for Season 3 ONLY when time reached Season 3 epoch.
+		season3Epoch := int64(1794441600) // 2026-11-12 00:00:00 UTC
+		if cfg.Progression.Season < 3 && time.Now().Unix() >= season3Epoch {
+			s2Level := cfg.Progression.CareerLevel
+			if s2Level < 1 {
+				s2Level = 1
+			}
+			hasProgress := s2Level > 1 || len(cfg.Progression.Roles) > 0 || len(cfg.Progression.UnlockedItems) > 0
+			if hasProgress {
+				alreadyArchived := false
+				for _, h := range cfg.Progression.History {
+					if h.Season == 2 {
+						alreadyArchived = true
+						break
+					}
+				}
+				if !alreadyArchived {
+					cfg.Progression.History = append(cfg.Progression.History, SeasonHistoryRecord{
+						Season:      2,
+						SeasonTitle: "Сезон 2",
+						CareerLevel: s2Level,
+						CareerXP:    0,
+						StartDate:   "2026-10-15",
+						EndDate:     "2026-11-12",
+						ArchivedAt:  time.Now().UTC().Format(time.RFC3339),
+					})
+				}
+			}
+			cfg.Progression.Season = 3
+			cfg.Progression.CareerLevel = 0
+			cfg.Progression.Roles = make(map[string]int)
+			cfg.Progression.XPProgress = make(map[string]float64)
+			cfg.Progression.UnlockedItems = nil
+			cfg.Progression.LastUpdated = time.Now().Unix()
+			_ = cfg.saveLocked()
+		}
+
+		// Fixup for any configs that got the legacy default of CareerLevel=1 / assault=1 after Season 3 wipe
+		if cfg.Progression.Season >= 3 && cfg.Progression.CareerLevel == 1 && len(cfg.Progression.Roles) == 1 && cfg.Progression.Roles["assault"] == 1 && len(cfg.Progression.XPProgress) == 0 && len(cfg.Progression.UnlockedItems) == 0 {
+			cfg.Progression.CareerLevel = 0
+			cfg.Progression.Roles = make(map[string]int)
+			_ = cfg.saveLocked()
+		}
+
 		if !cfg.Progression.IsConfigured() {
 			cfg.Progression = nil
 		}

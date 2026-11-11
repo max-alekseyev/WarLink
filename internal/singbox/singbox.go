@@ -41,7 +41,7 @@ const (
 )
 
 var (
-	ClientVersion       = "v2.2.3"
+	ClientVersion       = "v2.2.8"
 	DefaultServerIP     = "api-warlink.max-alekseyev.com"
 	DefaultServerAPI    = "https://api-warlink.max-alekseyev.com"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -71,7 +71,7 @@ func ResolveDomainIPv4(domainOrIP string) string {
 	// 1. Instant static mapping for primary infrastructure nodes
 	switch domainOrIP {
 	case MoscowIngressDomain:
-		return "45.12.63.85"
+		return "83.141.93.201"
 	case FrankfurtEdgeDomain:
 		return "85.192.24.254"
 	case StockholmCoreDomain:
@@ -659,6 +659,7 @@ type GatewayStatus struct {
 	DonateCryptoEnabled   *bool  `json:"donate_crypto_enabled,omitempty"`
 	DonatePausedNotice    string `json:"donate_paused_notice,omitempty"`
 	OctoberPoolRub        int    `json:"october_pool_rub,omitempty"`
+	MonthPoolRub          int    `json:"month_pool_rub,omitempty"`
 }
 
 var (
@@ -1021,7 +1022,7 @@ func GetServerGatewayStatus() (*GatewayStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/v2.2.4")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/v2.2.8")
 
 	resp, err := APIHTTPClient.Do(req)
 	if err != nil {
@@ -1145,7 +1146,8 @@ func FetchRemoteConfig(serverAPI string, token string, game string, targetProces
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned status %d for singbox config", resp.StatusCode)
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server returned status %d for singbox config: %s", resp.StatusCode, string(b))
 	}
 
 	var res struct {
@@ -2499,10 +2501,10 @@ func (m *Manager) GetWintunPath() string {
 }
 
 func (m *Manager) HasBinaries() bool {
-	if _, err := os.Stat(m.GetExePath()); err != nil {
+	if fi, err := os.Stat(m.GetExePath()); err != nil || fi.Size() < 5000000 {
 		return false
 	}
-	if _, err := os.Stat(m.GetWintunPath()); err != nil {
+	if fi, err := os.Stat(m.GetWintunPath()); err != nil || fi.Size() < 100000 {
 		return false
 	}
 	// Verify that the existing sing-box binary supports QUIC
@@ -2565,10 +2567,9 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 			_ = m.cmd.Process.Kill()
 			m.cmd = nil
 		}
-		_ = killProcessByName("sing-box.exe")
-		CleanupWintunAdapter()
+		SoftCleanupWintun()
 		m.isRunning = false
-		time.Sleep(1200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
 
 	if err := m.EnsureFiles(logFn); err != nil {
@@ -2658,11 +2659,21 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 	var startedCmd *exec.Cmd
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Clean up any stale instances and ensure kernel Wintun driver releases the interface
-		_ = killProcessByName("sing-box.exe")
-		waitForProcessExit("sing-box.exe", 1200*time.Millisecond)
-		CleanupWintunAdapter()
-		time.Sleep(time.Duration(attempt*300) * time.Millisecond)
+		// Stop any stale sing-box processes without touching the healthy Wintun adapter node
+		SoftCleanupWintun()
+
+		// On retry (attempt > 1), a real collision or driver delay occurred:
+		// forcefully purge the adapter node and wait 1.8s for Windows PnP and NDIS to complete deregistration
+		if attempt > 1 {
+			if logFn != nil {
+				logFn(fmt.Sprintf("[WARN] Задержка инициализации Wintun адаптера (попытка %d/%d). Принудительная очистка интерфейса...", attempt, maxAttempts))
+			}
+			ForcePurgeWintunAdapter()
+			time.Sleep(1800 * time.Millisecond)
+		} else {
+			// On attempt 1, short pause for socket cleanup
+			time.Sleep(200 * time.Millisecond)
+		}
 
 		cmd := exec.Command(m.GetExePath(), "run", "-c", cfgPath)
 		cmd.Dir = m.GetBinDir()
@@ -2703,9 +2714,17 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 			m.OnProcessStart(cmd.Process.Pid)
 		}
 
-		// Check if process exited immediately due to config error or wintun collision
-		time.Sleep(600 * time.Millisecond)
-		if !m.isProcessAliveLocked() {
+		// Check if process exited immediately due to config error or wintun collision (polling up to 1200ms)
+		processFailed := false
+		for poll := 0; poll < 4; poll++ {
+			time.Sleep(300 * time.Millisecond)
+			if !m.isProcessAliveLocked() {
+				processFailed = true
+				break
+			}
+		}
+
+		if processFailed {
 			m.isRunning = false
 			m.cmd = nil
 			if m.logFile != nil {
@@ -2718,16 +2737,11 @@ func (m *Manager) Start(targetProcesses []string, includeWebServices bool, logFn
 			}
 
 			// If Wintun driver collision detected, purge residual adapter and retry with backoff
-			if strings.Contains(errDetail, "Cannot create a file when that file already exists") ||
-				strings.Contains(errDetail, "configure tun interface") ||
-				strings.Contains(errDetail, "Element not found") {
-				if logFn != nil {
-					logFn(fmt.Sprintf("[WARN] Задержка инициализации Wintun адаптера (попытка %d/%d). Повторная очистка интерфейса...", attempt, maxAttempts))
-				}
+			if IsWintunCollisionError(errDetail) {
 				_ = killProcessByName("sing-box.exe")
 				waitForProcessExit("sing-box.exe", 1500*time.Millisecond)
-				CleanupWintunAdapter()
-				time.Sleep(time.Duration(attempt*600) * time.Millisecond)
+				ForcePurgeWintunAdapter()
+				time.Sleep(1800 * time.Millisecond)
 				startErr = fmt.Errorf("sing-box аварийно завершился: %s", errDetail)
 				continue
 			}
@@ -2778,8 +2792,9 @@ func (m *Manager) Stop() error {
 	}
 
 	_ = killProcessByName("sing-box.exe")
-	waitForProcessExit("sing-box.exe", 1500*time.Millisecond)
-	CleanupWintunAdapter()
+	waitForProcessExit("sing-box.exe", 1000*time.Millisecond)
+	// Do not delete the Wintun adapter node via pnputil on stop.
+	// The adapter remains registered in Windows NDIS stack for instant reuse on subsequent connections.
 
 	return nil
 }
@@ -3025,8 +3040,22 @@ func killProcessByName(name string) error {
 	return cmd.Run()
 }
 
-// CleanupWintunAdapter removes residual WarLink-Tun / Wintun virtual interfaces via pnputil and netsh.
-func CleanupWintunAdapter() {
+// IsWintunCollisionError checks if an error message indicates Wintun driver collision, interface registration timeout, or missing TCP/IP binding.
+func IsWintunCollisionError(errStr string) bool {
+	errLower := strings.ToLower(errStr)
+	return strings.Contains(errLower, "already exists") ||
+		strings.Contains(errLower, "configure tun interface") ||
+		strings.Contains(errLower, "cannot find the file specified") ||
+		strings.Contains(errLower, "timed out") ||
+		strings.Contains(errLower, "element not found") ||
+		strings.Contains(errLower, "not valid in its context") ||
+		strings.Contains(errLower, "starting tun stack") ||
+		strings.Contains(errLower, "wintun")
+}
+
+// ForcePurgeWintunAdapter forcefully removes residual WarLink-Tun / Wintun virtual interfaces via pnputil and netsh.
+// Use strictly on driver collision recovery or manual troubleshooting, NOT on normal connect/disconnect cycles.
+func ForcePurgeWintunAdapter() {
 	cmdEnum := exec.Command("pnputil", "/enum-devices", "/class", "Net")
 	cmdEnum.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if out, err := cmdEnum.Output(); err == nil {
@@ -3053,4 +3082,16 @@ func CleanupWintunAdapter() {
 		}
 		_ = cmd.Run()
 	}
+}
+
+// SoftCleanupWintun terminates any orphaned sing-box processes without touching the healthy Wintun adapter node.
+func SoftCleanupWintun() {
+	_ = killProcessByName("sing-box.exe")
+	waitForProcessExit("sing-box.exe", 800*time.Millisecond)
+}
+
+// CleanupWintunAdapter removes residual WarLink-Tun / Wintun virtual interfaces via pnputil and netsh.
+// Preserved for backwards compatibility, delegating to ForcePurgeWintunAdapter.
+func CleanupWintunAdapter() {
+	ForcePurgeWintunAdapter()
 }

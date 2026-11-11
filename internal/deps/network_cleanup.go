@@ -18,10 +18,12 @@ var (
 	reWintunID                = regexp.MustCompile(`(?i)SWD\\WINTUN\\[^\s\r\n]+`)
 )
 
-// CleanupZombieWintunAdapter removes phantom WarLink-Tun / Wintun interface via pnputil and netsh.
-func CleanupZombieWintunAdapter(logFn func(string)) {
+// ForcePurgeWintunAdapter forcefully removes phantom WarLink-Tun / Wintun interface via pnputil and netsh.
+// It gives the Windows PnP manager and NDIS driver stack 1800ms to complete device deregistration.
+// Strictly invoked on driver collision recovery or manual troubleshooting, NOT on happy-path connection cycles.
+func ForcePurgeWintunAdapter(logFn func(string)) {
 	if logFn != nil {
-		logFn("[INFO] Очистка остаточного сетевого адаптера WarLink-Tun...")
+		logFn("[INFO] Принудительная очистка и сброс сетевого адаптера WarLink-Tun...")
 	}
 
 	// 1. Remove device node via Windows PnP utility (language-invariant regexp)
@@ -53,6 +55,12 @@ func CleanupZombieWintunAdapter(logFn func(string)) {
 	}
 }
 
+// CleanupZombieWintunAdapter removes phantom WarLink-Tun / Wintun interface via pnputil and netsh.
+// Kept for backwards compatibility, delegating to ForcePurgeWintunAdapter.
+func CleanupZombieWintunAdapter(logFn func(string)) {
+	ForcePurgeWintunAdapter(logFn)
+}
+
 // FlushDNSResolverCache flushes the Windows DNS resolver cache using dnsapi.dll!DnsFlushResolverCache
 // or falls back to ipconfig /flushdns.
 func FlushDNSResolverCache() error {
@@ -78,7 +86,7 @@ func RestoreWindowsNetworkStack(logFn func(string)) {
 		logFn("[INFO] Восстановление сетевого стека Windows...")
 	}
 
-	CleanupZombieWintunAdapter(logFn)
+	ForcePurgeWintunAdapter(logFn)
 
 	if err := FlushDNSResolverCache(); err != nil {
 		if logFn != nil {

@@ -10,7 +10,7 @@ import (
 const (
 	FrankfurtEdgeIP     = "85.192.24.254"
 	FrankfurtEdgeDomain = "de.warlink.max-alekseyev.com"
-	MoscowIngressIP     = "45.12.63.85"
+	MoscowIngressIP     = "83.141.93.201"
 	MoscowIngressDomain = "ru.warlink.max-alekseyev.com"
 	StockholmCoreIP     = "138.124.103.99"
 	StockholmCoreDomain = "api-warlink.max-alekseyev.com"
@@ -939,7 +939,7 @@ func GenerateSingBoxConfig(profiles []Profile, extraProcesses []string, includeW
 
 func normalizeServerPorts(rawPorts string) []string {
 	if rawPorts == "" {
-		return []string{"443:443", "20000:30000"}
+		return []string{"443:443", "8443:8443", "2083:2083", "30000:40000"}
 	}
 	parts := strings.Split(rawPorts, ",")
 	var result []string
@@ -957,7 +957,7 @@ func normalizeServerPorts(rawPorts string) []string {
 		result = append(result, p)
 	}
 	if len(result) == 0 {
-		return []string{"443:443", "20000:30000"}
+		return []string{"443:443", "8443:8443", "2083:2083", "30000:40000"}
 	}
 	return result
 }

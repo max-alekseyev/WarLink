@@ -59,6 +59,7 @@ captures/
 
 # WarLink Runtime and Working Directories
 warlink_core/
+server/httpproxy/
 zapret-*/
 zapret2-*/
 docs/manual (1).md

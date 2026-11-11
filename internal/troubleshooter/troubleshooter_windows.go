@@ -94,10 +94,10 @@ func checkDriversAndServices() []CheckResult {
 	}
 
 	wintunPath := filepath.Join(deps.GetCoreDir(), "singbox", "wintun.dll")
-	if _, errStat := os.Stat(wintunPath); errStat != nil {
+	if fi, errStat := os.Stat(wintunPath); errStat != nil || fi.Size() < 100000 {
 		// Fallback check root of core
 		fallbackPath := filepath.Join(deps.GetCoreDir(), "wintun.dll")
-		if _, errFb := os.Stat(fallbackPath); errFb != nil {
+		if fiFb, errFb := os.Stat(fallbackPath); errFb != nil || fiFb.Size() < 100000 {
 			wintunResult.Status = "warning"
 			wintunResult.Message = "Файл wintun.dll будет распакован при первом подключении"
 			wintunResult.CanAutoFix = true
@@ -124,7 +124,9 @@ func findConflictingProcesses() []string {
 	targets := map[string]string{
 		// DPI bypass utilities (WinDivert/pcap conflicts)
 		"goodbyedpi.exe":           "GoodbyeDPI",
+		"winws.exe":                "Zapret (winws)",
 		"zapret.exe":               "Zapret (сторонний)",
+		"goodcheck.exe":            "GoodCheck",
 		"byedpi.exe":               "ByeDPI",
 		"ciadpi.exe":               "ByeDPI (ciadpi)",
 		"spoof-dpi.exe":            "SpoofDPI",

@@ -285,7 +285,7 @@ func TestNormalizeServerPorts(t *testing.T) {
 		{"443,20000-30000", []string{"443:443", "20000:30000"}},
 		{"443", []string{"443:443"}},
 		{"80:80,443:443", []string{"80:80", "443:443"}},
-		{"", []string{"443:443", "20000:30000"}},
+		{"", []string{"443:443", "8443:8443", "2083:2083", "30000:40000"}},
 	}
 	for _, tc := range cases {
 		got := normalizeServerPorts(tc.input)

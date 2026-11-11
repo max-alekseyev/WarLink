@@ -359,24 +359,54 @@
                 startDate: '10.09.2026',
                 endDate: '15.10.2026',
                 shortDates: '10.09 — 15.10',
+                duration: '1 мес.',
                 status: currentSeasonNum === 1 ? 'active' : 'completed',
                 statusLabel: currentSeasonNum === 1 ? 'Активен' : 'Завершен',
                 wipeDate: '15.10.2026'
             };
         }
 
-        // 4. Register current active season
-        if (currentSeasonNum > 1 || !seasonsMap[currentSeasonNum] || seasonsMap[currentSeasonNum].status !== 'active') {
+        // 4. Fallback for Season 2 if in Season 3 and not recorded in history
+        if (currentSeasonNum >= 3 && !seasonsMap[2]) {
+            seasonsMap[2] = {
+                season: 2,
+                title: 'СЕЗОН 2',
+                level: 0,
+                startDate: '15.10.2026',
+                endDate: '12.11.2026',
+                shortDates: '15.10 — 12.11',
+                duration: '1 мес.',
+                status: 'completed',
+                statusLabel: 'Завершен',
+                wipeDate: '12.11.2026'
+            };
+        }
+
+        // 5. Register current active season
+        if (!seasonsMap[currentSeasonNum] || seasonsMap[currentSeasonNum].status !== 'active') {
+            let sStart = '15.10.2026';
+            let sEnd = '12.11.2026';
+            let sShort = '15.10 — 12.11';
+            let sWipe = '12.11.2026';
+            let sDuration = '1 мес.';
+            if (currentSeasonNum === 3) {
+                sStart = '12.11.2026';
+                sEnd = '12.02.2027';
+                sShort = '12.11 — 12.02 (3 мес.)';
+                sDuration = '3 мес.';
+                sWipe = '12.02.2027';
+            }
             seasonsMap[currentSeasonNum] = {
                 season: currentSeasonNum,
                 title: 'СЕЗОН ' + currentSeasonNum,
                 level: currentLevel,
-                startDate: '15.10.2026',
-                endDate: '~15.11.2026',
-                shortDates: '15.10 — ~15.11',
+                startDate: sStart,
+                endDate: sEnd,
+                shortDates: sShort,
+                duration: sDuration,
                 status: 'active',
                 statusLabel: 'Активен',
-                wipeDate: null
+                wipeDate: sWipe
             };
         }
 
@@ -546,7 +576,7 @@
                             '<div class="prog-season-card-bar-fill" style="width: ' + pct + '%"></div>' +
                         '</div>' +
                         '<div class="prog-season-card-meta font-mono">' +
-                            '<span class="prog-season-card-dates">' + (s.startDate && s.endDate ? (s.startDate + ' — ' + s.endDate) : s.shortDates) + '</span>' +
+                            '<span class="prog-season-card-dates">' + (s.startDate && s.endDate ? (s.startDate + ' — ' + s.endDate + (s.duration ? ' (' + s.duration + ')' : '')) : s.shortDates) + '</span>' +
                             (s.wipeDate ? '<span class="prog-season-card-wipe">Вайп: ' + s.wipeDate + '</span>' : '') +
                         '</div>' +
                     '</div>';

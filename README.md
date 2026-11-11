@@ -2,7 +2,7 @@
   <img src="assets/warlink_header.svg" alt="WarLink — Автономный оптимизатор игрового сетевого маршрута" width="100%">
 </p>
 <p align="center">
-  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.2.7"><img src="https://img.shields.io/badge/Релиз-v2.2.7-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.2.7"></a>
+  <a href="https://github.com/max-alekseyev/WarLink/releases/tag/v2.2.8"><img src="https://img.shields.io/badge/Релиз-v2.2.8-2ea44f?style=for-the-badge&logo=github&logoColor=white" alt="Релиз v2.2.8"></a>
   <a href="https://github.com/max-alekseyev/WarLink/releases/latest/download/WarLink.exe"><img src="https://img.shields.io/badge/Скачать-WarLink.exe-FF5E1F?style=for-the-badge&logo=windows&logoColor=white" alt="Скачать WarLink.exe"></a>
   <img src="https://raw.githubusercontent.com/max-alekseyev/WarLink/badges/online.svg" alt="Онлайн игрового шлюза" height="28">
 </p>
@@ -26,7 +26,7 @@
 - Ошибки «Connection lost / Server unreachable» при загрузке карты
 - Высокий пинг, подергивания и внезапная потеря пакетов (packet loss)
 
-**WarLink v2.2.7** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
+**WarLink v2.2.8** в один клик стабилизирует сетевой маршрут к игровым узлам, обеспечивая комфортный пинг и стабильное подключение без вылетов и разрывов связи.
 
 ---
 
@@ -39,7 +39,7 @@
 
 ---
 
-## Ключевые возможности WarLink v2.2.7
+## Ключевые возможности WarLink v2.2.8
 
 - **Многопортовый шлюз Hysteria 2 (Multi-Port Hopping):** расширенный пул резервных портов (443, 8443, 2083, 30000–40000) для обхода провайдерских фильтраций и блокировок UDP 443 на выделенном московском узле.
 - **Адаптивный Path MTU Discovery:** автоматическое определение оптимального MTU виртуального адаптера Wintun (1380 / 1340 / 1280) без фрагментации пакетов на сетях PPPoE и мобильных модемах.

@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.7"
+var AppVersion = "v2.2.8"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -915,11 +915,14 @@ func main() {
 	// 0. Ensure Admin privileges for Wintun virtual adapter and network routing
 	ensureAdminElevation()
 
-	// 0a. Purge ghost Wintun / sing-tun / throne-tun adapters and clean zombie routes on startup
-	singbox.CleanupWintunAdapter()
+	// 0a. Terminate orphaned sing-box background processes without tearing down Wintun adapter
+	singbox.SoftCleanupWintun()
 
 	// 0b. Initialize Windows Job Object to guarantee child daemon termination on exit
 	_ = deps.InitGlobalJobObject()
+
+	// 0c. Cleanup legacy WARDOGS config tweak if previously created by WarLink
+	system.CleanupLegacyWardogsTweaks(nil)
 
 	// 1. Path check
 	validatePath()
@@ -2256,57 +2259,6 @@ func main() {
 		})
 	})
 
-	// --- WARDOGS Gaming Tweaks ---
-	mux.HandleFunc("/api/tweaks/wardogs/status", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		status := system.GetWardogsShadowStatus()
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"status":  status,
-		})
-	})
-
-	mux.HandleFunc("/api/tweaks/wardogs/shadows", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			DisableShadows bool `json:"disable_shadows"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid body", http.StatusBadRequest)
-			return
-		}
-		if err := system.SetWardogsShadowsDisabled(req.DisableShadows); err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"error":   err.Error(),
-			})
-			return
-		}
-		updated := system.GetWardogsShadowStatus()
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"status":  updated,
-		})
-	})
-
-	mux.HandleFunc("/api/tweaks/wardogs/open-folder", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := system.OpenWardogsConfigFolder(); err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false,
-				"error":   err.Error(),
-			})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-		})
-	})
-
 	mux.HandleFunc("/api/open-external-url", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2398,9 +2350,11 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"success": true,
 				"infrastructure": map[string]interface{}{
-					"title":               "Инфраструктура кластера (Стокгольм + Москва + Франкфурт)",
+					"title":               "Инфраструктура кластера (Стокгольм + Москва)",
 					"target_amount_rub":   1040,
 					"target_amount_eur":   8.0,
+					"current_amount_rub":  1040,
+					"current_amount_eur":  8.0,
 					"current_balance_rub": 1040,
 					"current_balance_eur": 8.0,
 					"days_left":           23,
@@ -2408,7 +2362,8 @@ func main() {
 					"target_days":         31,
 					"percent":             100.0,
 					"is_covered":          true,
-					"status_text":         "Оплачено на 23 дня (Стокгольм + Москва в строю)",
+					"status_text":         "Цель закрыта: 1040 ₽ из 1040 ₽",
+					"period":              "Октябрь 2026",
 				},
 				"expansion": map[string]interface{}{
 					"id":          "",

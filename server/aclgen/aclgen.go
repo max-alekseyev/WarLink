@@ -545,7 +545,7 @@ func ApplyAndReload(candidateContent, targetACLPath, hysteriaBin, certPath, keyP
 
 	// Replicate to Moscow node asynchronously if reachable
 	go func() {
-		moscowIP := "45.12.63.85"
+		moscowIP := "83.141.93.201"
 		syncCmd := exec.Command("scp", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", targetACLPath, fmt.Sprintf("root@%s:%s", moscowIP, targetACLPath))
 		if err := syncCmd.Run(); err == nil {
 			_ = exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5", fmt.Sprintf("root@%s", moscowIP), "systemctl restart hysteria-server").Run()

@@ -440,6 +440,92 @@ func TestHandleStatusSponsorSlots(t *testing.T) {
 	}
 }
 
+func TestHandleStatusGatewayHealth(t *testing.T) {
+	state := &AppState{
+		cfg: ServerConfig{
+			MaxSessions:           100,
+			DedicatedSponsorSlots: 10,
+		},
+		sessions: make(map[string]*SessionInfo),
+	}
+
+	// 1. Healthy Gateway
+	state.gwHealthMu.Lock()
+	state.gwHealthy = true
+	state.gwLastSuccess = time.Now()
+	state.gwDnsMismatch = false
+	state.gwHealthMu.Unlock()
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	w1 := httptest.NewRecorder()
+	state.handleStatus(w1, req1)
+
+	var res1 struct {
+		Status         string `json:"status"`
+		GatewayStatus  string `json:"gateway_status"`
+		GatewayHealthy bool   `json:"gateway_healthy"`
+		DnsMismatch    bool   `json:"dns_mismatch"`
+	}
+	if err := json.NewDecoder(w1.Body).Decode(&res1); err != nil {
+		t.Fatalf("failed to decode json 1: %v", err)
+	}
+	if res1.Status != "online" || !res1.GatewayHealthy {
+		t.Errorf("expected online status, got %s (healthy: %t)", res1.Status, res1.GatewayHealthy)
+	}
+
+	// 2. Gateway Down / Stale
+	state.gwHealthMu.Lock()
+	state.gwHealthy = false
+	state.gwLastSuccess = time.Now().Add(-5 * time.Minute)
+	state.gwLastError = "connection refused"
+	state.gwHealthMu.Unlock()
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	w2 := httptest.NewRecorder()
+	state.handleStatus(w2, req2)
+
+	var res2 struct {
+		Status         string `json:"status"`
+		GatewayStatus  string `json:"gateway_status"`
+		GatewayHealthy bool   `json:"gateway_healthy"`
+		GatewayError   string `json:"gateway_error"`
+	}
+	if err := json.NewDecoder(w2.Body).Decode(&res2); err != nil {
+		t.Fatalf("failed to decode json 2: %v", err)
+	}
+	if res2.Status != "degraded" || res2.GatewayHealthy {
+		t.Errorf("expected degraded status on gateway failure, got %s (healthy: %t)", res2.Status, res2.GatewayHealthy)
+	}
+	if res2.GatewayError != "connection refused" {
+		t.Errorf("expected gateway error 'connection refused', got '%s'", res2.GatewayError)
+	}
+
+	// 3. DNS Mismatch
+	state.gwHealthMu.Lock()
+	state.gwHealthy = true
+	state.gwLastSuccess = time.Now()
+	state.gwDnsMismatch = true
+	state.gwDnsMismatchMsg = "DNS (45.12.63.85) != Active IP (83.141.93.201)"
+	state.gwHealthMu.Unlock()
+
+	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	w3 := httptest.NewRecorder()
+	state.handleStatus(w3, req3)
+
+	var res3 struct {
+		Status         string `json:"status"`
+		GatewayHealthy bool   `json:"gateway_healthy"`
+		DnsMismatch    bool   `json:"dns_mismatch"`
+		DnsMismatchMsg string `json:"dns_mismatch_msg"`
+	}
+	if err := json.NewDecoder(w3.Body).Decode(&res3); err != nil {
+		t.Fatalf("failed to decode json 3: %v", err)
+	}
+	if res3.Status != "degraded" || !res3.DnsMismatch {
+		t.Errorf("expected degraded on DNS mismatch, got %s (mismatch: %t)", res3.Status, res3.DnsMismatch)
+	}
+}
+
 func TestAdminSlotReservation(t *testing.T) {
 	if AdminAccountNumber != "5230-6527-2989-4096" {
 		t.Fatalf("unexpected admin account number: %s", AdminAccountNumber)
@@ -557,7 +643,7 @@ func TestCommunityGoalsCluster(t *testing.T) {
 			{
 				ID:        2,
 				Name:      "minor-orange",
-				IP:        "45.12.63.85",
+				IP:        "83.141.93.201",
 				DaysLeft:  30,
 				PriceRub:  650,
 				PriceEur:  5.0,
@@ -567,6 +653,8 @@ func TestCommunityGoalsCluster(t *testing.T) {
 	}
 	atomic.StoreUint64(&state.metricAezaBalanceRub, 1040)
 	atomic.StoreUint64(&state.metricAezaBalanceEurCents, 800)
+	state.cachedMonthPoolRub = 1040
+	state.cachedMonthPoolTime = time.Now()
 
 	goals := state.getCommunityGoals()
 	if !goals.Success {
@@ -754,5 +842,116 @@ func TestFeatureFlagsEvaluation(t *testing.T) {
 	}
 	if resp.Version != 2 {
 		t.Fatalf("expected version 2, got %d", resp.Version)
+	}
+}
+
+func TestFinancialRunwayCalculationAndMetricsProtection(t *testing.T) {
+	state := &AppState{
+		sessions:     make(map[string]*SessionInfo),
+		deviceTokens: make(map[string]string),
+	}
+
+	// 1. Verify invoice created count is never less than donations paid
+	atomic.StoreUint64(&state.metricDonationsPaid, 30)
+	atomic.StoreUint64(&state.metricInvoicesCreated, 1)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	state.handleMetrics(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from /metrics, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	// Invoices created must be clamped to at least donations paid (30)
+	if !strings.Contains(body, "warlink_invoices_created_total 30") {
+		t.Fatalf("expected warlink_invoices_created_total to be clamped to at least 30, metrics body was:\n%s", body)
+	}
+
+	// 2. Financial runway days must be calculated based on cluster budget (1040 RUB/mo = 34.67 RUB/day)
+	// With 0 balance, runway is 0.0
+	if !strings.Contains(body, "warlink_financial_runway_days 0.0") {
+		t.Fatalf("expected 0.0 runway with 0 balance, got:\n%s", body)
+	}
+
+	// 3. Test runway calculation with 4 prepaid days (4 days * 13 RUB = 52 RUB)
+	state.cachedDue = time.Now().Add(4 * 24 * time.Hour + 2 * time.Hour)
+	req2 := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req2.RemoteAddr = "127.0.0.1:12345"
+	w2 := httptest.NewRecorder()
+	state.handleMetrics(w2, req2)
+	body2 := w2.Body.String()
+	// 4 days * 13 RUB = 52 RUB. 52 / (1040 / 30) = 52 / 34.6667 = 1.5 days
+	if !strings.Contains(body2, "warlink_financial_runway_days 1.5") {
+		t.Fatalf("expected 1.5 runway with 52 RUB prepaid, got:\n%s", body2)
+	}
+}
+
+func TestCommunityGoalsMonthlyResetAndMetrics(t *testing.T) {
+	state := &AppState{
+		sessions:     make(map[string]*SessionInfo),
+		deviceTokens: make(map[string]string),
+	}
+
+	// 1. When no donations in current month: current_amount = 0, percent = 0, is_covered = false
+	state.cachedMonthPoolRub = 0
+	state.cachedMonthPoolTime = time.Now()
+
+	goals := state.getCommunityGoals()
+	if goals.Infrastructure.CurrentAmountRub != 0 {
+		t.Fatalf("expected 0 CurrentAmountRub, got %d", goals.Infrastructure.CurrentAmountRub)
+	}
+	if goals.Infrastructure.Percent != 0.0 {
+		t.Fatalf("expected 0.0 percent, got %f", goals.Infrastructure.Percent)
+	}
+	if goals.Infrastructure.IsCovered {
+		t.Fatalf("expected is_covered = false when 0 RUB collected")
+	}
+	if goals.Infrastructure.TargetAmountRub != 1040 {
+		t.Fatalf("expected TargetAmountRub = 1040, got %d", goals.Infrastructure.TargetAmountRub)
+	}
+	if !strings.Contains(goals.Infrastructure.Period, "2026") {
+		t.Fatalf("expected Period to contain year 2026, got %s", goals.Infrastructure.Period)
+	}
+
+	// 2. Partial progress (520 RUB = 50.0%)
+	state.cachedMonthPoolRub = 520
+	state.cachedMonthPoolTime = time.Now()
+
+	goalsPartial := state.getCommunityGoals()
+	if goalsPartial.Infrastructure.Percent != 50.0 {
+		t.Fatalf("expected 50.0 percent, got %f", goalsPartial.Infrastructure.Percent)
+	}
+	if goalsPartial.Infrastructure.IsCovered {
+		t.Fatalf("expected is_covered = false for 50%% progress")
+	}
+
+	// 3. Goal fully reached (1040 RUB = 100.0%, is_covered = true)
+	state.cachedMonthPoolRub = 1040
+	state.cachedMonthPoolTime = time.Now()
+
+	goalsReached := state.getCommunityGoals()
+	if goalsReached.Infrastructure.Percent != 100.0 {
+		t.Fatalf("expected 100.0 percent, got %f", goalsReached.Infrastructure.Percent)
+	}
+	if !goalsReached.Infrastructure.IsCovered {
+		t.Fatalf("expected is_covered = true when target reached")
+	}
+
+	// 4. Check monthly metrics export
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	state.handleMetrics(w, req)
+	body := w.Body.String()
+
+	if !strings.Contains(body, "warlink_monthly_donations_rub 1040") {
+		t.Fatalf("expected warlink_monthly_donations_rub 1040 in metrics, got:\n%s", body)
+	}
+	if !strings.Contains(body, "warlink_monthly_goal_percent 100.0") {
+		t.Fatalf("expected warlink_monthly_goal_percent 100.0 in metrics, got:\n%s", body)
 	}
 }

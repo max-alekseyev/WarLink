@@ -74,7 +74,8 @@ var (
 	// TrustedIngressIPs defines reverse proxy / edge Ingress PoP nodes (e.g. Moscow node)
 	// that forward client traffic to the Master Control Plane.
 	TrustedIngressIPs = map[string]bool{
-		"45.12.63.85": true,
+		"83.141.93.201": true,
+		"45.12.63.85":  true, // legacy fallback
 	}
 )
 
@@ -267,8 +268,9 @@ type AppState struct {
 	cachedDisplayDays  int
 	cachedVPSDetails   []VPSServerDetail
 	rateLimiter        *IPRateLimiter
-	db           *sql.DB
-	rdb          *redis.Client
+	db                 *sql.DB
+	dbWorkersOnce      sync.Once
+	rdb                *redis.Client
 	staticDir    string
 
 	startTime time.Time
@@ -338,6 +340,16 @@ type AppState struct {
 	cachedMonthPoolRub        int64
 	cachedMonthPoolTime       time.Time
 	cachedMonthPoolMu         sync.RWMutex
+
+	// Gateway health monitoring (Hysteria 2 Moscow & DNS consistency)
+	gwHealthMu       sync.RWMutex
+	gwHealthy        bool
+	gwLastSuccess    time.Time
+	gwLastChecked    time.Time
+	gwLastError      string
+	gwFailCount      int
+	gwDnsMismatch    bool
+	gwDnsMismatchMsg string
 }
 
 type LatencyMetrics struct {
@@ -566,7 +578,7 @@ func (s *AppState) startLatencySampler() {
 		s.latencyTracker.RecordProbe(measuredRTT, success)
 
 		// Edge Ingress RTT probe to Moscow node
-		if moscowRTT, err := probeICMPPing("45.12.63.85", 1200*time.Millisecond); err == nil && moscowRTT > 0 {
+		if moscowRTT, err := probeICMPPing(s.getMoscowGatewayIP(), 1200*time.Millisecond); err == nil && moscowRTT > 0 {
 			s.moscowPingMu.Lock()
 			s.moscowPingRTT = moscowRTT
 			s.moscowPingMu.Unlock()
@@ -658,25 +670,21 @@ func main() {
 	if dbURL != "" {
 		db, err := sql.Open("postgres", dbURL)
 		if err == nil {
+			db.SetMaxOpenConns(25)
+			db.SetMaxIdleConns(5)
+			db.SetConnMaxLifetime(5 * time.Minute)
 			if errPing := db.Ping(); errPing == nil {
 				state.db = db
 				log.Printf("[DB] Successfully connected to PostgreSQL")
-				state.initDatabase()
-				state.loadFeatureSettings()
-				state.loadTelemetryCounters()
-				state.loadBlockedSteamGames()
-				state.loadSupportedGames()
-				LoadDynamicNicknameRules(state.db)
-				go state.startAnalyticsCollector()
-				go state.startTicketAutoCloseWorker()
-				go state.startSettingsSyncWorker()
-				go state.startOpsAlertingWorker()
+				state.onDatabaseConnected()
 			} else {
-				log.Printf("[DB] Warning: PostgreSQL ping failed: %v", errPing)
+				log.Printf("[DB] Warning: PostgreSQL ping failed: %v (will retry in background)", errPing)
+				_ = db.Close()
 			}
 		} else {
-			log.Printf("[DB] Warning: Failed to open PostgreSQL: %v", err)
+			log.Printf("[DB] Warning: Failed to open PostgreSQL: %v (will retry in background)", err)
 		}
+		go state.startDatabaseReconnectWorker(dbURL)
 	} else {
 		log.Printf("[DB] Notice: DATABASE_URL not configured")
 	}
@@ -1357,6 +1365,36 @@ func maskIPForDisplay(ipStr string) string {
 	return ip.String()
 }
 
+// isSameClientSubnet returns true if ip1 and ip2 are in the same /24 IPv4 subnet or /64 IPv6 prefix.
+// This is critical for users behind mobile carriers, CGNAT, or dual-WAN pools where outgoing TCP
+// connections may exit through adjacent IPs in the provider's pool.
+func isSameClientSubnet(ip1, ip2 string) bool {
+	if ip1 == ip2 {
+		return true
+	}
+	p1 := net.ParseIP(strings.TrimSpace(ip1))
+	p2 := net.ParseIP(strings.TrimSpace(ip2))
+	if p1 == nil || p2 == nil {
+		return false
+	}
+	v4_1 := p1.To4()
+	v4_2 := p2.To4()
+	if v4_1 != nil && v4_2 != nil {
+		return v4_1[0] == v4_2[0] && v4_1[1] == v4_2[1] && v4_1[2] == v4_2[2]
+	}
+	if v4_1 == nil && v4_2 == nil {
+		if len(p1) == 16 && len(p2) == 16 {
+			for i := 0; i < 8; i++ {
+				if p1[i] != p2[i] {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	return false
+}
+
 func hashDeviceID(deviceID string) string {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
@@ -1482,9 +1520,31 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		gwLoc = "Москва, Россия"
 	}
 
+	s.gwHealthMu.RLock()
+	gwHealthy := s.gwHealthy
+	gwErr := s.gwLastError
+	lastSuccess := s.gwLastSuccess
+	dnsMismatch := s.gwDnsMismatch
+	dnsMsg := s.gwDnsMismatchMsg
+	s.gwHealthMu.RUnlock()
+
+	clusterStatus := "online"
+	if !lastSuccess.IsZero() && time.Since(lastSuccess) > 90*time.Second {
+		clusterStatus = "degraded"
+	} else if !gwHealthy && !lastSuccess.IsZero() {
+		clusterStatus = "degraded"
+	} else if dnsMismatch {
+		clusterStatus = "degraded"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":                           "online",
+		"status":                           clusterStatus,
+		"gateway_status":                   clusterStatus,
+		"gateway_healthy":                  clusterStatus == "online",
+		"gateway_error":                    gwErr,
+		"dns_mismatch":                     dnsMismatch,
+		"dns_mismatch_msg":                 dnsMsg,
 		"location":                         gwLoc,
 		"ping_hint_ms":                     livePing,
 		"active_sessions":                  activeCount,
@@ -1508,7 +1568,48 @@ func (s *AppState) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"donate_crypto_enabled":            enCrypto,
 		"donate_paused_notice":             donateNotice,
 		"october_pool_rub":                 octoberPoolRub,
+		"month_pool_rub":                   octoberPoolRub,
+		"season_info":                      s.getSeasonInfo(),
 	})
+}
+
+func (s *AppState) getSeasonInfo() map[string]interface{} {
+	now := time.Now().Unix()
+	season3Start := int64(1794441600) // 12.11.2026 00:00:00 UTC
+	currentSeason := 2
+	title := "Сезон 2"
+	startDate := "15.10.2026"
+	endDate := "12.11.2026"
+	durationMonths := 1
+	wipeDate := "12.11.2026"
+
+	if now >= season3Start {
+		currentSeason = 3
+		title = "Сезон 3"
+		startDate = "12.11.2026"
+		endDate = "12.02.2027"
+		durationMonths = 3
+		wipeDate = "12.02.2027"
+	}
+
+	if s.db != nil {
+		var val string
+		if err := s.db.QueryRow(`SELECT setting_value FROM server_settings WHERE setting_key = 'active_season'`).Scan(&val); err == nil && val != "" {
+			if sNum, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && sNum > 0 {
+				currentSeason = sNum
+				title = fmt.Sprintf("Сезон %d", sNum)
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"current_season":  currentSeason,
+		"season_title":    title,
+		"start_date":      startDate,
+		"end_date":        endDate,
+		"duration_months": durationMonths,
+		"wipe_date":       wipeDate,
+	}
 }
 
 func (s *AppState) getMonthPoolRub() int64 {
@@ -1550,8 +1651,31 @@ type SessionRequest struct {
 	RouteMode     string `json:"route_mode,omitempty"`
 }
 
+func (s *AppState) getMoscowGatewayIP() string {
+	// 1. Try DB cluster_nodes first (Single Source of Truth, Rule 8)
+	if s.db != nil {
+		var ip string
+		if err := s.db.QueryRow(`SELECT ip_address FROM cluster_nodes WHERE node_id = 'msk-ingress' AND status = 'active'`).Scan(&ip); err == nil && ip != "" {
+			return strings.TrimSpace(ip)
+		}
+	}
+	// 2. Check cached Aeza VPS details if synced
+	s.mu.RLock()
+	for _, vps := range s.cachedVPSDetails {
+		if vps.Status == "active" && (strings.Contains(strings.ToLower(vps.Name), "orange") || strings.Contains(strings.ToLower(vps.Name), "moscow") || vps.IP == "83.141.93.201") {
+			if vps.IP != "" {
+				s.mu.RUnlock()
+				return strings.TrimSpace(vps.IP)
+			}
+		}
+	}
+	s.mu.RUnlock()
+	// 3. Fallback active IP
+	return "83.141.93.201"
+}
+
 func (s *AppState) resolveRouteAndNode(r *http.Request, explicitMode string) (routeMode, connectedNode, gatewayIP string) {
-	moscowIP := "45.12.63.85"
+	moscowIP := s.getMoscowGatewayIP()
 	// Frankfurt is decommissioned. All traffic seamlessly unifies into Moscow Ingress Gateway
 	return "direct_moscow", "Москва", moscowIP
 }
@@ -2952,9 +3076,9 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify connecting client IP matches session IP (bypass if connecting via local reverse proxy)
+	// Verify connecting client IP matches session IP or provider CGNAT /24 subnet pool (bypass if connecting via local reverse proxy)
 	isLocal := clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
-	if !isLocal && !TrustedIngressIPs[clientIP] && !TrustedIngressIPs[sess.ClientIP] && sess.ClientIP != "" && clientIP != "" && sess.ClientIP != clientIP {
+	if !isLocal && !TrustedIngressIPs[clientIP] && !TrustedIngressIPs[sess.ClientIP] && sess.ClientIP != "" && clientIP != "" && !isSameClientSubnet(sess.ClientIP, clientIP) {
 		s.mu.RUnlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
@@ -2964,6 +3088,9 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 			"message": "IP-адрес клиента не соответствует сессии",
 		})
 		return
+	}
+	if sess.ClientIP != clientIP && isSameClientSubnet(sess.ClientIP, clientIP) {
+		sess.ClientIP = clientIP
 	}
 
 	profiles := s.profiles
@@ -2982,8 +3109,8 @@ func (s *AppState) handleSingBoxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetGatewayIP := sess.GatewayIP
-	if targetGatewayIP == "" || targetGatewayIP == "85.192.24.254" {
-		targetGatewayIP = "45.12.63.85"
+	if targetGatewayIP == "" || targetGatewayIP == "85.192.24.254" || targetGatewayIP == "45.12.63.85" {
+		targetGatewayIP = s.getMoscowGatewayIP()
 	}
 	serverPorts = "8443,30000-40000"
 
@@ -3249,6 +3376,53 @@ func resolveSteamStoreIcon(appID int) string {
 		}
 	}
 	return ""
+}
+
+func (s *AppState) onDatabaseConnected() {
+	if s.db == nil {
+		return
+	}
+	s.initDatabase()
+	s.loadFeatureSettings()
+	s.loadTelemetryCounters()
+	s.loadBlockedSteamGames()
+	s.loadSupportedGames()
+	LoadDynamicNicknameRules(s.db)
+
+	s.dbWorkersOnce.Do(func() {
+		go s.startAnalyticsCollector()
+		go s.startTicketAutoCloseWorker()
+		go s.startSettingsSyncWorker()
+		go s.startOpsAlertingWorker()
+	})
+}
+
+func (s *AppState) startDatabaseReconnectWorker(dbURL string) {
+	if dbURL == "" {
+		return
+	}
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if s.db == nil {
+			db, err := sql.Open("postgres", dbURL)
+			if err != nil {
+				continue
+			}
+			db.SetMaxOpenConns(25)
+			db.SetMaxIdleConns(5)
+			db.SetConnMaxLifetime(5 * time.Minute)
+
+			if errPing := db.Ping(); errPing == nil {
+				s.db = db
+				log.Printf("[DB] Background worker successfully connected to PostgreSQL")
+				s.onDatabaseConnected()
+			} else {
+				_ = db.Close()
+			}
+		}
+	}
 }
 
 func (s *AppState) initDatabase() {
@@ -4024,6 +4198,11 @@ func (s *AppState) loadTelemetryCounters() {
 				}
 			}
 		}
+		inv := atomic.LoadUint64(&s.metricInvoicesCreated)
+		paid := atomic.LoadUint64(&s.metricDonationsPaid)
+		if inv < paid {
+			atomic.StoreUint64(&s.metricInvoicesCreated, paid)
+		}
 	}
 }
 
@@ -4644,7 +4823,7 @@ func (s *AppState) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 			"active_sponsor_sessions":    activeSponsorCount,
 			"server_name":                srvName,
 			"server_location":            srvLoc,
-			"invoices_created":           atomic.LoadUint64(&s.metricInvoicesCreated),
+			"invoices_created":           max(atomic.LoadUint64(&s.metricInvoicesCreated), atomic.LoadUint64(&s.metricDonationsPaid)),
 			"donations_paid":             atomic.LoadUint64(&s.metricDonationsPaid),
 			"donations_rub":              atomic.LoadUint64(&s.metricDonationsRub),
 			"dau":                        dau,
@@ -5187,18 +5366,18 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_server_runway_days gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_server_runway_days %.1f\n\n", totalRunwayDays))
 
-	nodeBurnDaily := stockholmDailyPrice
+	nodeBurnDaily := clusterDailyPrice
 	if nodeBurnDaily <= 0 {
-		nodeBurnDaily = 8.67
+		nodeBurnDaily = float64(MonthlyInfrastructureCostRub) / 30.0
 	}
 	financialRunwayDays := totalAvailableRub / nodeBurnDaily
 	financialRunwayTimestamp := time.Now().Add(time.Duration(financialRunwayDays*24) * time.Hour).Unix()
 
-	sb.WriteString("# HELP warlink_financial_runway_days Total runway days of current node on available Aeza balance\n")
+	sb.WriteString("# HELP warlink_financial_runway_days Total runway days of cluster on available Aeza balance\n")
 	sb.WriteString("# TYPE warlink_financial_runway_days gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_financial_runway_days %.1f\n\n", financialRunwayDays))
 
-	sb.WriteString("# HELP warlink_financial_runway_timestamp Unix timestamp when current Aeza balance runs out\n")
+	sb.WriteString("# HELP warlink_financial_runway_timestamp Unix timestamp when current Aeza balance runs out for cluster\n")
 	sb.WriteString("# TYPE warlink_financial_runway_timestamp gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_financial_runway_timestamp %d\n\n", financialRunwayTimestamp))
 
@@ -5214,9 +5393,24 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString("# TYPE warlink_donations_goal_percent gauge\n")
 	sb.WriteString(fmt.Sprintf("warlink_donations_goal_percent %.1f\n\n", donationsGoalPercent))
 
+	monthPoolRub := float64(s.getMonthPoolRub())
+	monthlyGoalPercent := 0.0
+	if clusterBudgetRub > 0 {
+		monthlyGoalPercent = (monthPoolRub / float64(clusterBudgetRub)) * 100.0
+	}
+
+	sb.WriteString("# HELP warlink_monthly_donations_rub Donations collected in current calendar month in rubles\n")
+	sb.WriteString("# TYPE warlink_monthly_donations_rub gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_monthly_donations_rub %.0f\n\n", monthPoolRub))
+
+	sb.WriteString("# HELP warlink_monthly_goal_percent Community donations progress towards 8 EUR target for current month\n")
+	sb.WriteString("# TYPE warlink_monthly_goal_percent gauge\n")
+	sb.WriteString(fmt.Sprintf("warlink_monthly_goal_percent %.1f\n\n", monthlyGoalPercent))
+
+	invoicesCreated := max(atomic.LoadUint64(&s.metricInvoicesCreated), atomic.LoadUint64(&s.metricDonationsPaid))
 	sb.WriteString("# HELP warlink_invoices_created_total Total invoices created via Aeza\n")
 	sb.WriteString("# TYPE warlink_invoices_created_total counter\n")
-	sb.WriteString(fmt.Sprintf("warlink_invoices_created_total %d\n\n", atomic.LoadUint64(&s.metricInvoicesCreated)))
+	sb.WriteString(fmt.Sprintf("warlink_invoices_created_total %d\n\n", invoicesCreated))
 
 	sb.WriteString("# HELP warlink_donations_paid_total Total successful donations paid\n")
 	sb.WriteString("# TYPE warlink_donations_paid_total counter\n")
@@ -5462,10 +5656,11 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	hyClient := &http.Client{Timeout: 600 * time.Millisecond}
 
-	// Scrape Hysteria 2 trafficStats from Moscow (45.12.63.85/status/traffic)
+	// Scrape Hysteria 2 trafficStats from Moscow (dynamic IP/status/traffic)
 	var mskTx, mskRx uint64
 	mskUsers := 0
-	if mskResp, err := hyClient.Get("http://45.12.63.85/status/traffic"); err == nil {
+	mskTrafficURL := fmt.Sprintf("http://%s/status/traffic", s.getMoscowGatewayIP())
+	if mskResp, err := hyClient.Get(mskTrafficURL); err == nil {
 		var mskData map[string]struct {
 			Tx uint64 `json:"tx"`
 			Rx uint64 `json:"rx"`
@@ -5565,10 +5760,22 @@ func (s *AppState) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 
+	s.gwHealthMu.RLock()
+	hStatus := 0
+	if s.gwHealthy && !s.gwDnsMismatch && (s.gwLastSuccess.IsZero() || time.Since(s.gwLastSuccess) < 90*time.Second) {
+		hStatus = 1
+	}
+	dnsStatus := 1
+	if s.gwDnsMismatch {
+		dnsStatus = 0
+	}
+	s.gwHealthMu.RUnlock()
+
 	sb.WriteString("# HELP warlink_service_status Status of critical backend services (1=healthy, 0=down)\n")
 	sb.WriteString("# TYPE warlink_service_status gauge\n")
 	sb.WriteString("warlink_service_status{service=\"api\"} 1\n")
-	sb.WriteString("warlink_service_status{service=\"hysteria\"} 1\n")
+	sb.WriteString(fmt.Sprintf("warlink_service_status{service=\"hysteria\"} %d\n", hStatus))
+	sb.WriteString(fmt.Sprintf("warlink_service_status{service=\"gateway_dns\"} %d\n", dnsStatus))
 	sb.WriteString(fmt.Sprintf("warlink_service_status{service=\"postgres\"} %d\n", pgStatus))
 	sb.WriteString(fmt.Sprintf("warlink_service_status{service=\"redis\"} %d\n", redisStatus))
 	sb.WriteString("warlink_service_status{service=\"victoriametrics\"} 1\n")
@@ -5945,53 +6152,108 @@ func (s *AppState) emitOpsAlert(alert OpsAlert) {
 }
 
 func (s *AppState) startOpsAlertingWorker() {
-	ticker := time.NewTicker(45 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	type nodeState struct {
-		name           string
-		addr           string
-		downCount      int
-		isReportedDown bool
-	}
-
-	nodes := []*nodeState{
-		{name: "Москва Ingress", addr: "45.12.63.85:80"},
-	}
-
+	hyClient := &http.Client{Timeout: 2500 * time.Millisecond}
 	lastCapacityAlert := time.Time{}
+	tickCount := 0
 
 	for range ticker.C {
-		// 1. Probe Node Health
-		for _, n := range nodes {
-			conn, err := net.DialTimeout("tcp", n.addr, 3*time.Second)
+		tickCount++
+		gwIP := s.getMoscowGatewayIP()
+		now := time.Now()
+
+		// 1. Probe Hysteria 2 Traffic API on Moscow Ingress
+		var probeErr error
+		if gwIP == "" {
+			probeErr = fmt.Errorf("адрес шлюза не настроен в cluster_nodes")
+		} else {
+			resp, err := hyClient.Get(fmt.Sprintf("http://%s/status/traffic", gwIP))
 			if err != nil {
-				n.downCount++
-				if n.downCount >= 2 && !n.isReportedDown {
-					n.isReportedDown = true
+				probeErr = err
+			} else {
+				if resp.StatusCode != http.StatusOK {
+					probeErr = fmt.Errorf("HTTP статус %d от Hysteria", resp.StatusCode)
+				}
+				_ = resp.Body.Close()
+			}
+		}
+
+		s.gwHealthMu.Lock()
+		s.gwLastChecked = now
+		if probeErr != nil {
+			s.gwFailCount++
+			s.gwLastError = probeErr.Error()
+			if s.gwFailCount >= 2 && s.gwHealthy {
+				s.gwHealthy = false
+				s.emitOpsAlert(OpsAlert{
+					Title:    "Шлюз Hysteria 2 недоступен: Москва (" + gwIP + ")",
+					Message:  fmt.Sprintf("Шлюз Москва (%s) не отвечает на запросы проверки трафика (%s). Клиенты не могут установить защищенное соединение.", gwIP, probeErr.Error()),
+					Details:  probeErr.Error(),
+					Severity: "critical",
+					Node:     "Москва Ingress (" + gwIP + ")",
+				})
+			}
+		} else {
+			if !s.gwHealthy && s.gwFailCount >= 2 {
+				s.emitOpsAlert(OpsAlert{
+					Title:    "Шлюз Hysteria 2 восстановлен: Москва (" + gwIP + ")",
+					Message:  fmt.Sprintf("Связь со шлюзом Москва (%s) успешно восстановлена. Проверка трафика завершена без ошибок.", gwIP),
+					Severity: "recovered",
+					Node:     "Москва Ingress (" + gwIP + ")",
+				})
+			}
+			s.gwHealthy = true
+			s.gwLastSuccess = now
+			s.gwFailCount = 0
+			s.gwLastError = ""
+		}
+		s.gwHealthMu.Unlock()
+
+		// 2. Periodic DNS Consistency Check (every 90s / 3 ticks)
+		if tickCount%3 == 0 && gwIP != "" {
+			ips, dErr := net.LookupHost("ru.warlink.max-alekseyev.com")
+			s.gwHealthMu.Lock()
+			if dErr != nil {
+				if !s.gwDnsMismatch {
+					s.gwDnsMismatch = true
+					s.gwDnsMismatchMsg = "DNS резолв ru.warlink.max-alekseyev.com завершился с ошибкой: " + dErr.Error()
 					s.emitOpsAlert(OpsAlert{
-						Title:    "Узел недоступен: " + n.name,
-						Message:  fmt.Sprintf("Потеряна сетевая связь с узлом %s (2 последовательных сбоя).", n.name),
-						Details:  err.Error(),
-						Severity: "critical",
-						Node:     n.name,
+						Title:    "Ошибка DNS резолвинга шлюза Москва",
+						Message:  "Не удалось разрешить домен ru.warlink.max-alekseyev.com: " + dErr.Error(),
+						Severity: "warning",
+						Node:     "ru.warlink.max-alekseyev.com",
 					})
 				}
-			} else {
-				_ = conn.Close()
-				if n.isReportedDown {
-					n.isReportedDown = false
-					n.downCount = 0
-					s.emitOpsAlert(OpsAlert{
-						Title:    "Узел восстановлен: " + n.name,
-						Message:  fmt.Sprintf("Связь с узлом %s успешно восстановилась.", n.name),
-						Severity: "recovered",
-						Node:     n.name,
-					})
+			} else if len(ips) > 0 {
+				dnsIP := strings.TrimSpace(ips[0])
+				if dnsIP != gwIP {
+					if !s.gwDnsMismatch {
+						s.gwDnsMismatch = true
+						s.gwDnsMismatchMsg = fmt.Sprintf("DNS (%s) != Active IP (%s)", dnsIP, gwIP)
+						s.emitOpsAlert(OpsAlert{
+							Title:    "Критическая рассинхронизация DNS и шлюза",
+							Message:  fmt.Sprintf("Домен ru.warlink.max-alekseyev.com указывает на %s, но активный IP шлюза %s! Требуется обновить A-запись в Cloudflare.", dnsIP, gwIP),
+							Severity: "critical",
+							Node:     "ru.warlink.max-alekseyev.com",
+							Metric:   fmt.Sprintf("%s != %s", dnsIP, gwIP),
+						})
+					}
 				} else {
-					n.downCount = 0
+					if s.gwDnsMismatch {
+						s.gwDnsMismatch = false
+						s.gwDnsMismatchMsg = ""
+						s.emitOpsAlert(OpsAlert{
+							Title:    "Синхронизация DNS подтверждена",
+							Message:  fmt.Sprintf("Домен ru.warlink.max-alekseyev.com успешно совпадает с активным IP шлюза %s.", gwIP),
+							Severity: "recovered",
+							Node:     "ru.warlink.max-alekseyev.com",
+						})
+					}
 				}
 			}
+			s.gwHealthMu.Unlock()
 		}
 
 		// 2. Pool Capacity Check (>90%)
@@ -6244,11 +6506,11 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		}
 
 		playerIP := sess.ClientIP
-		if (TrustedIngressIPs[playerIP] || strings.HasPrefix(playerIP, "45.12.63.") || playerIP == "") && s.db != nil {
+		if (TrustedIngressIPs[playerIP] || strings.HasPrefix(playerIP, "45.12.63.") || strings.HasPrefix(playerIP, "83.141.93.") || playerIP == "") && s.db != nil {
 			var realIP string
 			err := s.db.QueryRow(`
 				SELECT client_ip FROM user_connection_history 
-				WHERE (device_id = $1 OR account_number = $2) AND client_ip NOT LIKE '45.12.63.%' 
+				WHERE (device_id = $1 OR account_number = $2) AND client_ip NOT LIKE '45.12.63.%' AND client_ip NOT LIKE '83.141.93.%'
 				ORDER BY id DESC LIMIT 1
 			`, sess.DeviceID, sess.AccountNumber).Scan(&realIP)
 			if err == nil && realIP != "" {
@@ -6272,7 +6534,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 				gwIP = "138.124.103.99"
 			} else {
 				cNode = "Москва"
-				gwIP = "45.12.63.85"
+				gwIP = s.getMoscowGatewayIP()
 			}
 		}
 		routeBadge := "Москва"
@@ -6291,7 +6553,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 				cNode = "Москва"
 			}
 			if gwIP == "" {
-				gwIP = "45.12.63.85"
+				gwIP = s.getMoscowGatewayIP()
 			}
 		default:
 			routeBadge = "Москва"
@@ -6299,7 +6561,7 @@ func (s *AppState) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 				cNode = "Москва"
 			}
 			if gwIP == "" {
-				gwIP = "45.12.63.85"
+				gwIP = s.getMoscowGatewayIP()
 			}
 		}
 
@@ -6672,8 +6934,8 @@ func (s *AppState) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		for _, sess := range s.sessions {
 			if (device != "" && sess.DeviceID == device) || (account != "" && sess.AccountNumber == account) {
 				changed := false
-				if clientIP != "" && !TrustedIngressIPs[clientIP] && !strings.HasPrefix(clientIP, "45.12.63.") {
-					if TrustedIngressIPs[sess.ClientIP] || strings.HasPrefix(sess.ClientIP, "45.12.63.") || sess.ClientIP == "" {
+				if clientIP != "" && !TrustedIngressIPs[clientIP] && !strings.HasPrefix(clientIP, "45.12.63.") && !strings.HasPrefix(clientIP, "83.141.93.") {
+					if TrustedIngressIPs[sess.ClientIP] || strings.HasPrefix(sess.ClientIP, "45.12.63.") || strings.HasPrefix(sess.ClientIP, "83.141.93.") || sess.ClientIP == "" {
 						sess.ClientIP = clientIP
 						changed = true
 					}
@@ -8758,8 +9020,8 @@ func (s *AppState) handleTelemetryBeacon(w http.ResponseWriter, r *http.Request)
 				sess.RouteMode = resolvedRoute
 				sess.ConnectedNode = resolvedNode
 				sess.GatewayIP = resolvedGW
-				if clientIP != "" && !TrustedIngressIPs[clientIP] && !strings.HasPrefix(clientIP, "45.12.63.") {
-					if TrustedIngressIPs[sess.ClientIP] || strings.HasPrefix(sess.ClientIP, "45.12.63.") || sess.ClientIP == "" {
+				if clientIP != "" && !TrustedIngressIPs[clientIP] && !strings.HasPrefix(clientIP, "45.12.63.") && !strings.HasPrefix(clientIP, "83.141.93.") {
+					if TrustedIngressIPs[sess.ClientIP] || strings.HasPrefix(sess.ClientIP, "45.12.63.") || strings.HasPrefix(sess.ClientIP, "83.141.93.") || sess.ClientIP == "" {
 						sess.ClientIP = clientIP
 					}
 				}
@@ -9351,6 +9613,8 @@ type InfrastructureGoalData struct {
 	Title             string            `json:"title"`
 	TargetAmountRub   int               `json:"target_amount_rub"`
 	TargetAmountEur   float64           `json:"target_amount_eur"`
+	CurrentAmountRub  int               `json:"current_amount_rub"`
+	CurrentAmountEur  float64           `json:"current_amount_eur"`
 	CurrentBalanceRub int               `json:"current_balance_rub"`
 	CurrentBalanceEur float64           `json:"current_balance_eur"`
 	DaysLeft          int               `json:"days_left"`
@@ -9359,6 +9623,7 @@ type InfrastructureGoalData struct {
 	Percent           float64           `json:"percent"`
 	IsCovered         bool              `json:"is_covered"`
 	StatusText        string            `json:"status_text"`
+	Period            string            `json:"period"`
 	Nodes             []VPSServerDetail `json:"nodes"`
 }
 
@@ -9415,24 +9680,36 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 	copy(nodes, s.cachedVPSDetails)
 	s.mu.RUnlock()
 
+	monthPoolRub := int(s.getMonthPoolRub())
+	monthPoolEur := math.Round((float64(monthPoolRub)/130.0)*100) / 100
+
 	infraPercent := 0.0
 	if monthlyTarget > 0 {
-		infraPercent = math.Round((float64(balRub)/float64(monthlyTarget)*100)*10) / 10
+		infraPercent = math.Round((float64(monthPoolRub)/float64(monthlyTarget)*100)*10) / 10
 		if infraPercent > 100 {
 			infraPercent = 100
 		}
 	}
-	isInfraCovered := displayDays >= 20 || balRub >= monthlyTarget
+	isInfraCovered := monthPoolRub >= monthlyTarget
 
-	statusText := fmt.Sprintf("Оплачено на %d дн.", displayDays)
-	if len(nodes) >= 2 {
-		statusText = fmt.Sprintf("Оплачено на %d дн. (Стокгольм + Москва в строю)", displayDays)
+	monthNames := []string{
+		"Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+		"Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+	}
+	now := time.Now()
+	periodName := fmt.Sprintf("%s %d", monthNames[now.Month()-1], now.Year())
+
+	statusText := fmt.Sprintf("Собрано %d ₽ из %d ₽ в этом месяце", monthPoolRub, monthlyTarget)
+	if isInfraCovered {
+		statusText = fmt.Sprintf("Цель закрыта: %d ₽ из %d ₽ (%s)", monthPoolRub, monthlyTarget, periodName)
 	}
 
 	infra := InfrastructureGoalData{
 		Title:             "Инфраструктура кластера: Стокгольм + Москва (8 € / мес)",
 		TargetAmountRub:   monthlyTarget,
 		TargetAmountEur:   MonthlyInfrastructureCostEur,
+		CurrentAmountRub:  monthPoolRub,
+		CurrentAmountEur:  monthPoolEur,
 		CurrentBalanceRub: balRub,
 		CurrentBalanceEur: math.Round(balEur*100) / 100,
 		DaysLeft:          displayDays,
@@ -9441,6 +9718,7 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 		Percent:           infraPercent,
 		IsCovered:         isInfraCovered,
 		StatusText:        statusText,
+		Period:            periodName,
 		Nodes:             nodes,
 	}
 

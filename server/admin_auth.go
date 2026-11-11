@@ -410,6 +410,12 @@ func (s *AppState) handleAdminAuthLogin(w http.ResponseWriter, r *http.Request) 
 	username := strings.TrimSpace(req.Username)
 	code := strings.TrimSpace(req.Code)
 
+	if s.db == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "База данных временно недоступна"})
+		return
+	}
+
 	var (
 		userID      int
 		passHash    string
@@ -836,7 +842,7 @@ func (s *AppState) handleAdminNodes(w http.ResponseWriter, r *http.Request) {
 			Name:           "Москва (Игровой шлюз РФ)",
 			Host:           "ru.warlink.max-alekseyev.com",
 			Port:           8443,
-			IP:             "45.12.63.85",
+			IP:             s.getMoscowGatewayIP(),
 			IsHealthy:      true,
 			ActivePlayers:  totalActive,
 			ActiveSessions: totalActive,

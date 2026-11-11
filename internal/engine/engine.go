@@ -407,9 +407,9 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 		selectedGameID = selectedGameID + " (гибрид)"
 	}
 
-	// Clean zombie Wintun adapter if left by previous unclean termination (do not tear down while sing-box is running)
+	// Ensure any orphaned sing-box processes are terminated without removing the healthy Wintun adapter
 	if e.singboxMgr == nil || !e.singboxMgr.IsRunning() {
-		deps.CleanupZombieWintunAdapter(e.log)
+		singbox.SoftCleanupWintun()
 	}
 
 	if err := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID); err != nil {
@@ -466,6 +466,7 @@ func (e *Engine) ConnectPipeline(onSuccess func()) error {
 
 	// Apply Windows network stack and DSCP 46 optimizations for competitive low latency
 	go system.ApplyCompetitiveGamingTweaks(e.log)
+	go system.CleanupLegacyWardogsTweaks(e.log)
 
 	selectedGame = e.cfg.GetSelectedGame()
 	// Launch game if autolaunch is enabled for this game
@@ -511,7 +512,7 @@ func (e *Engine) Disconnect() error {
 
 	e.log("[INFO] Остановка игрового туннеля...")
 	err := e.disconnectInternal()
-	deps.CleanupZombieWintunAdapter(e.log)
+	singbox.SoftCleanupWintun()
 	time.Sleep(200 * time.Millisecond)
 	return err
 }
@@ -732,8 +733,8 @@ func (e *Engine) checkProcessHealth() {
 
 		hasAuthErr := e.singboxMgr.HasAuthError()
 		_ = e.singboxMgr.Stop()
-		deps.CleanupZombieWintunAdapter(e.log)
-		time.Sleep(1000 * time.Millisecond)
+		singbox.SoftCleanupWintun()
+		time.Sleep(300 * time.Millisecond)
 		if hasAuthErr {
 			singbox.InvalidateSession()
 		}
@@ -749,15 +750,15 @@ func (e *Engine) checkProcessHealth() {
 		}
 
 		startErr := e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID)
-		if startErr != nil && strings.Contains(startErr.Error(), "already exists") {
+		if startErr != nil && singbox.IsWintunCollisionError(startErr.Error()) {
 			e.log("[WARN] Обнаружена задержка освобождения Wintun-интерфейса Windows. Принудительный сброс адаптера...")
 			if e.shouldSendCrashReport() {
 				ReportEngineCrash("wintun_driver", "Задержка освобождения Wintun-интерфейса: "+startErr.Error(), map[string]interface{}{
 					"game_id": selectedGameID,
 				})
 			}
-			deps.CleanupZombieWintunAdapter(e.log)
-			time.Sleep(2000 * time.Millisecond)
+			deps.ForcePurgeWintunAdapter(e.log)
+			time.Sleep(1800 * time.Millisecond)
 			startErr = e.singboxMgr.Start(targets, isFreeNet, e.log, selectedGameID)
 		}
 

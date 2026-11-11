@@ -100,7 +100,15 @@ async function fetchSponsors() {
 }
 
 let goalCountdownTimer = null;
-const OCT_START_MSK = new Date('2026-10-01T00:00:00+03:00').getTime();
+
+function getCurrentMonthText() {
+    const monthNames = [
+        'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+        'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+    ];
+    const now = new Date();
+    return `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+}
 
 function updateCommunityGoalVisibility(visible) {
     if (visible === undefined && window.enableCommunityGoal !== undefined) {
@@ -112,25 +120,15 @@ function updateCommunityGoalVisibility(visible) {
     }
 }
 
-function updateCommunityGoalTimer() {
+function updateCommunityGoalTimer(forcedPeriod) {
     const labelEl = document.getElementById('goal-timer-label');
     const timeEl = document.getElementById('goal-timer-countdown');
-    if (!labelEl || !timeEl) return;
+    if (!timeEl) return;
 
-    const now = Date.now();
-    if (now < OCT_START_MSK) {
-        const diff = OCT_START_MSK - now;
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-        const mins = Math.floor((diff / (1000 * 60)) % 60);
-        const secs = Math.floor((diff / 1000) % 60);
-
-        labelEl.textContent = 'Старт статистики с 1 октября:';
-        timeEl.textContent = `${days}д ${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    } else {
+    if (labelEl) {
         labelEl.textContent = 'Период сбора:';
-        timeEl.textContent = 'Октябрь 2026';
     }
+    timeEl.textContent = forcedPeriod || window.currentGoalPeriod || getCurrentMonthText();
 }
 
 async function updateCommunityGoal(sponsors) {
@@ -138,7 +136,7 @@ async function updateCommunityGoal(sponsors) {
     updateCommunityGoalTimer();
 
     if (!goalCountdownTimer) {
-        goalCountdownTimer = setInterval(updateCommunityGoalTimer, 1000);
+        goalCountdownTimer = setInterval(() => updateCommunityGoalTimer(), 60000);
     }
 
     const infraFillEl = document.getElementById('infra-progress-fill');
@@ -162,13 +160,21 @@ async function updateCommunityGoal(sponsors) {
                     if (titleEl && infra.target_amount_eur) {
                         titleEl.textContent = `Инфраструктура кластера (${infra.target_amount_eur} € / мес):`;
                     }
+                    if (infra.period) {
+                        window.currentGoalPeriod = infra.period;
+                        updateCommunityGoalTimer(infra.period);
+                    }
                     if (infraNode) {
+                        const currentRub = infra.current_amount_rub !== undefined ? infra.current_amount_rub : 0;
+                        const targetRub = infra.target_amount_rub || 1040;
                         if (infra.is_covered || pct >= 100) {
                             infraNode.classList.add('covered');
                             infraNode.classList.remove('target');
+                            infraNode.title = `Цель месяца закрыта: собрано ${currentRub} ₽ из ${targetRub} ₽`;
                         } else {
                             infraNode.classList.remove('covered');
                             infraNode.classList.add('target');
+                            infraNode.title = `Сбор на текущий месяц: ${currentRub} ₽ из ${targetRub} ₽ (${pct}%)`;
                         }
                     }
                 }
