@@ -3767,7 +3767,7 @@ func (s *AppState) initDatabase() {
 
 	_, _ = s.db.Exec(`
 		INSERT INTO special_projects (id, title, badge, description, target_amount_rub, base_price_rub, discount_price_rub, current_amount_rub, is_completed, is_active, boosty_url, boosty_label, steam_url, steam_label, display_order)
-		VALUES ('bf6', 'Battlefield 6 в WarLink', 'СПЕЦПРОЕКТ', 'Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.', 3200, 3200, 0, 88, false, true, 'https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link', 'Поддержать сбор на BF6', 'https://steamcommunity.com/id/MaksimPaladin/', 'Подарить в Steam', 1)
+		VALUES ('bf6', 'Battlefield 6 в WarLink', 'ПОДГОТОВКА', 'Сбор успешно завершен! Игра приобретена по скидке (1 100 ₽). Идет подготовка сетевых профилей, захват трафика и тестирование маршрутизации для добавления в WarLink.', 1100, 4100, 1100, 1100, true, true, 'https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link', 'Сбор завершен', 'https://steamcommunity.com/id/MaksimPaladin/', 'Подарить в Steam', 1)
 		ON CONFLICT (id) DO NOTHING;
 
 		INSERT INTO server_settings (key, value) VALUES
@@ -9774,11 +9774,11 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 
 	// Safe fallback if table is empty or unpopulated
 	if len(specialProjects) == 0 {
-		bf6Target := 3200
-		bf6BasePrice := 3200
-		bf6DiscountPrice := 0
-		bf6Current := 0
-		bf6Completed := false
+		bf6Target := 1100
+		bf6BasePrice := 4100
+		bf6DiscountPrice := 1100
+		bf6Current := 1100
+		bf6Completed := true
 
 		if s.db != nil {
 			rows, err := s.db.Query(`SELECT key, value FROM server_settings WHERE key IN ('bf6_goal_current', 'bf6_goal_target', 'bf6_goal_completed')`)
@@ -9820,8 +9820,8 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 			{
 				ID:               "bf6",
 				Title:            "Battlefield 6 в WarLink",
-				Badge:            "СПЕЦПРОЕКТ",
-				Description:      "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
+				Badge:            "ПОДГОТОВКА",
+				Description:      "Сбор успешно завершен! Игра приобретена по скидке (1 100 ₽). Идет подготовка сетевых профилей, захват трафика и тестирование маршрутизации для добавления в WarLink.",
 				TargetAmountRub:  bf6Target,
 				BasePriceRub:     bf6BasePrice,
 				DiscountPriceRub: bf6DiscountPrice,
@@ -9830,7 +9830,7 @@ func (s *AppState) getCommunityGoals() CommunityGoalsResponse {
 				IsCompleted:      bf6Completed,
 				IsActive:         true,
 				BoostyURL:        "https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link",
-				BoostyLabel:      "Поддержать сбор на BF6",
+				BoostyLabel:      "Сбор завершен",
 				SteamURL:         "https://steamcommunity.com/id/MaksimPaladin/",
 				SteamLabel:       "Подарить в Steam",
 				DisplayOrder:     1,
@@ -10247,11 +10247,11 @@ func (s *AppState) getGamesCatalog() []GameCatalogItem {
 			ID:          "bf6",
 			Title:       "Battlefield 6",
 			Processes:   []string{"bf6.exe", "EAAntiCheat.GameService.exe"},
-			SteamAppID:  0,
+			SteamAppID:  2807960,
 			Icon:        "bf6_icon.png",
-			Status:      "crowdfunding",
-			Description: "Ожидаемый мультиплеерный шутер. Идет сбор средств на покупку игры разработчику.",
-			Note:        "Сбор открыт на Boosty и в Steam",
+			Status:      "preparation",
+			Description: "Сбор средств успешно завершен. Идет подготовка сетевых профилей и интеграция в WarLink.",
+			Note:        "Подготовка к добавлению",
 		},
 		{
 			ID:          "arc_raiders",

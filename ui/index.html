@@ -22,7 +22,7 @@
         <header class="titlebar" onmousedown="handleTitlebarMouseDown(event)">
             <div class="titlebar-left">
                 <span class="brand-logo">WARLINK</span>
-                <span class="brand-version">v2.2.5</span>
+                <span class="brand-version">v2.2.9</span>
             </div>
 
             <!-- Global Airplane-Style Toggle: Complex Mode (DPI) -->
@@ -420,12 +420,15 @@
                     <span class="prog-seasons-title font-mono">ПРОГРЕСС ПО СЕЗОНАМ (WARDOGS)</span>
                 </div>
                 <div class="prog-seasons-header-right">
-                    <div class="prog-seasons-legend font-mono">
+                    <div class="prog-seasons-legend font-mono" id="prog-seasons-header-legend">
                         <span class="prog-legend-item">
                             <span class="prog-legend-badge-s1">Сезон 1 (Завершен)</span>
                         </span>
                         <span class="prog-legend-item">
-                            <span class="prog-legend-badge-active">Сезон 2 (Активен)</span>
+                            <span class="prog-legend-badge-s1">Сезон 2 (Завершен)</span>
+                        </span>
+                        <span class="prog-legend-item">
+                            <span class="prog-legend-badge-active">Сезон 3 (Активен)</span>
                         </span>
                     </div>
                     <button type="button" class="prog-seasons-toggle-btn" id="btn-prog-seasons-toggle" aria-label="Свернуть / развернуть" title="Свернуть / развернуть">
@@ -466,6 +469,7 @@
                         <span class="prog-finance-label">Бюджет ветки:</span>
                         <strong id="prog-target-path-budget" class="prog-gold-price">$27,500</strong>
                     </div>
+                    <div id="prog-target-smart-route" class="prog-target-smart-route font-mono" style="display: none;"></div>
                 </div>
             </div>
             <div class="prog-target-right">
@@ -484,20 +488,47 @@
 
         <!-- Section 3: Catalog of Unlocks in Table Format -->
         <div class="prog-section-header">
-            <div class="prog-catalog-header-left">
-                <span class="prog-section-title font-mono">КАТАЛОГ РАЗБЛОКИРОВОК</span>
-                <span id="prog-catalog-count" class="prog-catalog-count font-mono">(...)</span>
+            <div class="prog-catalog-top-row">
+                <div class="prog-catalog-header-left">
+                    <span class="prog-section-title font-mono">КАТАЛОГ РАЗБЛОКИРОВОК</span>
+                    <span id="prog-catalog-count" class="prog-catalog-count font-mono">(...)</span>
+                </div>
+                <div class="prog-catalog-stats font-mono" id="prog-catalog-stats">
+                    <span id="prog-stat-remaining" class="prog-stat-item" title="Осталось разблокировать во вкладке">Осталось: <strong class="prog-stat-val">—</strong></span>
+                    <span class="prog-stat-sep">•</span>
+                    <span id="prog-stat-ready" class="prog-stat-item" title="Награды, чей уровень уже открыт вашим рангом, и сумма для выкупа у торговца">К выкупу: <strong class="prog-stat-val-amber">—</strong></span>
+                </div>
             </div>
             <div class="prog-catalog-filter-row">
-                <label class="prog-hide-unlocked-label font-mono">
-                    <input type="checkbox" id="check-prog-hide-unlocked" onchange="ProgressionController.toggleHideUnlocked(this.checked)">
-                    <span class="prog-checkbox-box">
-                        <svg class="prog-checkbox-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="20 6 9 17 4 12"/>
-                        </svg>
-                    </span>
-                    <span class="prog-checkbox-text">Скрыть открытое</span>
-                </label>
+                <div class="prog-catalog-checkboxes">
+                    <label class="prog-hide-unlocked-label font-mono" title="Показать только предметы, доступные к разблокировке">
+                        <input type="checkbox" id="check-prog-only-ready" onchange="ProgressionController.toggleOnlyReady(this.checked)">
+                        <span class="prog-checkbox-box">
+                            <svg class="prog-checkbox-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                        </span>
+                        <span class="prog-checkbox-text">Доступно к разблокировке</span>
+                    </label>
+                    <label class="prog-hide-unlocked-label font-mono" title="Скрыть снаряжение, запрещенное в Limited Mode">
+                        <input type="checkbox" id="check-prog-only-limited" onchange="ProgressionController.toggleOnlyLimited(this.checked)">
+                        <span class="prog-checkbox-box">
+                            <svg class="prog-checkbox-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                        </span>
+                        <span class="prog-checkbox-text">Только Limited Mode</span>
+                    </label>
+                    <label class="prog-hide-unlocked-label font-mono" title="Скрыть уже разблокированные предметы">
+                        <input type="checkbox" id="check-prog-hide-unlocked" onchange="ProgressionController.toggleHideUnlocked(this.checked)">
+                        <span class="prog-checkbox-box">
+                            <svg class="prog-checkbox-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"/>
+                            </svg>
+                        </span>
+                        <span class="prog-checkbox-text">Скрыть открытое</span>
+                    </label>
+                </div>
                 <input type="text" id="prog-search-input" class="prog-search-input font-mono" placeholder="Поиск оружия, модуля, патрона..." oninput="ProgressionController.onSearchInput(event)">
             </div>
         </div>

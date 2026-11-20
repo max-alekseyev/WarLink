@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.8"
+var AppVersion = "v2.2.9"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -2377,16 +2377,16 @@ func main() {
 					map[string]interface{}{
 						"id":                 "bf6",
 						"title":              "Battlefield 6 в WarLink",
-						"badge":              "СПЕЦПРОЕКТ",
-						"description":        "Многие игроки просят включить Battlefield 6 в WarLink. У разработчика нет копии игры для снятия сетевых дампов и настройки обхода античита. Вы можете поддержать целевой сбор или подарить игру в Steam.",
-						"target_amount_rub":  3200,
-						"base_price_rub":     3200,
-						"discount_price_rub": 0,
-						"current_amount_rub": 0,
-						"percent":            0.0,
-						"is_completed":       false,
+						"badge":              "ПОДГОТОВКА",
+						"description":        "Сбор успешно завершен! Игра приобретена по скидке (1 100 ₽). Идет подготовка сетевых профилей, захват трафика и тестирование маршрутизации для добавления в WarLink.",
+						"target_amount_rub":  1100,
+						"base_price_rub":     4100,
+						"discount_price_rub": 1100,
+						"current_amount_rub": 1100,
+						"percent":            100.0,
+						"is_completed":       true,
 						"boosty_url":         "https://boosty.to/pld1n/single-payment/donation/832459/target?share=target_link",
-						"boosty_label":       "Поддержать сбор на BF6",
+						"boosty_label":       "Сбор завершен",
 						"steam_url":          "https://steamcommunity.com/id/MaksimPaladin/",
 						"steam_label":        "Подарить в Steam",
 					},

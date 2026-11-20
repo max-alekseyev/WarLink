@@ -41,7 +41,7 @@ const (
 )
 
 var (
-	ClientVersion       = "v2.2.8"
+	ClientVersion       = "v2.2.9"
 	DefaultServerIP     = "api-warlink.max-alekseyev.com"
 	DefaultServerAPI    = "https://api-warlink.max-alekseyev.com"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
@@ -1022,7 +1022,7 @@ func GetServerGatewayStatus() (*GatewayStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/v2.2.8")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WarLink/"+ClientVersion)
 
 	resp, err := APIHTTPClient.Do(req)
 	if err != nil {

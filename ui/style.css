@@ -1599,6 +1599,12 @@ html, body {
     flex-shrink: 0;
 }
 
+.badge-winner.badge-prep {
+    color: var(--action);
+    background-color: rgba(255, 94, 31, 0.12);
+    border: 1px solid rgba(255, 94, 31, 0.35);
+}
+
 /* --- Functional Toast Notification (Dark Cloudflare Utility) --- */
 .ui-toast {
     position: fixed;
@@ -2938,6 +2944,14 @@ html, body {
 .btn-boosty-action:hover {
     background: rgba(255, 94, 31, 0.22);
 }
+.btn-boosty-action.is-completed {
+    background: rgba(46, 204, 113, 0.12);
+    border: 1px solid rgba(46, 204, 113, 0.35);
+    color: var(--status-active);
+}
+.btn-boosty-action.is-completed:hover {
+    background: rgba(46, 204, 113, 0.18);
+}
 .btn-steam-action {
     flex: 1;
     height: 24px;
@@ -3993,20 +4007,17 @@ html, body {
 
 .prog-section-header {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding-bottom: 4px;
+    flex-direction: column;
+    gap: 6px;
+    padding-bottom: 6px;
     border-bottom: 1px solid var(--border-subtle);
-    flex-wrap: nowrap;
 }
 
-.prog-section-title {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    color: var(--text-secondary);
-    white-space: nowrap;
+.prog-catalog-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }
 
 .prog-catalog-header-left {
@@ -4015,6 +4026,37 @@ html, body {
     gap: 6px;
     white-space: nowrap;
     flex-shrink: 0;
+}
+
+.prog-catalog-stats {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 8.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.prog-stat-sep {
+    color: #444444;
+}
+
+.prog-stat-val {
+    color: #dddddd;
+    font-weight: 600;
+}
+
+.prog-stat-val-amber {
+    color: #ff9800;
+    font-weight: 700;
+}
+
+.prog-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    white-space: nowrap;
 }
 
 .prog-catalog-count {
@@ -4026,8 +4068,82 @@ html, body {
 .prog-catalog-filter-row {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
-    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.prog-catalog-checkboxes {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.prog-target-smart-route {
+    margin-top: 5px;
+    font-size: 8.5px;
+    line-height: 1.2;
+}
+
+.smart-route-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 1px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.smart-route-pill.ready {
+    color: #ff9800;
+    background: rgba(255, 152, 0, 0.08);
+    border: 1px solid rgba(255, 152, 0, 0.45);
+}
+
+.smart-route-pill.ready:hover {
+    background: rgba(255, 152, 0, 0.18);
+    border-color: #ff9800;
+}
+
+.smart-route-pill.faster {
+    color: #00e676;
+    background: rgba(0, 230, 118, 0.08);
+    border: 1px solid rgba(0, 230, 118, 0.35);
+}
+
+.smart-route-pill.faster:hover {
+    background: rgba(0, 230, 118, 0.18);
+    border-color: #00e676;
+}
+
+.prog-table tbody tr.is-ready-row {
+    background-color: rgba(245, 158, 11, 0.035);
+}
+
+.prog-table tbody tr.is-ready-row:hover {
+    background-color: rgba(245, 158, 11, 0.07);
+}
+
+.prog-table tbody tr.is-ready-row .td-item-name {
+    color: #f59e0b;
+}
+
+.prog-table tbody tr.is-ready-row .td-lvl-badge {
+    color: #f59e0b;
+}
+
+.btn-prog-lock.is-ready {
+    opacity: 0.9;
+}
+
+.btn-prog-lock.is-ready:hover {
+    opacity: 1;
+}
+
+.prog-lock-svg.ready {
+    stroke: #ff9800;
 }
 
 /* Active Target Roadmap Banner */
@@ -4487,6 +4603,72 @@ html, body {
     align-items: center;
     gap: 8px;
     min-width: 0;
+}
+
+.td-item-text-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.td-item-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.td-multi-tracks {
+    font-size: 9px;
+    color: #666666;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    line-height: 1.2;
+}
+
+.prog-multi-track-pill {
+    display: inline-block;
+    padding: 1px 4px;
+    font-size: 8.5px;
+    color: #888888;
+    background: #181818;
+    border: 1px solid #282828;
+    border-radius: 1px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.prog-multi-track-pill:hover {
+    border-color: #555555;
+    color: #cccccc;
+}
+
+.prog-multi-track-pill.is-role-met {
+    color: #00e676;
+    border-color: rgba(0, 230, 118, 0.35);
+    background: rgba(0, 230, 118, 0.08);
+}
+
+.prog-multi-track-pill.is-role-met:hover {
+    border-color: #00e676;
+    background: rgba(0, 230, 118, 0.16);
+}
+
+.badge-limited-banned {
+    display: inline-block;
+    padding: 1px 4px;
+    font-size: 8px;
+    text-transform: uppercase;
+    color: #ff9800;
+    background: rgba(255, 152, 0, 0.08);
+    border: 1px solid rgba(255, 152, 0, 0.25);
+    border-radius: 1px;
+    flex-shrink: 0;
+    line-height: 1.1;
 }
 
 .td-item-icon {

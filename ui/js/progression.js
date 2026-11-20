@@ -29,6 +29,8 @@
     let currentFilterRole = 'career';
     let currentSearchTerm = '';
     let hideUnlocked = false;
+    let onlyReadyToUnlock = false;
+    let onlyLimitedMode = false;
     let isInitialized = false;
 
     const ROLES = ['assault', 'medic', 'recon', 'support', 'driver', 'pilot'];
@@ -226,6 +228,14 @@
 
         const render = (data) => {
             if (data && data.unlocks && Array.isArray(data.unlocks)) {
+                // Invalidate obsolete cached database versions
+                if (data.version !== '3.0.0' || data.total_unlocks !== 411) {
+                    if (window.UIStore && typeof UIStore.remove === 'function') {
+                        UIStore.remove('/api/progression/database');
+                    }
+                    loadCatalogDatabase(true);
+                    return;
+                }
                 allUnlocks = data.unlocks;
                 lastRenderedCatalogKey = '';
                 updateCareerNextReward();
@@ -334,7 +344,7 @@
         }
 
         // 2. Identify current active season
-        const currentSeasonNum = (currentProgression && currentProgression.season) ? Number(currentProgression.season) : 2;
+        const currentSeasonNum = (currentProgression && currentProgression.season) ? Number(currentProgression.season) : 3;
         let currentLevel = (currentProgression && currentProgression.career_level !== undefined && currentProgression.career_level !== null)
             ? Number(currentProgression.career_level)
             : 0;
@@ -360,41 +370,43 @@
                 endDate: '15.10.2026',
                 shortDates: '10.09 — 15.10',
                 duration: '1 мес.',
-                status: currentSeasonNum === 1 ? 'active' : 'completed',
-                statusLabel: currentSeasonNum === 1 ? 'Активен' : 'Завершен',
+                status: 'completed',
+                statusLabel: 'Завершен',
                 wipeDate: '15.10.2026'
             };
         }
 
-        // 4. Fallback for Season 2 if in Season 3 and not recorded in history
-        if (currentSeasonNum >= 3 && !seasonsMap[2]) {
+        // 4. Fallback for Season 2 if not recorded in history
+        if (!seasonsMap[2]) {
+            let s2Lvl = 89; // default archived S2 record
+            if (currentSeasonNum === 2 && currentLevel > 0) s2Lvl = currentLevel;
             seasonsMap[2] = {
                 season: 2,
                 title: 'СЕЗОН 2',
-                level: 0,
+                level: s2Lvl,
                 startDate: '15.10.2026',
                 endDate: '12.11.2026',
                 shortDates: '15.10 — 12.11',
                 duration: '1 мес.',
-                status: 'completed',
-                statusLabel: 'Завершен',
+                status: currentSeasonNum === 2 ? 'active' : 'completed',
+                statusLabel: currentSeasonNum === 2 ? 'Активен' : 'Завершен',
                 wipeDate: '12.11.2026'
             };
         }
 
         // 5. Register current active season
         if (!seasonsMap[currentSeasonNum] || seasonsMap[currentSeasonNum].status !== 'active') {
-            let sStart = '15.10.2026';
-            let sEnd = '12.11.2026';
-            let sShort = '15.10 — 12.11';
-            let sWipe = '12.11.2026';
-            let sDuration = '1 мес.';
-            if (currentSeasonNum === 3) {
-                sStart = '12.11.2026';
-                sEnd = '12.02.2027';
-                sShort = '12.11 — 12.02 (3 мес.)';
-                sDuration = '3 мес.';
-                sWipe = '12.02.2027';
+            let sStart = '12.11.2026';
+            let sEnd = '28.01.2027';
+            let sShort = '12.11 — 28.01';
+            let sWipe = '28.01.2027';
+            let sDuration = '2.5 мес.';
+            if (currentSeasonNum === 2) {
+                sStart = '15.10.2026';
+                sEnd = '12.11.2026';
+                sShort = '15.10 — 12.11';
+                sDuration = '1 мес.';
+                sWipe = '12.11.2026';
             }
             seasonsMap[currentSeasonNum] = {
                 season: currentSeasonNum,
@@ -428,12 +440,14 @@
         if (N === 0) return;
 
         // 1. Update Header Legend dynamically
-        const legendEl = document.getElementById('prog-seasons-header-legend');
+        const legendEl = document.getElementById('prog-seasons-header-legend') || document.querySelector('.prog-seasons-legend');
         if (legendEl) {
-            const activeSeason = seasons.find(s => s.status === 'active') || seasons[seasons.length - 1];
-            legendEl.innerHTML = 
-                '<span class="prog-legend-badge-s1 font-mono">Всего сезонов: ' + N + '</span>' +
-                '<span class="prog-legend-badge-active font-mono">Сезон ' + activeSeason.season + ' (Активен)</span>';
+            legendEl.innerHTML = seasons.map(s => {
+                const isAct = s.status === 'active';
+                const cls = isAct ? 'prog-legend-badge-active' : 'prog-legend-badge-s1';
+                const formattedTitle = s.title.charAt(0) + s.title.slice(1).toLowerCase();
+                return `<span class="prog-legend-item"><span class="${cls}">${escapeHtml(formattedTitle)} (${escapeHtml(s.statusLabel)})</span></span>`;
+            }).join('');
         }
 
         // 2. SVG Canvas dimensions & grid metrics
@@ -793,6 +807,51 @@
         if (pctEl) pctEl.textContent = pct + '%';
         if (fillEl) fillEl.style.width = pct + '%';
 
+        // Check if there is a faster / already ready route among other tracks
+        const smartRouteEl = document.getElementById('prog-target-smart-route');
+        if (smartRouteEl) {
+            let altRoutes = [];
+            if (Array.isArray(targetItem.other_tracks) && targetItem.other_tracks.length > 0) {
+                for (let i = 0; i < targetItem.other_tracks.length; i++) {
+                    const ot = targetItem.other_tracks[i];
+                    const rName = ROLE_LABELS[ot.role] || (ot.role ? ot.role.toUpperCase() : 'КАРЬЕРА');
+                    const otPlayerLvl = (ot.role === 'career')
+                        ? (currentProgression.career_level || 0)
+                        : ((currentProgression.roles && currentProgression.roles[ot.role]) || 0);
+                    const otRem = Math.max(0, ot.level - otPlayerLvl);
+                    altRoutes.push({
+                        role: ot.role,
+                        roleName: rName,
+                        reqLevel: ot.level,
+                        playerLevel: otPlayerLvl,
+                        remLevels: otRem,
+                        isReady: otPlayerLvl >= ot.level
+                    });
+                }
+            }
+
+            const readyRoute = altRoutes.find(r => r.isReady);
+            altRoutes.sort((a, b) => a.remLevels - b.remLevels);
+            const fasterRoute = altRoutes[0];
+
+            if (remLvl > 0 && readyRoute) {
+                smartRouteEl.innerHTML = `
+                    <span class="smart-route-pill ready font-mono" onclick="ProgressionController.setFilter('${readyRoute.role}')" title="Нажмите, чтобы перейти в ветку ${escapeHtml(readyRoute.roleName)}">
+                        Доступно к разблокировке через ${escapeHtml(readyRoute.roleName)} (ваш ур. ${readyRoute.playerLevel} / ${readyRoute.reqLevel})
+                    </span>`;
+                smartRouteEl.style.display = 'block';
+            } else if (remLvl > 0 && fasterRoute && fasterRoute.remLevels < remLvl) {
+                smartRouteEl.innerHTML = `
+                    <span class="smart-route-pill faster font-mono" onclick="ProgressionController.setFilter('${fasterRoute.role}')" title="Нажмите, чтобы перейти в ветку ${escapeHtml(fasterRoute.roleName)}">
+                        Быстрее открыть через ${escapeHtml(fasterRoute.roleName)} (осталось ${fasterRoute.remLevels} ур. вместо ${remLvl})
+                    </span>`;
+                smartRouteEl.style.display = 'block';
+            } else {
+                smartRouteEl.innerHTML = '';
+                smartRouteEl.style.display = 'none';
+            }
+        }
+
         banner.style.display = 'flex';
     }
 
@@ -951,14 +1010,23 @@
             currentProgression.unlocked_items = [];
         }
 
-        const idx = currentProgression.unlocked_items.indexOf(unlockId);
-        if (idx >= 0) {
-            currentProgression.unlocked_items.splice(idx, 1);
+        const item = allUnlocks.find(u => u.unlock_id === unlockId || u.slug === unlockId);
+        const slug = item ? item.slug : unlockId;
+
+        const idIndex = currentProgression.unlocked_items.indexOf(unlockId);
+        const slugIndex = slug ? currentProgression.unlocked_items.indexOf(slug) : -1;
+
+        if (idIndex >= 0 || slugIndex >= 0) {
+            currentProgression.unlocked_items = currentProgression.unlocked_items.filter(x => x !== unlockId && x !== slug);
         } else {
             currentProgression.unlocked_items.push(unlockId);
+            if (slug && slug !== unlockId) {
+                currentProgression.unlocked_items.push(slug);
+            }
         }
 
         renderCatalog();
+        updateTargetBanner();
 
         try {
             await fetch('/api/progression', {
@@ -977,6 +1045,62 @@
         }
     }
 
+    function isItemUnlocked(item, unlockedSet) {
+        if (!item || !unlockedSet) return false;
+        return unlockedSet.has(item.unlock_id) || (item.slug && unlockedSet.has(item.slug));
+    }
+
+    function isItemReadyToUnlock(item, unlockedSet) {
+        if (!item) return false;
+        if (isItemUnlocked(item, unlockedSet)) return false;
+
+        const curRoleLvl = (item.role === 'career')
+            ? (currentProgression.career_level || 0)
+            : ((currentProgression.roles && currentProgression.roles[item.role]) || 0);
+        if (curRoleLvl >= (item.level || 0)) {
+            return true;
+        }
+
+        if (Array.isArray(item.other_tracks)) {
+            for (let i = 0; i < item.other_tracks.length; i++) {
+                const ot = item.other_tracks[i];
+                const otLvl = (ot.role === 'career')
+                    ? (currentProgression.career_level || 0)
+                    : ((currentProgression.roles && currentProgression.roles[ot.role]) || 0);
+                if (otLvl >= ot.level) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function toggleOnlyReady(checked) {
+        if (typeof checked === 'boolean') {
+            onlyReadyToUnlock = checked;
+        } else {
+            onlyReadyToUnlock = !onlyReadyToUnlock;
+        }
+        const checkInput = document.getElementById('check-prog-only-ready');
+        if (checkInput && checkInput.checked !== onlyReadyToUnlock) {
+            checkInput.checked = onlyReadyToUnlock;
+        }
+        renderCatalog();
+    }
+
+    function toggleOnlyLimited(checked) {
+        if (typeof checked === 'boolean') {
+            onlyLimitedMode = checked;
+        } else {
+            onlyLimitedMode = !onlyLimitedMode;
+        }
+        const checkInput = document.getElementById('check-prog-only-limited');
+        if (checkInput && checkInput.checked !== onlyLimitedMode) {
+            checkInput.checked = onlyLimitedMode;
+        }
+        renderCatalog();
+    }
+
     let lastRenderedCatalogKey = '';
 
     function renderCatalog() {
@@ -986,12 +1110,58 @@
         const countEl = document.getElementById('prog-catalog-count');
         const unlockedSet = new Set(Array.isArray(currentProgression.unlocked_items) ? currentProgression.unlocked_items : []);
 
+        // Financial & Remaining Stats for Current Role
+        const roleItems = allUnlocks.filter(it => it.role === currentFilterRole);
+        let remainingCount = 0;
+        let remainingCost = 0;
+        let readyCount = 0;
+        let readyCost = 0;
+
+        for (const it of roleItems) {
+            const isUnl = isItemUnlocked(it, unlockedSet);
+            if (!isUnl) {
+                remainingCount++;
+                const cost = (it.unlock_cost !== undefined && it.unlock_cost !== null) ? Number(it.unlock_cost) : 0;
+                remainingCost += cost;
+                if (isItemReadyToUnlock(it, unlockedSet)) {
+                    readyCount++;
+                    readyCost += cost;
+                }
+            }
+        }
+
+        const remEl = document.getElementById('prog-stat-remaining');
+        if (remEl) {
+            const valEl = remEl.querySelector('.prog-stat-val');
+            if (valEl) {
+                valEl.textContent = remainingCount > 0 
+                    ? `${remainingCount} ($${remainingCost.toLocaleString('en-US')})` 
+                    : '0 ($0)';
+            }
+        }
+        const readyEl = document.getElementById('prog-stat-ready');
+        if (readyEl) {
+            const valAmberEl = readyEl.querySelector('.prog-stat-val-amber');
+            if (valAmberEl) {
+                valAmberEl.textContent = readyCount > 0 
+                    ? `${readyCount} ($${readyCost.toLocaleString('en-US')})` 
+                    : '0 ($0)';
+            }
+        }
+
         let filtered = allUnlocks.filter(item => {
             if (item.role !== currentFilterRole) {
                 return false;
             }
-            const isUnlocked = unlockedSet.has(item.unlock_id);
+            const isUnlocked = isItemUnlocked(item, unlockedSet);
             if (hideUnlocked && isUnlocked) {
+                return false;
+            }
+            const isReady = isItemReadyToUnlock(item, unlockedSet);
+            if (onlyReadyToUnlock && !isReady) {
+                return false;
+            }
+            if (onlyLimitedMode && item.limited_gear_banned) {
                 return false;
             }
             if (currentSearchTerm) {
@@ -1011,7 +1181,7 @@
             countEl.textContent = '(' + filtered.length + ' наград)';
         }
 
-        const stateKey = currentFilterRole + '|' + (currentSearchTerm || '') + '|' + (hideUnlocked ? '1' : '0') + '|' + (currentProgression.wishlist_id || '') + '|' + Array.from(unlockedSet).sort().join(',') + '|' + filtered.map(x => x.unlock_id + ':' + (x.icon || '') + ':' + (x.name_ru || x.name)).join(';');
+        const stateKey = currentFilterRole + '|' + (currentSearchTerm || '') + '|' + (hideUnlocked ? '1' : '0') + '|' + (onlyReadyToUnlock ? '1' : '0') + '|' + (onlyLimitedMode ? '1' : '0') + '|' + (currentProgression.wishlist_id || '') + '|' + (currentProgression.career_level || 0) + '|' + JSON.stringify(currentProgression.roles || {}) + '|' + Array.from(unlockedSet).sort().join(',') + '|' + filtered.map(x => x.unlock_id + ':' + (x.icon || '') + ':' + (x.name_ru || x.name)).join(';');
         if (stateKey === lastRenderedCatalogKey && tbody.children.length > 0) {
             return;
         }
@@ -1024,14 +1194,17 @@
 
         let html = '';
         for (const item of filtered) {
-            const isUnlocked = unlockedSet.has(item.unlock_id);
+            const isUnlocked = isItemUnlocked(item, unlockedSet);
             const isWishlist = currentProgression.wishlist_id === item.unlock_id;
+            const isReady = isItemReadyToUnlock(item, unlockedSet);
 
             let rowClass = '';
             if (isUnlocked) {
                 rowClass = 'is-unlocked-row';
             } else if (isWishlist) {
                 rowClass = 'is-wishlist-row';
+            } else if (isReady) {
+                rowClass = 'is-ready-row';
             }
 
             const iconUrl = normalizeItemIcon(item.icon);
@@ -1041,9 +1214,43 @@
             const catName = item.category_ru || SUBCAT_RU[item.subcategory] || item.subcategory || item.tab || 'Предмет';
             const displayName = item.name_ru || item.name;
 
-            const lockBtnHtml = isUnlocked
-                ? `<button class="btn-prog-lock is-unlocked" onclick="ProgressionController.toggleItemUnlocked('${escapeHtml(item.unlock_id)}', event)" title="Разблокировано (нажмите, чтобы отметить заблокированным)"><svg class="prog-lock-svg unlocked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e676" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></button>`
-                : `<button class="btn-prog-lock is-locked" onclick="ProgressionController.toggleItemUnlocked('${escapeHtml(item.unlock_id)}', event)" title="Заблокировано (нажмите, чтобы отметить открытым)"><svg class="prog-lock-svg locked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666666" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>`;
+            let itemTooltip = displayName;
+            if (isReady) {
+                itemTooltip += ' (Доступно к разблокировке)';
+            } else if (isUnlocked) {
+                itemTooltip += ' (Разблокировано)';
+            }
+
+            let multiTracksHtml = '';
+            if (Array.isArray(item.other_tracks) && item.other_tracks.length > 0) {
+                const pills = item.other_tracks.map(ot => {
+                    const rName = ROLE_LABELS[ot.role] || ot.role;
+                    const playerLvl = (ot.role === 'career') 
+                        ? (currentProgression.career_level || 0) 
+                        : ((currentProgression.roles && currentProgression.roles[ot.role]) || 0);
+                    const isMet = playerLvl >= ot.level;
+                    const cls = isMet ? 'prog-multi-track-pill is-role-met' : 'prog-multi-track-pill';
+                    const statusText = isMet 
+                        ? ` (Требование роли выполнено: ваш уровень ${playerLvl})` 
+                        : ` (Требуется ур. ${ot.level}, ваш текущий ур. ${playerLvl})`;
+                    return `<span class="${cls}" onclick="ProgressionController.setFilter('${ot.role}'); event.stopPropagation();" title="${escapeHtml(rName)} ур. ${ot.level}${statusText}">${escapeHtml(rName)} ур. ${ot.level}</span>`;
+                }).join(' ');
+                multiTracksHtml = `<div class="td-multi-tracks font-mono" title="Доступно также в альтернативных ветках прокачки">Также: ${pills}</div>`;
+            }
+
+            let limitedHtml = '';
+            if (item.limited_gear_banned) {
+                limitedHtml = `<span class="badge-limited-banned font-mono" title="Запрещено в Limited Mode">Limited</span>`;
+            }
+
+            let lockBtnHtml = '';
+            if (isUnlocked) {
+                lockBtnHtml = `<button class="btn-prog-lock is-unlocked" onclick="ProgressionController.toggleItemUnlocked('${escapeHtml(item.unlock_id)}', event)" title="Разблокировано (нажмите, чтобы отметить заблокированным)"><svg class="prog-lock-svg unlocked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e676" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg></button>`;
+            } else if (isReady) {
+                lockBtnHtml = `<button class="btn-prog-lock is-ready" onclick="ProgressionController.toggleItemUnlocked('${escapeHtml(item.unlock_id)}', event)" title="Доступно к разблокировке (нажмите, чтобы отметить открытым)"><svg class="prog-lock-svg ready" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff9800" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>`;
+            } else {
+                lockBtnHtml = `<button class="btn-prog-lock is-locked" onclick="ProgressionController.toggleItemUnlocked('${escapeHtml(item.unlock_id)}', event)" title="Заблокировано (требуется ур. ${item.level})"><svg class="prog-lock-svg locked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666666" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>`;
+            }
 
             const targetBtnHtml = isWishlist
                 ? `<button class="btn-prog-target is-active font-mono" onclick="ProgressionController.toggleWishlist('${escapeHtml(item.unlock_id)}', event)" title="Цель активна (нажмите для отмены)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></button>`
@@ -1058,7 +1265,13 @@
                     <td>
                         <div class="td-item-cell">
                             <img class="td-item-icon" src="${escapeHtml(iconUrl)}" alt="${escapeHtml(displayName)}" loading="lazy" onerror="this.onerror=null; this.src='wardogs_icon.png'">
-                            <span class="td-item-name font-mono" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
+                            <div class="td-item-text-group">
+                                <div class="td-item-title-row">
+                                    <span class="td-item-name font-mono" title="${escapeHtml(itemTooltip)}">${escapeHtml(displayName)}</span>
+                                    ${limitedHtml}
+                                </div>
+                                ${multiTracksHtml}
+                            </div>
                         </div>
                     </td>
                     <td>
@@ -2045,6 +2258,8 @@
         setWishlist: setWishlist,
         toggleWishlist: toggleWishlist,
         toggleHideUnlocked: toggleHideUnlocked,
+        toggleOnlyReady: toggleOnlyReady,
+        toggleOnlyLimited: toggleOnlyLimited,
         toggleItemUnlocked: toggleItemUnlocked,
         triggerImport: triggerImport,
         onFileSelected: onFileSelected,

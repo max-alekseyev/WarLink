@@ -697,11 +697,14 @@ func TestCommunityGoalsCluster(t *testing.T) {
 	if bf6.ID != "bf6" {
 		t.Errorf("expected ID 'bf6', got '%s'", bf6.ID)
 	}
-	if bf6.TargetAmountRub != 3200 {
-		t.Errorf("expected target price 3200 RUB, got %d", bf6.TargetAmountRub)
+	if bf6.TargetAmountRub != 1100 {
+		t.Errorf("expected target price 1100 RUB, got %d", bf6.TargetAmountRub)
 	}
-	if bf6.BasePriceRub != 3200 {
-		t.Errorf("expected base price 3200 RUB, got %d", bf6.BasePriceRub)
+	if bf6.BasePriceRub != 4100 {
+		t.Errorf("expected base price 4100 RUB, got %d", bf6.BasePriceRub)
+	}
+	if !bf6.IsCompleted {
+		t.Errorf("expected bf6 to be completed")
 	}
 	if !strings.Contains(bf6.BoostyURL, "832459") {
 		t.Errorf("expected Boosty target link, got '%s'", bf6.BoostyURL)
@@ -737,8 +740,8 @@ func TestGamesCatalog(t *testing.T) {
 		}
 		if g.ID == "bf6" {
 			foundBF6 = true
-			if g.Status != "crowdfunding" {
-				t.Errorf("expected bf6 status 'crowdfunding', got '%s'", g.Status)
+			if g.Status != "preparation" {
+				t.Errorf("expected bf6 status 'preparation', got '%s'", g.Status)
 			}
 		}
 	}

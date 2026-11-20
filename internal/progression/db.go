@@ -17,25 +17,33 @@ import (
 //go:embed progression_db.json
 var embeddedDBJSON []byte
 
+// TrackUnlock describes an alternate role track unlock level for Multi-Track progression.
+type TrackUnlock struct {
+	Role  string `json:"role"`
+	Level int    `json:"level"`
+}
+
 // UnlockItem represents an item unlocked at a specific role level.
 type UnlockItem struct {
-	UnlockID    string                 `json:"unlock_id"`
-	Slug        string                 `json:"slug"`
-	Name        string                 `json:"name"`
-	NameRU      string                 `json:"name_ru"`
-	Role        string                 `json:"role"`
-	Level       int                    `json:"level"`
-	TotalXP     int                    `json:"total_xp"`
-	Tab         string                 `json:"tab"`
-	Subcategory string                 `json:"subcategory"`
-	CategoryRU  string                 `json:"category_ru"`
-	Price       int                    `json:"price"`       // In-game $
-	UnlockCost  int                    `json:"unlock_cost"` // Unlock points
-	Icon        string                 `json:"icon"`
-	Image       string                 `json:"image"`
-	Guide       string                 `json:"guide"`
-	Description string                 `json:"description"`
-	Specs       map[string]interface{} `json:"specs"`
+	UnlockID          string                 `json:"unlock_id"`
+	Slug              string                 `json:"slug"`
+	Name              string                 `json:"name"`
+	NameRU            string                 `json:"name_ru"`
+	Role              string                 `json:"role"`
+	Level             int                    `json:"level"`
+	TotalXP           interface{}            `json:"total_xp"`
+	Tab               string                 `json:"tab"`
+	Subcategory       string                 `json:"subcategory"`
+	CategoryRU        string                 `json:"category_ru"`
+	Price             int                    `json:"price"`       // In-game $
+	UnlockCost        int                    `json:"unlock_cost"` // Unlock points
+	Icon              string                 `json:"icon"`
+	Image             string                 `json:"image"`
+	Guide             string                 `json:"guide"`
+	Description       string                 `json:"description"`
+	Specs             map[string]interface{} `json:"specs"`
+	OtherTracks       []TrackUnlock          `json:"other_tracks,omitempty"`
+	LimitedGearBanned bool                   `json:"limited_gear_banned,omitempty"`
 }
 
 // NextUnlockInfo describes the next upcoming unlock item for a role.
@@ -93,8 +101,8 @@ func loadDatabase() *Database {
 				TotalUnlocks int    `json:"total_unlocks"`
 			}
 			if err := json.Unmarshal(cached, &cachedMeta); err == nil {
-				// If cached database is empty, discard corrupt cache
-				if cachedMeta.TotalUnlocks == 0 {
+				// If cached database is empty or has fewer unlocks than embedded, discard obsolete cache
+				if cachedMeta.TotalUnlocks < embMeta.TotalUnlocks {
 					_ = os.Remove(cachePath)
 					continue
 				}
@@ -202,6 +210,20 @@ func SyncWithServer(serverAPI string, cacheDir string) error {
 	}
 
 	db := GetDatabase()
+	var remoteMeta struct {
+		Version      string `json:"version"`
+		TotalUnlocks int    `json:"total_unlocks"`
+	}
+	_ = json.Unmarshal(body, &remoteMeta)
+
+	// Never downgrade to an older database with fewer unlocks than in-memory
+	db.mu.RLock()
+	currentCount := len(db.allUnlocks)
+	db.mu.RUnlock()
+	if remoteMeta.TotalUnlocks < currentCount {
+		return nil
+	}
+
 	if err := db.UpdateFromJSON(body); err != nil {
 		return err
 	}

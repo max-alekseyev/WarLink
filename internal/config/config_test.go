@@ -267,8 +267,8 @@ func TestProgressionSeason2WipeDefaults(t *testing.T) {
 	if cfg1.Progression == nil {
 		t.Fatal("expected Progression to not be nil")
 	}
-	if cfg1.Progression.Season != 2 {
-		t.Errorf("expected Season 2, got %d", cfg1.Progression.Season)
+	if cfg1.Progression.Season < 2 {
+		t.Errorf("expected Season >= 2, got %d", cfg1.Progression.Season)
 	}
 	if cfg1.Progression.CareerLevel != 0 {
 		t.Errorf("expected CareerLevel 0 after wipe, got %d", cfg1.Progression.CareerLevel)

@@ -442,10 +442,13 @@ function renderCommunityVotes(data) {
 
             let actionEl = existing.querySelector('.badge-winner, .btn-vote');
             if (isWinner) {
-                if (!actionEl || !actionEl.classList.contains('badge-winner')) {
+                const isPrep = (g.steam_app_id === 2807960) || (g.status === 'preparation') || (g.subtitle && g.subtitle.includes('Подготовка'));
+                const badgeClass = isPrep ? 'badge-winner badge-prep' : 'badge-winner';
+                const badgeText = isPrep ? 'Подготовка к добавлению' : 'В очереди на интеграцию';
+                if (!actionEl || actionEl.className !== badgeClass || actionEl.textContent !== badgeText) {
                     const newAction = document.createElement('span');
-                    newAction.className = 'badge-winner';
-                    newAction.textContent = 'В очереди на интеграцию';
+                    newAction.className = badgeClass;
+                    newAction.textContent = badgeText;
                     if (actionEl) actionEl.replaceWith(newAction);
                     else existing.appendChild(newAction);
                 }
@@ -483,9 +486,10 @@ function renderCommunityVotes(data) {
 
             let actionEl;
             if (isWinner) {
+                const isPrep = (g.steam_app_id === 2807960) || (g.status === 'preparation') || (g.subtitle && g.subtitle.includes('Подготовка'));
                 actionEl = document.createElement('span');
-                actionEl.className = 'badge-winner';
-                actionEl.textContent = 'В очереди на интеграцию';
+                actionEl.className = isPrep ? 'badge-winner badge-prep' : 'badge-winner';
+                actionEl.textContent = isPrep ? 'Подготовка к добавлению' : 'В очереди на интеграцию';
             } else if (g.user_voted) {
                 actionEl = document.createElement('button');
                 actionEl.className = 'btn-vote active';

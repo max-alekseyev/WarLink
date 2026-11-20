@@ -487,10 +487,11 @@ function renderSpecialProjects(projects) {
 
         let buttonsHtml = '';
         if (project.boosty_url) {
+            const btnClass = project.is_completed ? 'btn-boosty-action is-completed' : 'btn-boosty-action';
             buttonsHtml += `
-                <button type="button" class="btn-boosty-action" onclick="openBoostyLink('${escapeHtml(project.boosty_url)}')">
+                <button type="button" class="${btnClass}" onclick="openBoostyLink('${escapeHtml(project.boosty_url)}')">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                    <span>${escapeHtml(project.boosty_label || 'Поддержать сбор')}</span>
+                    <span>${escapeHtml(project.boosty_label || (project.is_completed ? 'Сбор завершен' : 'Поддержать сбор'))}</span>
                 </button>
             `;
         }

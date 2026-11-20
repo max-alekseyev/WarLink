@@ -61,8 +61,8 @@ func TestParseScreenshotAllResolutions(t *testing.T) {
 func TestDatabaseUnlocks(t *testing.T) {
 	db := GetDatabase()
 	all := db.GetAllUnlocks()
-	if len(all) != 264 {
-		t.Fatalf("Expected 264 unlocks, got %d", len(all))
+	if len(all) != 411 {
+		t.Fatalf("Expected 411 unlocks, got %d", len(all))
 	}
 
 	for _, it := range all {
