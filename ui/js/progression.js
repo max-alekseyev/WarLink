@@ -228,13 +228,15 @@
 
         const render = (data) => {
             if (data && data.unlocks && Array.isArray(data.unlocks)) {
-                // Invalidate obsolete cached database versions
-                if (data.version !== '3.0.0' || data.total_unlocks !== 411) {
-                    if (window.UIStore && typeof UIStore.remove === 'function') {
-                        UIStore.remove('/api/progression/database');
+                // Invalidate obsolete cached database versions if explicit version is present and outdated
+                if (data.version && data.total_unlocks && (data.version !== '3.0.0' || data.total_unlocks !== 411)) {
+                    if (!force) {
+                        if (window.UIStore && typeof UIStore.remove === 'function') {
+                            UIStore.remove('/api/progression/database');
+                        }
+                        loadCatalogDatabase(true);
+                        return;
                     }
-                    loadCatalogDatabase(true);
-                    return;
                 }
                 allUnlocks = data.unlocks;
                 lastRenderedCatalogKey = '';

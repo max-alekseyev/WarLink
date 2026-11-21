@@ -78,9 +78,13 @@ func CompareSemVer(v1, v2 string) int {
 	return 0
 }
 
-var UpdateRepo = "max-alekseyev/WarLink"
+var (
+	UpdateRepo     = "max-alekseyev/WarLink"
+	MasterCDNURL   = "https://api-warlink.max-alekseyev.com/static/update_latest.json"
+)
 
-func GetUpdateURL() string {
+// GetCustomUpdateURL returns an explicit URL override if set via flag, env, or file
+func GetCustomUpdateURL() string {
 	for _, arg := range os.Args {
 		if strings.HasPrefix(arg, "--update-url=") {
 			return strings.TrimPrefix(arg, "--update-url=")
@@ -106,6 +110,13 @@ func GetUpdateURL() string {
 			}
 		}
 	}
+	return ""
+}
+
+func GetUpdateURL() string {
+	if custom := GetCustomUpdateURL(); custom != "" {
+		return custom
+	}
 	repo := strings.TrimSpace(UpdateRepo)
 	if repo == "" {
 		repo = "max-alekseyev/WarLink"
@@ -113,10 +124,51 @@ func GetUpdateURL() string {
 	return fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 }
 
-// CheckForUpdate polls GitHub Releases API with a fast timeout (3.5 seconds)
+// CheckForUpdate checks for application updates using multiple redundant endpoints:
+// 1. Explicit override (if provided via CLI, ENV or test_update_url.txt)
+// 2. WarLink Master Server CDN (fastest, dedicated, 0 rate limit)
+// 3. GitHub Releases API (official upstream)
+// 4. GitHub Web HTML 302 Redirect (upstream fallback immune to API rate limits)
 func CheckForUpdate(currentVersion string) (*UpdateCheckResult, error) {
-	client := &http.Client{Timeout: 3500 * time.Millisecond}
-	apiURL := GetUpdateURL()
+	// 1. Explicit override
+	if customURL := GetCustomUpdateURL(); customURL != "" {
+		return checkFromReleaseInfoURL(customURL, currentVersion)
+	}
+
+	repo := strings.TrimSpace(UpdateRepo)
+	if repo == "" {
+		repo = "max-alekseyev/WarLink"
+	}
+
+	var lastErr error
+
+	// 2. WarLink Master Server CDN (fast, no rate limits)
+	if res, err := checkFromReleaseInfoURL(MasterCDNURL, currentVersion); err == nil && res != nil {
+		return res, nil
+	} else if err != nil {
+		lastErr = err
+	}
+
+	// 3. Official GitHub API
+	githubAPIURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	if res, err := checkFromReleaseInfoURL(githubAPIURL, currentVersion); err == nil && res != nil {
+		return res, nil
+	} else if err != nil {
+		lastErr = err
+	}
+
+	// 4. GitHub Web Redirect (immune to API 403 rate limits)
+	if res, err := checkFromGitHubRedirect(repo, currentVersion); err == nil && res != nil {
+		return res, nil
+	} else if err != nil {
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("все источники проверки обновления недоступны (последняя ошибка: %w)", lastErr)
+}
+
+func checkFromReleaseInfoURL(apiURL, currentVersion string) (*UpdateCheckResult, error) {
+	client := &http.Client{Timeout: 4000 * time.Millisecond}
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		return nil, err
@@ -130,7 +182,7 @@ func CheckForUpdate(currentVersion string) (*UpdateCheckResult, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github api returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("сервер вернул статус %d для %s", resp.StatusCode, apiURL)
 	}
 
 	var rel ReleaseInfo
@@ -154,6 +206,59 @@ func CheckForUpdate(currentVersion string) (*UpdateCheckResult, error) {
 	}
 
 	if CompareSemVer(rel.TagName, currentVersion) > 0 && res.ExeURL != "" {
+		res.UpdateAvailable = true
+	}
+
+	return res, nil
+}
+
+func checkFromGitHubRedirect(repo, currentVersion string) (*UpdateCheckResult, error) {
+	client := &http.Client{
+		Timeout: 5000 * time.Millisecond,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	redirectURL := fmt.Sprintf("https://github.com/%s/releases/latest", repo)
+	req, err := http.NewRequest("HEAD", redirectURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "WarLink-Updater")
+
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode < 300 || resp.StatusCode > 399 {
+		req.Method = "GET"
+		resp, err = client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer resp.Body.Close()
+
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return nil, fmt.Errorf("редирект не вернул Location (статус %d)", resp.StatusCode)
+	}
+
+	idx := strings.LastIndex(loc, "/tag/")
+	if idx == -1 {
+		return nil, fmt.Errorf("неожиданный формат URL редиректа: %s", loc)
+	}
+	tag := strings.TrimSpace(loc[idx+len("/tag/"):])
+	if tag == "" {
+		return nil, fmt.Errorf("пустой тег в URL редиректа: %s", loc)
+	}
+
+	res := &UpdateCheckResult{
+		LatestVersion:  tag,
+		CurrentVersion: currentVersion,
+		ReleaseNotes:   fmt.Sprintf("Обновление до версии %s", tag),
+		ExeURL:         fmt.Sprintf("https://github.com/%s/releases/download/%s/WarLink.exe", repo, tag),
+		Sha256URL:      fmt.Sprintf("https://github.com/%s/releases/download/%s/WarLink.exe.sha256", repo, tag),
+	}
+
+	if CompareSemVer(tag, currentVersion) > 0 {
 		res.UpdateAvailable = true
 	}
 

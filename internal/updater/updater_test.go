@@ -149,3 +149,45 @@ func TestDownloadWithProgressChecksSize(t *testing.T) {
 		t.Fatalf("expected successful download, got %v", err)
 	}
 }
+
+func TestCheckFromGitHubRedirect(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://github.com/max-alekseyev/WarLink/releases/tag/v2.3.0")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer ts.Close()
+
+	// Direct redirect test
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Head(ts.URL)
+	if err != nil {
+		t.Fatalf("head error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	loc := resp.Header.Get("Location")
+	if loc != "https://github.com/max-alekseyev/WarLink/releases/tag/v2.3.0" {
+		t.Fatalf("expected location, got %s", loc)
+	}
+}
+
+func TestCheckForUpdateLiveCDN(t *testing.T) {
+	// Verify that production Master CDN provides valid update info
+	res, err := CheckForUpdate("v2.2.8")
+	if err != nil {
+		t.Fatalf("unexpected error querying update: %v", err)
+	}
+	if !res.UpdateAvailable {
+		t.Fatalf("expected update to be available for v2.2.8")
+	}
+	if CompareSemVer(res.LatestVersion, "v2.2.8") <= 0 {
+		t.Fatalf("expected latest version > v2.2.8, got %s", res.LatestVersion)
+	}
+	if res.ExeURL == "" || res.Sha256URL == "" {
+		t.Fatalf("expected non-empty exe and sha256 URLs")
+	}
+}

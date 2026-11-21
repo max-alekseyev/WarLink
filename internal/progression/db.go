@@ -60,6 +60,8 @@ type NextUnlockInfo struct {
 // Database holds full progression and catalog items.
 type Database struct {
 	mu            sync.RWMutex
+	version       string
+	totalUnlocks  int
 	roles         []string
 	unlocksByRole map[string][]UnlockItem
 	allUnlocks    []UnlockItem
@@ -81,6 +83,7 @@ func GetDatabase() *Database {
 
 func loadDatabase() *Database {
 	db := &Database{
+		version:       "3.0.0",
 		roles:         []string{"career", "assault", "medic", "recon", "support", "driver", "pilot"},
 		unlocksByRole: make(map[string][]UnlockItem),
 		catalog:       make([]map[string]interface{}, 0),
@@ -92,6 +95,10 @@ func loadDatabase() *Database {
 		TotalUnlocks int    `json:"total_unlocks"`
 	}
 	_ = json.Unmarshal(embeddedDBJSON, &embMeta)
+	if embMeta.Version != "" {
+		db.version = embMeta.Version
+	}
+	db.totalUnlocks = embMeta.TotalUnlocks
 
 	// Check if cached database exists on disk (e.g. downloaded from server)
 	for _, cachePath := range []string{"warlink_core/cached_progression_db.json", "core/cached_progression_db.json", "cached_progression_db.json"} {
@@ -107,18 +114,30 @@ func loadDatabase() *Database {
 					continue
 				}
 				rawBytes = cached
+				if cachedMeta.Version != "" {
+					db.version = cachedMeta.Version
+				}
+				db.totalUnlocks = cachedMeta.TotalUnlocks
 				break
 			}
 		}
 	}
 
 	var raw struct {
-		Roles   []string                 `json:"roles"`
-		Unlocks []UnlockItem             `json:"unlocks"`
-		Catalog []map[string]interface{} `json:"catalog"`
+		Version      string                   `json:"version"`
+		TotalUnlocks int                      `json:"total_unlocks"`
+		Roles        []string                 `json:"roles"`
+		Unlocks      []UnlockItem             `json:"unlocks"`
+		Catalog      []map[string]interface{} `json:"catalog"`
 	}
 
 	if err := json.Unmarshal(rawBytes, &raw); err == nil {
+		if raw.Version != "" {
+			db.version = raw.Version
+		}
+		if raw.TotalUnlocks > 0 {
+			db.totalUnlocks = raw.TotalUnlocks
+		}
 		if len(raw.Roles) > 0 {
 			db.roles = raw.Roles
 		}
@@ -145,9 +164,11 @@ func loadDatabase() *Database {
 // UpdateFromJSON updates the database in memory from fresh JSON bytes.
 func (db *Database) UpdateFromJSON(data []byte) error {
 	var raw struct {
-		Roles   []string                 `json:"roles"`
-		Unlocks []UnlockItem             `json:"unlocks"`
-		Catalog []map[string]interface{} `json:"catalog"`
+		Version      string                   `json:"version"`
+		TotalUnlocks int                      `json:"total_unlocks"`
+		Roles        []string                 `json:"roles"`
+		Unlocks      []UnlockItem             `json:"unlocks"`
+		Catalog      []map[string]interface{} `json:"catalog"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -159,6 +180,12 @@ func (db *Database) UpdateFromJSON(data []byte) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if raw.Version != "" {
+		db.version = raw.Version
+	}
+	if raw.TotalUnlocks > 0 {
+		db.totalUnlocks = raw.TotalUnlocks
+	}
 	if len(raw.Roles) > 0 {
 		db.roles = raw.Roles
 	}
@@ -179,6 +206,26 @@ func (db *Database) UpdateFromJSON(data []byte) error {
 		db.unlocksByRole[role] = items
 	}
 	return nil
+}
+
+// GetVersion returns the database semantic version (e.g. "3.0.0").
+func (db *Database) GetVersion() string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.version == "" {
+		return "3.0.0"
+	}
+	return db.version
+}
+
+// GetTotalUnlocks returns the total number of unlock items.
+func (db *Database) GetTotalUnlocks() int {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.totalUnlocks > 0 {
+		return db.totalUnlocks
+	}
+	return len(db.allUnlocks)
 }
 
 // SyncWithServer fetches the latest progression database from the remote server API and caches it.
@@ -242,6 +289,16 @@ func (db *Database) GetAllUnlocks() []UnlockItem {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	return db.allUnlocks
+}
+
+// GetUnlocksForRole returns all unlocks for a specific role.
+func (db *Database) GetUnlocksForRole(role string) []UnlockItem {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	items := db.unlocksByRole[strings.ToLower(role)]
+	res := make([]UnlockItem, len(items))
+	copy(res, items)
+	return res
 }
 
 // GetNextUnlock calculates the upcoming reward for a specific role and current level.

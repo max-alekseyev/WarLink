@@ -47,7 +47,7 @@ import (
 	"warlink/internal/watcher"
 )
 
-var AppVersion = "v2.2.9"
+var AppVersion = "v2.2.10"
 
 const (
 	AppWindowWidth     int32  = 690
@@ -1084,7 +1084,9 @@ func main() {
 
 		// 1. Check for updates
 		checkRes, err := updater.CheckForUpdate(AppVersion)
-		if err == nil && checkRes != nil && checkRes.UpdateAvailable {
+		if err != nil {
+			appendLog(fmt.Sprintf("[WARN] Проверка обновления: %v", err))
+		} else if checkRes != nil && checkRes.UpdateAvailable {
 			appendLog(fmt.Sprintf("[UPDATE] Обнаружена новая версия: %s (текущая: %s)", checkRes.LatestVersion, AppVersion))
 			state.mu.Lock()
 			state.updateInfo = checkRes
@@ -3856,7 +3858,9 @@ func main() {
 
 		db := progression.GetDatabase()
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"unlocks": db.GetAllUnlocks(),
+			"version":       db.GetVersion(),
+			"total_unlocks": db.GetTotalUnlocks(),
+			"unlocks":       db.GetAllUnlocks(),
 		})
 	})
 

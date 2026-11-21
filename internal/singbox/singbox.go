@@ -41,7 +41,7 @@ const (
 )
 
 var (
-	ClientVersion       = "v2.2.9"
+	ClientVersion       = "v2.2.10"
 	DefaultServerIP     = "api-warlink.max-alekseyev.com"
 	DefaultServerAPI    = "https://api-warlink.max-alekseyev.com"
 	// Injected at build time via -X ldflags from GitHub Actions secrets.
